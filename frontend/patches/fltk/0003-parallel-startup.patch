@@ -1,0 +1,528 @@
+--- a/src/drivers/Wayland/Fl_Wayland_Screen_Driver.cxx
++++ b/src/drivers/Wayland/Fl_Wayland_Screen_Driver.cxx
+@@ -45,6 +45,10 @@
+ #include <sys/mman.h>
+ #include <poll.h>
+ #include <errno.h>
++#include <deque>
++#include <functional>
++#include <string>
++#include <vector>
+ #include <string.h> // for strerror()
+ extern "C" {
+   bool libdecor_get_cursor_settings(char **theme, int *size);
+@@ -384,6 +388,7 @@
+ }
+ 
+ 
++static bool mdf_cursor_pending = false;
+ static void init_cursors(struct Fl_Wayland_Screen_Driver::seat *seat);
+ 
+ 
+@@ -466,6 +471,11 @@
+ 
+ 
+ static void init_cursors(struct Fl_Wayland_Screen_Driver::seat *seat) {
++  if (fl_mdf_defer_cursors && fl_mdf_defer_cursors()) {
++    mdf_cursor_pending = true;
++    return;
++  }
++  mdf_cursor_pending = false;
+   MDF_TRACE("Load Wayland cursor theme");
+   char *name;
+   int size;
+@@ -499,28 +509,161 @@
+ }
+ 
+ 
++
++// MDF: CPU-only XKB preparation runs outside the display thread. Protocol
++// callbacks are replayed on this thread, in their original order. A keymap
++// replacement drains pending input before advancing to the next generation.
++namespace {
++struct MdfInput {
++  void *handle = NULL;
++  struct Fl_Wayland_Screen_Driver::seat *seat = NULL;
++  bool pending = false, enabled = false, has_map = false, tick_scheduled = false;
++  std::string source;
++  MdfInputQueue events;
++} mdf_input;
++const char *mdf_locale() {
++  const char *locale = getenv("LC_ALL");
++  if (!locale || !*locale) locale = getenv("LC_CTYPE");
++  if (!locale || !*locale) locale = getenv("LANG");
++  return locale && *locale ? locale : "C";
++}
++void mdf_compose(struct Fl_Wayland_Screen_Driver::seat *seat) {
++  MDF_TRACE("Compile keyboard Compose table");
++  struct xkb_compose_table *table = xkb_compose_table_new_from_locale(
++      seat->xkb_context, mdf_locale(), XKB_COMPOSE_COMPILE_NO_FLAGS);
++  if (table) {
++    if (seat->xkb_compose_state) xkb_compose_state_unref(seat->xkb_compose_state);
++    seat->xkb_compose_state = xkb_compose_state_new(table, XKB_COMPOSE_STATE_NO_FLAGS);
++    xkb_compose_table_unref(table);
++  }
++}
++void mdf_sync_keymap(struct Fl_Wayland_Screen_Driver::seat *seat, const char *source) {
++  MDF_TRACE("Compile Wayland keyboard keymap");
++  struct xkb_keymap *keymap = xkb_keymap_new_from_string(seat->xkb_context,
++      source, XKB_KEYMAP_FORMAT_TEXT_V1, XKB_KEYMAP_COMPILE_NO_FLAGS);
++  if (keymap) {
++    struct xkb_state *state = xkb_state_new(keymap);
++    if (state) {
++      if (seat->xkb_keymap) xkb_keymap_unref(seat->xkb_keymap);
++      if (seat->xkb_state) xkb_state_unref(seat->xkb_state);
++      seat->xkb_keymap = keymap; seat->xkb_state = state;
++    } else xkb_keymap_unref(keymap);
++  }
++}
++bool mdf_keyboard_ready(bool wait) {
++  if (mdf_input.handle && mdf_input.pending) {
++    MdfKeyboardResult prepared = {};
++    int status = fl_mdf_keyboard_take(mdf_input.handle, &prepared, wait);
++    if (!status) return false;
++    MDF_TRACE("Adopt prepared keyboard resources");
++    auto *seat = mdf_input.seat;
++    if (status > 0) {
++      if (seat->xkb_state) xkb_state_unref(seat->xkb_state);
++      if (seat->xkb_keymap) xkb_keymap_unref(seat->xkb_keymap);
++      if (seat->xkb_context) xkb_context_unref(seat->xkb_context);
++      seat->xkb_context = prepared.context;
++      seat->xkb_keymap = prepared.keymap;
++      seat->xkb_state = prepared.state;
++      if (prepared.initial) {
++        if (seat->xkb_compose_state) xkb_compose_state_unref(seat->xkb_compose_state);
++        seat->xkb_compose_state = prepared.compose;
++      }
++    } else {
++      fl_mdf_keyboard_destroy(mdf_input.handle); mdf_input.handle = NULL;
++      mdf_compose(seat);
++      mdf_sync_keymap(seat, mdf_input.source.c_str());
++    }
++    mdf_input.pending = false;
++    mdf_input.has_map = seat->xkb_state != NULL;
++    if (fl_mdf_startup_mark) fl_mdf_startup_mark("Keyboard resources adopted");
++  }
++  return true;
++}
++void mdf_keyboard_tick(void *);
++void mdf_schedule_keyboard() {
++  if (!mdf_input.tick_scheduled && !mdf_input.events.empty()) {
++    mdf_input.tick_scheduled = true;
++    Fl::add_timeout(0, mdf_keyboard_tick);
++  }
++}
++void mdf_drain_keyboard(bool wait) {
++  if (!mdf_keyboard_ready(wait)) return;
++  mdf_input.events.replay(mdf_keyboard_ready, mdf_schedule_keyboard, wait);
++}
++void mdf_keyboard_tick(void *) {
++  mdf_input.tick_scheduled = false;
++  mdf_drain_keyboard(false);
++}
++bool mdf_queue_keyboard(std::function<void()> event) {
++  if (!mdf_input.enabled) return false;
++  // Enqueue before invoking older callbacks: nested dialogs must never let
++  // a later keymap or key release overtake this event.
++  mdf_input.events.push(std::move(event));
++  mdf_drain_keyboard(mdf_input.events.saturated());
++  return true;
++}
++void mdf_begin_keymap(struct Fl_Wayland_Screen_Driver::seat *seat, const std::string &source) {
++  mdf_input.source = source;
++  if (mdf_input.handle && fl_mdf_keyboard_submit(mdf_input.handle, source.data(), source.size())) {
++    mdf_input.pending = true;
++    return;
++  }
++  if (mdf_input.handle) {
++    fl_mdf_keyboard_destroy(mdf_input.handle); mdf_input.handle = NULL;
++    mdf_compose(seat);
++  }
++  mdf_sync_keymap(seat, source.c_str());
++  mdf_input.pending = false; mdf_input.has_map = seat->xkb_state != NULL;
++}
++bool mdf_live_surface(struct wl_surface *surface) {
++  for (Fl_X *x = Fl_X::first; x; x = x->next)
++    if (((struct wld_window *)x->xid)->wl_surface == surface) return true;
++  return false;
++}
++}
++extern "C" void fl_mdf_wayland_startup_poll() {
++  mdf_drain_keyboard(false);
++  if (mdf_cursor_pending && (!fl_mdf_defer_cursors || !fl_mdf_defer_cursors())) {
++    auto *seat = ((Fl_Wayland_Screen_Driver *)Fl::screen_driver())->seat;
++    if (seat && seat->wl_pointer) {
++      init_cursors(seat);
++      fl_mdf_restore_cursors();
++      if (fl_mdf_startup_mark) fl_mdf_startup_mark("Deferred cursor theme ready");
++    } else mdf_cursor_pending = false;
++  }
++}
++extern "C" int fl_mdf_wayland_input_ready() {
++  auto *seat = ((Fl_Wayland_Screen_Driver *)Fl::screen_driver())->seat;
++  return (!seat || !seat->wl_keyboard || !mdf_input.enabled ||
++          (mdf_input.has_map && !mdf_input.pending && mdf_input.events.empty())) && !mdf_cursor_pending;
++}
++extern "C" void fl_mdf_wayland_startup_shutdown() {
++  Fl::remove_timeout(mdf_keyboard_tick);
++  mdf_input.tick_scheduled = false;
++  mdf_input.events.clear();
++  if (mdf_input.handle) fl_mdf_keyboard_destroy(mdf_input.handle);
++  mdf_input.handle = NULL; mdf_input.seat = NULL;
++  mdf_input.pending = false; mdf_input.enabled = false; mdf_input.has_map = false; mdf_cursor_pending = false;
++}
+ static void wl_keyboard_keymap(void *data, struct wl_keyboard *wl_keyboard,
+                uint32_t format, int32_t fd, uint32_t size) {
+-  struct Fl_Wayland_Screen_Driver::seat *seat =
+-    (struct Fl_Wayland_Screen_Driver::seat*)data;
+-  assert(format == WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1);
+-
+-  char *map_shm = (char*)mmap(NULL, size, PROT_READ,
+-      wl_keyboard_get_version(wl_keyboard) >= 7 ? MAP_PRIVATE : MAP_SHARED, fd, 0);
+-  assert(map_shm != MAP_FAILED);
+-
+-  MDF_TRACE("Compile Wayland keyboard keymap");
+-  struct xkb_keymap *xkb_keymap = xkb_keymap_new_from_string(seat->xkb_context, map_shm,
+-              XKB_KEYMAP_FORMAT_TEXT_V1, XKB_KEYMAP_COMPILE_NO_FLAGS);
+-  munmap(map_shm, size);
++  auto *seat = (struct Fl_Wayland_Screen_Driver::seat *)data;
++  if (format != WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1 || !size || size > 32 * 1024 * 1024) {
++    close(fd); Fl::fatal("Unsupported Wayland keyboard keymap"); return;
++  }
++  char *map = (char *)mmap(NULL, size, PROT_READ, MAP_PRIVATE, fd, 0);
+   close(fd);
+-  if (xkb_keymap) {
+-    struct xkb_state *xkb_state = xkb_state_new(xkb_keymap);
+-    xkb_keymap_unref(seat->xkb_keymap);
+-    if (seat->xkb_state) xkb_state_unref(seat->xkb_state);
+-    seat->xkb_keymap = xkb_keymap;
+-    seat->xkb_state = xkb_state;
+-  }
++  if (map == MAP_FAILED) return;
++  // The compositor supplies a NUL-terminated XKB string.
++  if (map[size-1] != 0) { munmap(map, size); return; }
++  if (mdf_input.enabled) {
++    std::string source(map, size-1);
++    munmap(map, size);
++    mdf_queue_keyboard([=] { mdf_begin_keymap(seat, source); });
++    return;
++  }
++  mdf_sync_keymap(seat, map);
++  munmap(map, size);
+ }
+ 
+ 
+@@ -568,10 +711,11 @@
+ static uint32_t last_keydown_serial = 0; // serial of last keydown event
+ 
+ 
+-static void wl_keyboard_enter(void *data, struct wl_keyboard *wl_keyboard,
++static void mdf_process_keyboard_enter(void *data, struct wl_keyboard *wl_keyboard,
+                uint32_t serial, struct wl_surface *surface, struct wl_array *keys) {
+   struct Fl_Wayland_Screen_Driver::seat *seat =
+     (struct Fl_Wayland_Screen_Driver::seat*)data;
++  if (!seat->xkb_state) return;
+ //fprintf(stderr, "keyboard enter fl_win=%p; keys pressed are: ", Fl_Wayland_Window_Driver::surface_to_window(surface));
+ #if FLTK_USE_STD
+   key_vector.clear();
+@@ -597,6 +741,26 @@
+     Fl::handle(FL_FOCUS, win);
+     fl_wl_find(fl_wl_xid(win));
+   }
++}
++
++
++static void wl_keyboard_enter(void *data, struct wl_keyboard *wl_keyboard,
++               uint32_t serial, struct wl_surface *surface, struct wl_array *keys) {
++  if (mdf_input.enabled) {
++    std::vector<uint32_t> pressed;
++    if (keys->size) {
++      auto *begin = (uint32_t *)keys->data;
++      pressed.assign(begin, begin + keys->size / sizeof(uint32_t));
++    }
++    mdf_queue_keyboard([=]() mutable {
++      if (!mdf_live_surface(surface)) return;
++      uint32_t empty = 0;
++      struct wl_array copy = { pressed.size()*sizeof(uint32_t), pressed.size()*sizeof(uint32_t), pressed.empty() ? &empty : pressed.data() };
++      mdf_process_keyboard_enter(data, wl_keyboard, serial, surface, &copy);
++    });
++    return;
++  }
++  mdf_process_keyboard_enter(data, wl_keyboard, serial, surface, keys);
+ }
+ 
+ 
+@@ -750,10 +914,11 @@
+ 
+ const int dead_key_count = sizeof(dead_keys)/sizeof(struct dead_key_struct);
+ 
+-static void wl_keyboard_key(void *data, struct wl_keyboard *wl_keyboard,
++static void mdf_process_keyboard_key(void *data, struct wl_keyboard *wl_keyboard,
+                uint32_t serial, uint32_t time, uint32_t key, uint32_t state) {
+   struct Fl_Wayland_Screen_Driver::seat *seat =
+     (struct Fl_Wayland_Screen_Driver::seat*)data;
++  if (!seat->xkb_state) return;
+   seat->serial = serial;
+   static char buf[128];
+   uint32_t keycode;
+@@ -862,7 +1027,14 @@
+ }
+ 
+ 
+-static void wl_keyboard_leave(void *data, struct wl_keyboard *wl_keyboard,
++static void wl_keyboard_key(void *data, struct wl_keyboard *wl_keyboard,
++               uint32_t serial, uint32_t time, uint32_t key, uint32_t state) {
++  if (mdf_queue_keyboard([=] { mdf_process_keyboard_key(data, wl_keyboard, serial, time, key, state); })) return;
++  mdf_process_keyboard_key(data, wl_keyboard, serial, time, key, state);
++}
++
++
++static void mdf_process_keyboard_leave(void *data, struct wl_keyboard *wl_keyboard,
+                uint32_t serial, struct wl_surface *surface) {
+   struct Fl_Wayland_Screen_Driver::seat *seat = (struct Fl_Wayland_Screen_Driver::seat*)data;
+ //fprintf(stderr, "keyboard leave fl_win=%p\n", Fl_Wayland_Window_Driver::surface_to_window(surface));
+@@ -879,12 +1051,20 @@
+ }
+ 
+ 
+-static void wl_keyboard_modifiers(void *data, struct wl_keyboard *wl_keyboard,
++static void wl_keyboard_leave(void *data, struct wl_keyboard *wl_keyboard,
++               uint32_t serial, struct wl_surface *surface) {
++  if (mdf_queue_keyboard([=] { if (mdf_live_surface(surface)) mdf_process_keyboard_leave(data, wl_keyboard, serial, surface); })) return;
++  mdf_process_keyboard_leave(data, wl_keyboard, serial, surface);
++}
++
++
++static void mdf_process_keyboard_modifiers(void *data, struct wl_keyboard *wl_keyboard,
+                uint32_t serial, uint32_t mods_depressed,
+                uint32_t mods_latched, uint32_t mods_locked,
+                uint32_t group) {
+   struct Fl_Wayland_Screen_Driver::seat *seat =
+     (struct Fl_Wayland_Screen_Driver::seat*)data;
++  if (!seat->xkb_state) return;
+   xkb_state_update_mask(seat->xkb_state, mods_depressed, mods_latched, mods_locked,
+                         0, 0, group);
+   Fl::e_state &= ~(FL_SHIFT+FL_CTRL+FL_ALT+FL_META+FL_CAPS_LOCK+FL_NUM_LOCK);
+@@ -901,6 +1081,15 @@
+   if (xkb_state_mod_name_is_active(seat->xkb_state, XKB_MOD_NAME_NUM,
+                                    XKB_STATE_MODS_LOCKED)) Fl::e_state |= FL_NUM_LOCK;
+ //fprintf(stderr, "mods_depressed=%u Fl::e_state=%X\n", mods_depressed, Fl::e_state);
++}
++
++
++static void wl_keyboard_modifiers(void *data, struct wl_keyboard *wl_keyboard,
++               uint32_t serial, uint32_t mods_depressed,
++               uint32_t mods_latched, uint32_t mods_locked,
++               uint32_t group) {
++  if (mdf_queue_keyboard([=] { mdf_process_keyboard_modifiers(data, wl_keyboard, serial, mods_depressed, mods_latched, mods_locked, group); })) return;
++  mdf_process_keyboard_modifiers(data, wl_keyboard, serial, mods_depressed, mods_latched, mods_locked, group);
+ }
+ 
+ 
+@@ -1222,21 +1411,11 @@
+                                                            &wl_seat_interface, 3);
+     scr_driver->seat->xkb_context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+     if (scr_driver->seat->xkb_context) {
+-      const char *locale = getenv("LC_ALL");
+-      if (!locale || !*locale)
+-        locale = getenv("LC_CTYPE");
+-      if (!locale || !*locale)
+-        locale = getenv("LANG");
+-      if (!locale || !*locale)
+-        locale = "C";
+-      MDF_TRACE("Compile keyboard Compose table");
+-      struct xkb_compose_table *table =
+-        xkb_compose_table_new_from_locale(scr_driver->seat->xkb_context, locale,
+-                                          XKB_COMPOSE_COMPILE_NO_FLAGS);
+-      if (table) {
+-        scr_driver->seat->xkb_compose_state =
+-          xkb_compose_state_new(table, XKB_COMPOSE_STATE_NO_FLAGS);
+-      }
++      if (fl_mdf_keyboard_create && fl_mdf_keyboard_submit && fl_mdf_keyboard_take && fl_mdf_keyboard_destroy)
++        mdf_input.handle = fl_mdf_keyboard_create(mdf_locale());
++      if (mdf_input.handle) {
++        mdf_input.seat = scr_driver->seat; mdf_input.enabled = true;
++      } else mdf_compose(scr_driver->seat);
+     }
+     wl_seat_add_listener(scr_driver->seat->wl_seat, &seat_listener, scr_driver->seat);
+     if (scr_driver->seat->data_device_manager) {
+@@ -1413,6 +1592,7 @@
+ 
+ 
+ static void do_atexit() {
++  fl_mdf_wayland_startup_shutdown();
+   // Issue #821 no longer seems to require extra operations under gnome version < 44.
+   Fl_Wayland_Screen_Driver *scr_driver = (Fl_Wayland_Screen_Driver*)Fl::screen_driver();
+   if (scr_driver->libdecor_context) { // libdecor recommends a call to libdecor_unref()
+@@ -1455,6 +1635,7 @@
+ 
+ 
+ void Fl_Wayland_Screen_Driver::close_display() {
++  fl_mdf_wayland_startup_shutdown();
+   if (!Fl_Wayland_Screen_Driver::wl_display) return;
+   wl_display_roundtrip(Fl_Wayland_Screen_Driver::wl_display);
+   if (text_input_base) {
+--- a/src/drivers/Wayland/Fl_Wayland_Window_Driver.cxx
++++ b/src/drivers/Wayland/Fl_Wayland_Window_Driver.cxx
+@@ -870,7 +870,8 @@
+   // true exactly for the 1st run of handle_configure() for this window
+   bool is_1st_run = (window->xdg_surface == 0);
+   // true exactly for the 2nd run of handle_configure() for this window
+-  bool is_2nd_run = (window->xdg_surface != 0 && driver->wait_for_expose_value);
++  bool is_2nd_run = (window->xdg_surface != 0 && window->mdf_initial_configure_pending);
++  if (is_1st_run) window->mdf_initial_configure_pending = true;
+   float f = Fl::screen_scale(window->fl_win->screen_num());
+ 
+   if (!window->xdg_surface) window->xdg_surface = libdecor_frame_get_xdg_surface(frame);
+@@ -954,7 +955,11 @@
+   if (wl_output) window->fl_win->redraw();
+   window->configured_width = ceil(width / f);
+   window->configured_height = ceil(height / f);
+-  if (is_2nd_run) driver->wait_for_expose_value = 0;
++  if (is_2nd_run) window->mdf_initial_configure_pending = false;
++  // The first valid configure already permits content submission. Waiting for
++  // activation or a second configure can suppress every later FLTK redraw.
++  if (window->configured_width > 0 && window->configured_height > 0)
++    driver->wait_for_expose_value = 0;
+ //fprintf(stderr, "handle_configure fl_win=%p size:%dx%d state=%x wait_for_expose_value=%d is_2nd_run=%d\n", window->fl_win, width,height,window_state,driver->wait_for_expose_value, is_2nd_run);
+ 
+ /* We would like to do FL_HIDE when window is minimized but :
+@@ -1622,7 +1627,7 @@
+ int Fl_Wayland_Window_Driver::set_cursor(Fl_Cursor c) {
+   Fl_Wayland_Screen_Driver *scr_driver = (Fl_Wayland_Screen_Driver*)Fl::screen_driver();
+   struct wld_window *xid = (struct wld_window *)Fl_Window_Driver::xid(pWindow);
+-  if (!scr_driver->seat->cursor_theme) return 1;
++  if (!scr_driver->seat->cursor_theme) { standard_cursor_ = c; return 1; }
+   // Cursor names are the files of directory /usr/share/icons/XXXX/cursors/
+   // where XXXX is the name of the current 'cursor theme'.
+   static struct cursor_file_struct {
+@@ -2179,3 +2184,43 @@
+   if (xid->kind == DECORATED) libdecor_frame_unset_maximized(xid->frame);
+   else Fl_Window_Driver::un_maximize();
+ }
++
++// MDF private startup entry points; never attach a buffer before configure.
++extern "C" void fl_mdf_restore_cursors() {
++  for (Fl_X *x = Fl_X::first; x; x = x->next) {
++    auto *window = ((struct wld_window *)x->xid)->fl_win;
++    auto *driver = (Fl_Wayland_Window_Driver *)Fl_Window_Driver::driver(window);
++    auto *native = (struct wld_window *)x->xid;
++    if (native->custom_cursor) {
++      auto *screen = (Fl_Wayland_Screen_Driver *)Fl::screen_driver();
++      Fl_Wayland_Screen_Driver::do_set_cursor(screen->seat, native->custom_cursor->wl_cursor);
++    } else driver->set_cursor(driver->standard_cursor());
++  }
++}
++extern "C" int fl_mdf_prepare_window(void *opaque) {
++  auto *window = (Fl_Window *)opaque;
++  auto *native = fl_wl_xid(window);
++  if (!native || native->configured_width || native->buffer || native->kind != Fl_Wayland_Window_Driver::DECORATED) return 0;
++  MDF_TRACE("Prepare Cairo and Wayland buffers before configure");
++  auto *driver = (Fl_Wayland_Window_Driver *)Fl_Window_Driver::driver(window);
++  driver->make_current();
++  if (native->buffer && !native->buffer->wl_buffer)
++    Fl_Wayland_Graphics_Driver::create_shm_buffer(native->buffer);
++  if (native->buffer) {
++    MDF_TRACE("Prefault first-frame buffer pages");
++    // Linux x86_64 uses 4 KiB base pages. Touch only this window's buffers;
++    // all content is painted before either buffer is attached to a surface.
++    for (size_t offset = 0; offset < native->buffer->draw_buffer.data_size; offset += 4096) {
++      native->buffer->draw_buffer.buffer[offset] = 0;
++      ((char *)native->buffer->data)[offset] = 0;
++    }
++    cairo_surface_mark_dirty(cairo_get_target(native->buffer->draw_buffer.cairo_));
++  }
++  return 1;
++}
++
++extern "C" double fl_mdf_window_scale(void *opaque) {
++  auto *window = (Fl_Window *)opaque;
++  auto *driver = (Fl_Wayland_Window_Driver *)Fl_Window_Driver::driver(window);
++  return driver->wld_scale() * Fl::screen_scale(window->screen_num());
++}
+--- a/src/drivers/Wayland/mdf_startup.h
++++ b/src/drivers/Wayland/mdf_startup.h
+@@ -2,10 +2,63 @@
+ #ifndef MDF_WAYLAND_STARTUP_H
+ #define MDF_WAYLAND_STARTUP_H
+ #include <stdint.h>
++#include <stddef.h>
++#include <deque>
++#include <functional>
++// Bounded retention of borrowed protocol callbacks, with lossless saturation.
++// Callers copy variable-length protocol data before constructing a callback.
++class MdfInputQueue {
++  std::deque<std::function<void()> > events_;
++  size_t capacity_;
++public:
++  explicit MdfInputQueue(size_t capacity = 1024) : capacity_(capacity) {}
++  bool empty() const { return events_.empty(); }
++  bool saturated() const { return events_.size() > capacity_; }
++  void clear() { events_.clear(); }
++  void push(std::function<void()> event) { events_.push_back(std::move(event)); }
++  void replay(const std::function<bool(bool)> &ready,
++              const std::function<void()> &schedule, bool wait = false) {
++    while (!events_.empty()) {
++      if (!ready(wait)) return;
++      std::function<void()> event = std::move(events_.front());
++      events_.pop_front();
++      // Pop and arrange continuation before invoking application code. A
++      // shortcut can run a nested modal event loop that must deliver releases.
++      if (!events_.empty()) schedule();
++      event();
++    }
++  }
++};
++
++struct xkb_context;
++struct xkb_keymap;
++struct xkb_state;
++struct xkb_compose_state;
++struct MdfKeyboardResult {
++  xkb_context *context;
++  xkb_keymap *keymap;
++  xkb_state *state;
++  xkb_compose_state *compose;
++  uint64_t generation;
++  int initial;
++};
+ extern "C" {
+ uint64_t fl_mdf_trace_begin(const char *, const char *, int) __attribute__((weak));
+ void fl_mdf_trace_end(const char *, const char *, int, uint64_t) __attribute__((weak));
+ void fl_mdf_buffer_committed(void *) __attribute__((weak));
++void *fl_mdf_keyboard_create(const char *) __attribute__((weak));
++int fl_mdf_keyboard_submit(void *, const char *, size_t) __attribute__((weak));
++int fl_mdf_keyboard_take(void *, MdfKeyboardResult *, int) __attribute__((weak));
++void fl_mdf_keyboard_destroy(void *) __attribute__((weak));
++int fl_mdf_defer_cursors() __attribute__((weak));
++void fl_mdf_startup_mark(const char *) __attribute__((weak));
++// Strong definitions supplied by the patched Wayland driver, called on GUI only.
++int fl_mdf_wayland_input_ready();
++void fl_mdf_wayland_startup_poll();
++void fl_mdf_wayland_startup_shutdown();
++int fl_mdf_prepare_window(void *);
++double fl_mdf_window_scale(void *);
++void fl_mdf_restore_cursors();
+ }
+ class MdfTrace {
+   const char *name_, *file_;
+--- a/src/drivers/Wayland/Fl_Wayland_Graphics_Driver.cxx
++++ b/src/drivers/Wayland/Fl_Wayland_Graphics_Driver.cxx
+@@ -123,6 +123,7 @@
+ 
+ // used to support both normal and progressive drawing and for top-level GL windows
+ static void surface_frame_done(void *data, struct wl_callback *cb, uint32_t time) {
++  MDF_TRACE("Handle Wayland frame callback");
+   struct wld_window *window = (struct wld_window *)data;
+   wl_callback_destroy(cb);
+   window->frame_cb = NULL;
+--- a/src/drivers/Wayland/Fl_Wayland_Window_Driver.H
++++ b/src/drivers/Wayland/Fl_Wayland_Window_Driver.H
+@@ -164,6 +164,7 @@
+   };
+   // non-null when using custom cursor
+   struct Fl_Wayland_Window_Driver::custom_cursor *custom_cursor;
++  bool mdf_initial_configure_pending; // preserve second-configure workarounds without blocking redraws
+   int configured_width;
+   int configured_height;
+   int floating_width;

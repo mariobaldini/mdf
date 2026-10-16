@@ -1,4 +1,12 @@
+# Generated output, compiler caches, and profile reports.
+build/
 .zig-cache/
 zig-out/
-zig-pkg/
 *.o
+__pycache__/
+
+# Temporary browser diagnostics and accessibility snapshots.
+.playwright-mcp/
+
+# Downloaded dependencies survive make clean.
+zig-pkg/

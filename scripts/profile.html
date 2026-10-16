@@ -1,0 +1,681 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Markdown FAST · startup profile</title>
+<link rel="icon" href="data:,">
+<style>
+  :root{color-scheme:light dark;--bg:#f7f8fa;--paper:#fff;--ink:#1c2737;--muted:#607084;--line:#dce2e9;--launch:#536c81;--gui:#356bc2;--document:#19805a;--fonts:#b27115;--navigation:#8352b7}
+  *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 system-ui,sans-serif}main{max-width:1280px;margin:auto;padding:30px 28px 40px}header{display:flex;gap:24px;align-items:baseline;justify-content:space-between;border-bottom:2px solid var(--ink);padding-bottom:16px}h1{font-size:25px;letter-spacing:-.6px;margin:0}h2{font-size:18px;margin:0}p{margin:7px 0;color:var(--muted)}small{color:var(--muted)}button,select{font:inherit;color:inherit;background:var(--paper);border:1px solid var(--line);border-radius:5px;padding:6px 10px}button,select,input{cursor:pointer}button:hover,button:focus-visible,select:focus-visible{border-color:var(--gui)}button:disabled{opacity:.45;cursor:default}button[aria-pressed=true]{color:var(--gui);border-color:var(--gui)}code,.number{font:12px/1.5 ui-monospace,monospace;font-variant-numeric:tabular-nums}section{margin-top:30px}.summary{display:grid;grid-template-columns:repeat(4,1fr);gap:24px;margin:20px 0 24px}.metric{border-bottom:1px solid var(--line);padding-bottom:13px}.metric strong{display:block;font-size:27px;font-weight:600;letter-spacing:-.6px;font-variant-numeric:tabular-nums}.metric span{font-size:12px;color:var(--muted)}.heading,.controls,.legend{display:flex;align-items:center;flex-wrap:wrap;gap:10px 18px}.heading{justify-content:space-between}.controls{margin:14px 0}.controls label{display:flex;align-items:center;gap:7px}.controls output{font-size:12px;min-width:25px}.legend{gap:8px 18px;font-size:12px}.legend i{display:inline-block;width:9px;height:9px;background:var(--color);border-radius:2px;margin-right:5px}.chart{background:var(--paper);border:1px solid var(--line);border-radius:5px;overflow:auto}.chart svg{display:block}svg text{font:11px ui-monospace,monospace;fill:var(--muted);pointer-events:none}svg .thread{font:600 12px system-ui,sans-serif;fill:var(--ink)}svg .call-label{font:11px system-ui,sans-serif;fill:#fff}svg .call:hover,svg .call:focus{stroke:var(--ink);stroke-width:2;outline:none}svg .call.selected{stroke:var(--ink);stroke-width:2.5}.parallel-list{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0}.parallel-list button{font-size:12px;padding:4px 8px}.selection{border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:16px;padding:11px 0;min-height:62px}.selection strong{font-size:13px}.selection p{font-size:12px;margin:2px 0;overflow-wrap:anywhere}.caption{font-size:12px}.dependency svg{width:100%;min-width:980px}.dependency .node-label{font:600 12px system-ui,sans-serif;fill:var(--ink)}.gates{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px}.gate{display:block;text-align:left;border-left:3px solid var(--color);padding:10px 12px}.gate strong{font-weight:600;font-size:13px}.gate small{display:block;margin-top:3px}.table-wrap{overflow:auto}table{width:100%;border-collapse:collapse;font-size:12px}td,th{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}td:first-child,th:first-child{padding-left:0}th{font-weight:500;color:var(--muted)}.number{text-align:right}td small{display:block;font-size:11px}td.role{white-space:normal}details{margin-top:18px}summary{cursor:pointer;font-weight:500}details>div,details>p{margin-top:10px}.files{display:flex;gap:8px 22px;flex-wrap:wrap;font-size:13px;margin:12px 0}.files strong{font-weight:500}footer{border-top:1px solid var(--line);margin-top:28px;padding-top:12px;font-size:11px;color:var(--muted)}#warning{color:#bd6331;font-weight:600}input[type=range]{width:100px;accent-color:var(--gui)}
+  @media(max-width:650px){main{padding:20px 14px}header{display:block}header small{display:block;margin-top:5px}.summary{grid-template-columns:1fr 1fr;gap:14px}.metric strong{font-size:24px}.gates{grid-template-columns:1fr}.selection{align-items:flex-start}h1{font-size:22px}.controls{gap:8px 10px}.heading{gap:8px}}
+  @media(prefers-color-scheme:dark){:root{--bg:#131b26;--paper:#1a2533;--ink:#e3eaf3;--muted:#9eafc2;--line:#334153;--gui:#7daafa;--document:#55bb93;--fonts:#d7a955;--navigation:#bd92ef}}
+  #timeline{scrollbar-width:none}#timeline::-webkit-scrollbar{display:none}#timeline-surface{position:relative}#timeline-surface>svg{position:sticky;left:0}svg .state-label{font:600 11px system-ui,sans-serif;fill:var(--ink)}
+  #chart-scrollbar{height:26px;padding:4px 0;background:var(--paper);border:1px solid var(--line);border-top:0;border-radius:0 0 5px 5px}#chart-scrollbar[hidden]{display:none}
+  #pan{display:block;appearance:none;-webkit-appearance:none;width:100%;height:18px;margin:0;background:var(--line);border-radius:5px;--thumb-width:36px;cursor:ew-resize}
+  #pan::-webkit-slider-thumb{appearance:none;-webkit-appearance:none;width:var(--thumb-width);height:18px;background:var(--muted);border:2px solid var(--paper);border-radius:5px}
+  #pan::-moz-range-thumb{width:var(--thumb-width);height:14px;background:var(--muted);border:2px solid var(--paper);border-radius:5px}#pan::-moz-range-track{height:18px;background:var(--line);border-radius:5px}
+  .dependency svg{height:auto}svg .graph-call-label{font:11px system-ui,sans-serif;fill:var(--ink)}svg .graph-call:hover,svg .graph-call:focus,svg .graph-stage:hover,svg .graph-stage:focus{stroke:var(--ink);stroke-width:2;outline:none}
+  #size-map{overflow:hidden}#size-map svg{width:100%;height:auto}.size-tile{stroke:var(--paper);stroke-width:1;cursor:pointer}.size-tile:hover,.size-tile:focus{stroke:var(--ink);stroke-width:2.5;outline:none}.size-name{font:600 12px system-ui,sans-serif;fill:#fff}.size-value{font:11px ui-monospace,monospace;fill:#fff}.size-path{margin:12px 0;min-height:32px}.size-path button{font-size:12px;padding:4px 9px}.size-detail{min-height:24px;font-size:12px;margin-top:9px;color:var(--ink);overflow-wrap:anywhere}
+  .document-tabs{display:flex;gap:6px;border-bottom:1px solid var(--line);margin:20px 0 12px;padding-bottom:8px}.document-tabs button{font-weight:600;padding:9px 16px}.document-tabs button[aria-selected=true]{color:var(--gui);border-color:var(--gui);box-shadow:inset 0 -2px var(--gui)}#launch-breakdown{font-size:12px;margin-top:-10px}
+  #averages{margin-top:22px}#averages td:first-child{font-weight:600}.document-tabs{flex-wrap:wrap}
+  :root{--critical:#bd3540}.critical-key{font-size:12px;color:var(--critical)}.critical-key::before{content:'';display:inline-block;width:24px;border-top:3px solid var(--critical);margin-right:7px;vertical-align:middle}@media(prefers-color-scheme:dark){:root{--critical:#ff7c85;--launch:#9fb4c5}}
+  #cache-status{padding:8px 11px;border-left:3px solid var(--document);background:var(--paper)}
+  .dependency{max-height:78vh;overscroll-behavior:contain;scrollbar-gutter:stable;scrollbar-width:auto}.dependency svg{min-width:0;max-width:none}
+  .dependency::-webkit-scrollbar{width:18px;height:18px}.dependency::-webkit-scrollbar-track{background:var(--paper)}.dependency::-webkit-scrollbar-thumb{background:var(--muted);border:3px solid var(--paper);border-radius:6px;min-height:36px}
+  .dependency svg{cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none}.dependency.panning,.dependency.panning *{cursor:grabbing!important}
+</style>
+<main>
+  <header><h1>Markdown FAST <span style="font-weight:400">/ startup profile</span></h1><small id="build"></small></header>
+  <section id="averages" aria-labelledby="averages-title" hidden>
+    <div class="heading"><h2 id="averages-title">Startup averages</h2><small id="averages-count"></small></div>
+    <p class="caption">Mean of every run for each sample, including outliers. Values are milliseconds ± the 95% margin of error for the mean (Student-t). A single run has no error estimate.</p>
+    <div class="table-wrap"><table><thead><tr><th>Sample</th><th class="number">Runs</th><th class="number">Pre-load ms</th><th class="number">Scaffold ms</th><th class="number">First viewport ms</th><th class="number">Fully ready ms</th></tr></thead><tbody id="average-rows"></tbody></table></div>
+    <p id="average-method" class="caption"></p>
+    <p class="caption">These margins estimate variation in the mean, not the range of individual launches. Background load and compositor scheduling can correlate runs. Linux cache eviction does not clear storage hardware caches or pages kept active by the desktop.</p>
+    <details id="launch-orders" hidden><summary>Launch order and cache verification</summary><p id="order-method" class="caption"></p><div class="table-wrap"><table><thead><tr><th>Round</th><th>Sample order</th></tr></thead><tbody id="order-rows"></tbody></table></div></details>
+  </section>
+  <nav id="document-tabs" class="document-tabs" role="tablist" aria-label="Profiled document"></nav>
+  <div id="document-results" role="tabpanel">
+  <p id="subtitle"></p>
+  <div class="summary">
+    <div class="metric"><strong id="viewport"></strong><span id="viewport-label">Launch → viewport · median</span></div>
+    <div class="metric"><strong id="p95"></strong><span id="p95-label">Launch → viewport · p95</span></div>
+    <div class="metric"><strong id="scaffold"></strong><span>Scaffold · median</span></div>
+    <div class="metric"><strong id="ready"></strong><span>Fully ready · median</span></div>
+  </div>
+  <p id="launch-breakdown"></p>
+  <p id="cache-status" class="caption"></p>
+  <p id="runtime-conditions" class="caption"></p>
+  <p id="code-font" class="caption" hidden></p>
+  <p id="fallback-font" class="caption" hidden></p>
+  <p id="workload" class="caption"></p>
+  <p id="diagnostic-notice" hidden style="border:2px solid var(--critical);padding:12px"></p>
+  <section>
+    <div class="heading"><h2>Calls across threads</h2><div class="legend" id="legend"></div></div>
+    <p class="caption">Shared time axis. Each lane accounts for work, measured waits, idle states, and untraced time. Child gaps show the caller’s self time.</p>
+    <div class="controls">
+      <label>Launch <select id="launch" aria-label="Measured launch"></select></label>
+      <button id="fit" type="button">Fit all</button>
+      <button id="first-viewport" type="button">First viewport</button>
+      <label>Zoom <input id="zoom" type="range" min="1" max="256" step="any" value="1" aria-label="Flame chart zoom"><output id="zoom-value">1×</output></label>
+      <small id="range-label">Full startup</small>
+    </div>
+    <div id="timeline" class="chart"><div id="timeline-surface"></div></div>
+    <div id="chart-scrollbar" hidden><input id="pan" type="range" min="0" max="0" step="any" value="0" aria-label="Horizontal flame chart position"></div>
+    <p class="caption">Shaded blocks: <strong>U</strong> untraced time (work or waiting outside probes); <strong>W</strong> measured wait; <strong>I</strong> deferred/finished lane; <strong>S</strong> caller self time. Select a block for its full name, neighboring calls, and explanation.</p>
+    <p class="caption">Ctrl + wheel zooms around the pointer, up to 256×. Drag the large scrollbar to pan.</p>
+    <div class="parallel-list" id="parallel-list" aria-label="Parallel call groups"></div>
+    <div class="selection" aria-live="polite"><div><strong id="call-name">Select a call to inspect its duration.</strong><p id="call-detail">Double-click a call to zoom into its children.</p></div><button id="zoom-call" type="button" disabled>Zoom to call</button></div>
+    <details id="syscall-details" hidden><summary>Observed syscall details and stack</summary><pre id="syscall-content" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre></details>
+    <p id="concurrency" class="caption"></p><p id="warning" class="caption"></p>
+  </section>
+  <section>
+    <div class="heading"><h2>What delayed what</h2><span id="critical-key" class="critical-key">Critical path to first viewport</span></div>
+    <p id="dependency-boundary" class="caption"></p>
+    <p class="caption">Each block shows its start since t0 and total elapsed time in milliseconds. Nested calls are already included in their parent. Add only the outer red block totals to obtain the selected launch's endpoint time. Parallel and later work stays visible in thread colors.</p>
+    <p id="wall-accounting" class="caption"></p>
+    <div class="controls" role="group" aria-label="Dependency graph zoom controls">
+      <label>Critical path <select id="dependency-endpoint" aria-label="Critical path endpoint"><option value="viewport">First viewport</option><option value="ready">Fully ready</option></select></label>
+      <button id="dependency-fit" type="button">Fit width</button>
+      <button id="dependency-actual" type="button">100%</button>
+      <button id="dependency-out" type="button" aria-label="Zoom out dependency graph">−</button>
+      <label>Zoom <input id="dependency-zoom" type="range" min="5" max="800" step="any" value="100" aria-label="Dependency graph zoom"><output id="dependency-zoom-value" for="dependency-zoom">100%</output></label>
+      <button id="dependency-in" type="button" aria-label="Zoom in dependency graph">+</button>
+      <small>Ctrl + wheel to zoom; click and drag the diagram to pan.</small>
+    </div>
+    <div id="dependencies" class="chart dependency" role="region" aria-label="Scrollable startup dependency graph" tabindex="0"></div>
+    <div id="gates" class="gates"></div>
+    <p class="caption">Vertical distances are not a time scale. A worker enters the red chain only when its readiness handoff occurs during a measured GUI wait and no independent GUI work delays adoption. Untraced intervals keep their unknown cause. A scope marked “part” is split at a handoff or endpoint; its tooltip retains the original call duration. Nested durations must not be added to outer totals.</p>
+  </section>
+  <section id="size-section" hidden>
+    <div class="heading"><h2>Executable size map</h2><small id="size-total"></small></div>
+    <p class="caption">Rectangle area shows bytes in the executable. Click a group to explore it; hover or focus a tile for its size and share.</p>
+    <nav id="size-path" class="controls size-path" aria-label="Size map location"></nav>
+    <div id="size-map" class="chart"></div>
+    <p id="size-detail" class="size-detail" aria-live="polite"></p>
+    <p id="size-method" class="caption"></p>
+  </section>
+  <section id="library-section">
+    <div class="heading"><h2>Libraries &amp; size</h2><small id="library-count"></small></div>
+    <div class="files" id="binaries"></div>
+    <div class="table-wrap"><table><thead><tr><th>Library</th><th>Version</th><th>Use</th><th class="number">Attributed in mdf</th><th class="number">External .so file</th><th>Linkage</th></tr></thead><tbody id="libraries"></tbody></table></div>
+    <p class="caption">Attributed bytes are retained symbols, embedded fonts, and compressed payloads, matching the treemap. Expanded module sizes are separate. Inlined code stays with its surviving caller; shared/unattributed bytes remain separate. External .so files are outside mdf.</p>
+    <details id="build-inputs"><summary>Build inputs — archives, headers, and font sources</summary><p class="caption">These are files fed to the build, not bytes copied wholesale into mdf. Archives contain unused objects and compiler/LTO metadata; optimization and dead-section removal reduce the final executable.</p><div class="table-wrap"><table><thead><tr><th>Library</th><th class="number">Build input size</th><th>Input type</th></tr></thead><tbody id="input-libraries"></tbody></table></div></details>
+    <details id="indirect"><summary id="indirect-label">Other shared libraries</summary><div class="table-wrap"><table><thead><tr><th>Runtime dependency</th><th class="number">File size</th></tr></thead><tbody id="indirect-libraries"></tbody></table></div></details>
+  </section>
+  <details><summary>Launch measurements &amp; method</summary>
+    <div class="table-wrap"><table><thead><tr><th>Launch</th><th>Round / position</th><th class="number">Before main ms</th><th class="number">Scaffold ms</th><th class="number">Viewport ms</th><th class="number">Ready ms</th><th class="number">Profiler finish ms</th><th class="number">CPU ms</th><th class="number">RSS MiB</th></tr></thead><tbody id="runs"></tbody></table></div>
+    <p id="method" class="caption"></p><p id="timing-boundary" class="caption"></p>
+  </details>
+  </div>
+  <footer id="footer"></footer>
+</main>
+<script id="profile-data" type="application/json">__PROFILE_DATA__</script>
+<script>
+'use strict';
+const archive=JSON.parse(document.getElementById('profile-data').textContent);
+const documents=archive.documents??[archive];
+let report={...archive,...documents[0]};
+const $=id=>document.getElementById(id), text=(id,value)=>{$(id).textContent=value;};
+const fmt=(value,digits=2)=>Number.isFinite(Number(value))?Number(value).toFixed(digits):'—';
+const ms=(ns,digits=2)=>`${fmt(ns/1e6,digits)} ms`;
+const elapsed=ns=>ns>=1e6?ms(ns,3):ns>=1000?`${fmt(ns/1000,2)} µs`:`${ns} ns`;
+const bytes=value=>value==null?'—':value<1024?`${value} B`:value<1048576?`${fmt(value/1024,1)} KiB`:`${fmt(value/1048576,2)} MiB`;
+const colors={launch:'var(--launch)',gui:'var(--gui)',document:'var(--document)',fonts:'var(--fonts)',navigation:'var(--navigation)',images:'hsl(331 59% 49%)',fallback:'hsl(187 60% 40%)',input:'hsl(12 70% 45%)'};
+const hues={launch:[207,25,40],gui:[217,59,47],document:[157,61,32],fonts:[35,72,38],navigation:[270,44,46],images:[331,59,49],fallback:[187,60,40],input:[12,70,45]};
+const short={launch:'Pre-load',gui:'GUI',document:'Document',fonts:'Monospace',navigation:'Navigation',images:'Images / diagrams',fallback:'Glyph fallback',input:'Keyboard'};
+Object.keys(archive.tracks).forEach((track,index)=>{if(!(track in colors)){const hue=(index*71)%360;colors[track]=`hsl(${hue} 48% 47%)`;hues[track]=[hue,48,47];short[track]=archive.tracks[track];}});
+let selected=0,range=null,picked=null,zoom=1;
+let dependencyZoom=1,dependencyFit=true;
+let dependencyDrag=null,dependencySuppressClick=false;
+let sizePath=[];
+const run=()=>report.runs[selected];
+const duration=()=>Math.round(run().metrics.first_frame_ms*1e6);
+function svgNode(tag,attributes={},value){const node=document.createElementNS('http://www.w3.org/2000/svg',tag);for(const [key,val] of Object.entries(attributes))node.setAttribute(key,val);if(value!==undefined)node.textContent=value;return node;}
+function cell(row,value,number=false){const node=document.createElement('td');node.textContent=value??'—';if(number)node.className='number';row.append(node);return node;}
+function intervalDescription(event){
+  if(event.description)return event.description;
+  if(event.kind==='untraced'){
+    const calls=run().events.filter(item=>item.track===event.track&&item.kind!=='signal');
+    const prior=calls.filter(item=>item.start_ns+item.duration_ns<=event.start_ns).sort((a,b)=>b.start_ns+b.duration_ns-a.start_ns-a.duration_ns)[0];
+    const next=calls.filter(item=>item.start_ns>=event.start_ns+event.duration_ns).sort((a,b)=>a.start_ns-b.start_ns)[0];
+    return `After ${event.before??prior?.name??'thread start'}; before ${event.after??next?.name??'full readiness'}. No probe covers this interval. It can contain work, event dispatch, scheduling delay, or an uninstrumented wait; its cause was not measured.`;
+  }
+  if(event.kind==='wait')return 'Elapsed time in a select/poll wait call. It includes waking and scheduling the GUI; it does not identify an OS lock owner.';
+  if(event.kind==='idle')return 'This lane has no requested work here, or its worker has finished, according to recorded handoffs. Other threads can still be active.';
+  if(event.kind==='self')return 'Elapsed time inside the caller outside its recorded child calls. This includes its own code and uninstrumented callees, not a known idle interval.';
+  if(event.name.includes('wait + callbacks'))return 'A synchronous Wayland call that can wait for the compositor and then dispatch callbacks. Its elapsed time includes callback work and nested calls; it is not pure CPU or disk-I/O time.';
+  return '';
+}
+function sizeRectangles(items, x, y, width, height) {
+  const total = items.reduce((sum, item) => sum + item.bytes, 0);
+  if (!total || width <= 0 || height <= 0) return [];
+  const pending = [...items].sort((a, b) => b.bytes - a.bytes).map(node => ({node, area: node.bytes / total * width * height}));
+  const result = [];
+  const worst = (row, side) => {
+    const sum = row.reduce((value, item) => value + item.area, 0);
+    return Math.max(side * side * row[0].area / (sum * sum), sum * sum / (side * side * row[row.length - 1].area));
+  };
+  while (pending.length) {
+    const row = [pending.shift()], side = Math.min(width, height);
+    while (pending.length && worst([...row, pending[0]], side) <= worst(row, side)) row.push(pending.shift());
+    const area = row.reduce((sum, item) => sum + item.area, 0);
+    if (width >= height) {
+      const strip = area / height;
+      let top = y;
+      for (const item of row) {
+        const h = item.area / strip;
+        result.push({node: item.node, x, y: top, width: strip, height: h}); top += h;
+      }
+      x += strip; width = Math.max(0, width - strip);
+    } else {
+      const strip = area / width;
+      let left = x;
+      for (const item of row) {
+        const w = item.area / strip;
+        result.push({node: item.node, x: left, y, width: w, height: strip}); left += w;
+      }
+      y += strip; height = Math.max(0, height - strip);
+    }
+  }
+  return result;
+}
+function sizeMap() {
+  const root = report.project?.binary_size, chart = $('size-map');
+  if (!root?.available || !chart.clientWidth) return;
+  const palette = {'Fonts': [35, 69, 37], 'Application': [216, 58, 43], 'Bundled libraries': [158, 51, 32],
+    'Compressed diagram module': [158, 51, 32], 'Compressed renderers': [158, 51, 32], 'Language runtimes': [272, 39, 43], 'Shared data & constants': [193, 35, 35],
+    'Unattributed code & alignment': [12, 43, 41], 'ELF format & loader': [221, 21, 39]};
+  const current = sizePath.at(-1) ?? root;
+  const width = chart.clientWidth, height = Math.max(350, Math.min(580, width * .52));
+  const svg = svgNode('svg', {viewBox: `0 0 ${width} ${height}`, width, height, role: 'group', 'aria-label': `File size treemap for ${current.name}`});
+  const defs = svgNode('defs'); svg.append(defs);
+  let sequence = 0;
+  const detail = (node, path) => text('size-detail', `${path.map(item => item.name).join(' / ')} · ${bytes(node.bytes)} · ${fmt(node.bytes / root.bytes * 100, 2)}% of ${root.name}`);
+  const open = path => {sizePath = path; sizeMap();};
+  const paint = (tile, path, shade, depth) => {
+    const {node, x, y, width: w, height: h} = tile;
+    if (w < .4 || h < .4) return;
+    const key = `size-clip-${sequence++}`, next = [...path, node], group = next[0].name;
+    const [hue, saturation, lightness] = palette[group] ?? [215, 30, 40];
+    const rect = svgNode('rect', {x, y, width: w, height: h, fill: `hsl(${hue} ${saturation}% ${lightness + shade}%)`, class: 'size-tile',
+      tabindex: 0, role: 'button', 'data-size-name': node.name, 'data-size-bytes': node.bytes,
+      'aria-label': `${node.name}, ${bytes(node.bytes)}, ${fmt(node.bytes / root.bytes * 100)}% of executable${node.children ? ', explore group' : ''}`});
+    rect.append(svgNode('title', {}, `${next.map(item => item.name).join(' / ')}\n${node.bytes.toLocaleString()} bytes · ${fmt(node.bytes / root.bytes * 100)}% of ${root.name}`));
+    rect.addEventListener('pointerenter', () => detail(node, next));
+    rect.addEventListener('focus', () => detail(node, next));
+    const choose = () => {if (node.children) open(next); else detail(node, next);};
+    rect.addEventListener('click', choose);
+    rect.addEventListener('keydown', event => {if (event.key === 'Enter' || event.key === ' ') {event.preventDefault(); choose();}});
+    svg.append(rect);
+    const clip = svgNode('clipPath', {id: key});
+    clip.append(svgNode('rect', {x: x + 5, y: y + 3, width: Math.max(0, w - 10), height: Math.max(0, h - 6)})); defs.append(clip);
+    if (w >= 42 && h >= 24) {
+      const label = node.children ? `${node.name} · ${bytes(node.bytes)}` : node.name;
+      const cut = Math.max(3, Math.floor((w - 12) / 6.8));
+      svg.append(svgNode('text', {x: x + 7, y: y + 17, class: 'size-name', 'clip-path': `url(#${key})`}, label.length > cut ? label.slice(0, cut - 1) + '…' : label));
+    }
+    if (node.children && w > 64 && h > 60 && depth < 2) {
+      sizeRectangles(node.children, x + 4, y + 26, w - 8, h - 30).forEach((child, index) => paint(child, next, 5 + index % 4 * 3, depth + 1));
+    } else if (!node.children && w >= 62 && h >= 44) {
+      svg.append(svgNode('text', {x: x + 7, y: y + 34, class: 'size-value', 'clip-path': `url(#${key})`}, bytes(node.bytes)));
+      if (h >= 63) svg.append(svgNode('text', {x: x + 7, y: y + 51, class: 'size-value', 'clip-path': `url(#${key})`}, `${fmt(node.bytes / root.bytes * 100, 1)}%`));
+    }
+  };
+  sizeRectangles(current.children ?? [current], 0, 0, width, height).forEach((tile, index) => paint(tile, sizePath, index % 3 * 2, 0));
+  chart.replaceChildren(svg);
+  $('size-path').replaceChildren();
+  [root, ...sizePath].forEach((node, index) => {
+    if (index) $('size-path').append(document.createTextNode('›'));
+    const button = document.createElement('button'); button.type = 'button'; button.textContent = node.name;
+    button.setAttribute('aria-current', index === sizePath.length ? 'location' : 'false');
+    button.addEventListener('click', () => open(sizePath.slice(0, index))); $('size-path').append(button);
+  });
+  detail(current, [root, ...sizePath]);
+}
+function setRange(start, end, label, padded = true) {
+  const padding = padded ? Math.max(20000, (end - start) * .05) : 0;
+  range = [Math.max(0, start - padding), Math.min(duration(), end + padding)];
+  if (range[1] <= range[0]) range = null;
+  text('range-label', label);
+  zoom = 1;
+  $('zoom').value = 1;
+  $('timeline').scrollLeft = 0;
+  timeline();
+}
+function inspect(event) {
+  picked = event;
+  text('call-name', event.name);
+  const count = run().events.filter(item => item.parent === event.id).length;
+  const explanation=intervalDescription(event),source=event.source?`${event.source}:${event.line}`:'';
+  const origin = [explanation,source].filter(Boolean).join(' · ');
+  text('call-detail', `${short[event.track]} · ${event.kind} · total ${elapsed(event.duration_ns)} · self ${elapsed(event.self_ns)} · ${count} child calls · ${ms(event.start_ns)} from ${run().main_entry_ns!=null?'launch':'main'} · ${origin}`);
+  $('zoom-call').disabled = false;
+  $('syscall-details').hidden=!event.syscall;
+  if(event.syscall){const call=event.syscall,stack=call.stack??run().syscall_stacks?.[call.stack_id]??[];text('syscall-content',`TID ${call.tid} · ${call.call} · original complete syscall ${elapsed(call.original_duration_ns)}\n${call.arguments}\nResult: ${call.result}\nDescriptor: ${call.descriptor??'not identified'}\n${(call.related??[]).join('\n')}\n${stack.length?'Observed stack (-k); frames are not separately timed:\n'+stack.join('\n'):'No stack recorded. Use the separate diagnostic with --stacks for additional caller evidence.'}`);}
+  document.querySelectorAll('#timeline .call').forEach(node => node.classList.toggle('selected', node.dataset.event === String(event.id)));
+}
+function setZoom(value, anchor) {
+  const chart = $('timeline'), available = chart.clientWidth;
+  const left = available < 650 ? 12 : 158;
+  anchor = Math.max(left, Math.min(available - 18, anchor ?? (left + available - 18) / 2));
+  const fraction = (chart.scrollLeft + anchor - left) / (available * zoom - left - 18);
+  zoom = Math.max(1, Math.min(256, Number(value)));
+  $('zoom').value = zoom;
+  timeline();
+  chart.scrollLeft = left + fraction * (available * zoom - left - 18) - anchor;
+  timeline();
+}
+function timeline() {
+  const data = run();
+  const recorded = data.events.filter(event => event.kind !== 'signal' && event.duration_ns > 0);
+  const events = [...recorded, ...(data.self_spans ?? []), ...(data.gaps ?? [])];
+  const active = Object.keys(report.tracks).filter(track => recorded.some(event => event.track === track));
+  const chart = $('timeline'), available = chart.clientWidth;
+  if (!available) return;
+  const width = available * zoom, compact = available < 650, left = compact ? 12 : 158;
+  const plot = width - left - 18, [start, end] = range ?? [0, duration()];
+  const surface = $('timeline-surface');
+  surface.style.width = `${width}px`;
+  const scroll = Math.min(chart.scrollLeft, Math.max(0, width - available));
+  const visibleStart = start + scroll / plot * (end - start);
+  const visibleEnd = Math.min(end, start + (scroll + available - left - 18) / plot * (end - start));
+  const x = ns => left + (ns - start) / (end - start) * plot - scroll;
+  const depth = new Map();
+  for (const event of events) depth.set(event.id, event.parent == null ? 0 : (depth.get(event.parent) ?? -1) + 1);
+  const rows = active.map(track => ({track, maxDepth: Math.max(0, ...events.filter(event => event.track === track).map(event => depth.get(event.id)))}));
+  const heading = compact ? 21 : 0, rowHeight = row => (row.maxDepth + 1) * 23 + 24 + heading;
+  const height = 64 + rows.reduce((sum, row) => sum + rowHeight(row), 0) + 48;
+  surface.style.height = `${height}px`;
+  const svg = svgNode('svg', {width: available, height, role: 'group', 'data-zoom': zoom, 'aria-label': 'Nested call flame chart, aligned by thread'});
+  const defs = svgNode('defs');
+  for (const [id, color, opacity] of [['parallel-stripes', 'var(--gui)', .065], ['wait-stripes', 'var(--muted)', .2], ['unknown-stripes', 'var(--muted)', .1]]) {
+    const pattern = svgNode('pattern', {id, width: 8, height: 8, patternUnits: 'userSpaceOnUse', patternTransform: 'rotate(45)'});
+    if (id !== 'parallel-stripes') pattern.append(svgNode('rect', {width: 8, height: 8, fill: 'var(--paper)'}));
+    pattern.append(svgNode('rect', {width: 3, height: 8, fill: color, opacity}));
+    defs.append(pattern);
+  }
+  svg.append(defs);
+  for (const group of data.parallel_groups) {
+    const a = Math.max(visibleStart, group.start_ns), b = Math.min(visibleEnd, group.start_ns + group.duration_ns);
+    if (b > a) svg.append(svgNode('rect', {x: x(a), y: 27, width: Math.max(.7, x(b) - x(a)), height: height - 67, fill: 'url(#parallel-stripes)', 'data-parallel': true}));
+  }
+  const ticks = Math.max(2, Math.min(12, Math.floor((available - left - 18) / 90)));
+  for (let i = 0; i <= ticks; ++i) {
+    const at = visibleStart + (visibleEnd - visibleStart) * i / ticks;
+    svg.append(svgNode('line', {x1: x(at), x2: x(at), y1: 28, y2: height - 44, stroke: 'var(--line)', 'stroke-dasharray': '2 5'}));
+    svg.append(svgNode('text', {x: x(at), y: 17, 'text-anchor': i === 0 ? 'start' : i === ticks ? 'end' : 'middle'}, ms(at, Math.max(2, Math.min(6, Math.ceil(-Math.log10((visibleEnd - visibleStart) / ticks / 1e6)) + 1)))));
+  }
+  for (const segment of data.activity) {
+    const a = Math.max(visibleStart, segment.start_ns), b = Math.min(visibleEnd, segment.start_ns + segment.duration_ns);
+    if (b <= a) continue;
+    const tracks = segment.tracks.length ? segment.tracks : [null];
+    tracks.forEach((track, index) => {
+      const band = svgNode('rect', {x: x(a), y: 33 + index * 10 / tracks.length, width: Math.max(.5, x(b) - x(a)), height: 10 / tracks.length, fill: track ? colors[track] : 'url(#unknown-stripes)', opacity: .7});
+      band.append(svgNode('title', {}, `${segment.tracks.length ? segment.tracks.map(track => short[track]).join(' + ') : 'Waiting, idle, or untraced — see thread lanes'} · ${ms(segment.duration_ns)}`));
+      svg.append(band);
+    });
+  }
+  let y = 60,labelSequence=0;
+  for (const row of rows) {
+    const group = svgNode('g', {'data-track': row.track});
+    group.append(svgNode('text', {x: compact ? 12 : 14, y: y + 12, class: 'thread'}, report.tracks[row.track]));
+    // Draw the derived coverage first so real calls remain easy to select.
+    const calls = events.filter(event => event.track === row.track).sort((a, b) => Number(a.recorded !== false) - Number(b.recorded !== false));
+    for (const event of calls) {
+      const a = Math.max(visibleStart, event.start_ns), b = Math.min(visibleEnd, event.start_ns + event.duration_ns);
+      if (b <= a) continue;
+      const level = depth.get(event.id), top = y + heading + level * 23, pos = x(a), w = Math.max(.8, x(b) - pos), [h, s, l] = hues[row.track];
+      const fill = event.kind === 'wait' ? 'url(#wait-stripes)' : event.kind === 'untraced' ? 'url(#unknown-stripes)' :
+        event.kind === 'idle' ? `color-mix(in srgb,${colors[row.track]} 8%,var(--paper))` :
+        event.kind === 'self' ? `color-mix(in srgb,${colors[row.track]} 18%,var(--paper))` : `hsl(${h} ${s}% ${Math.max(24, l - level * 3)}%)`;
+      const muted = ['wait', 'untraced', 'idle', 'self'].includes(event.kind);
+      const rect = svgNode('rect', {x: pos, y: top, width: w, height: 19, rx: 2, fill, tabindex: 0, role: 'button',
+        class: `call${picked?.id === event.id ? ' selected' : ''}`, 'data-kind': event.kind, 'data-event': event.id, 'data-parent': event.parent ?? '',
+        'aria-label': `${event.name}, ${ms(event.duration_ns)}, ${short[row.track]}`});
+      rect.append(svgNode('title', {}, `${event.name}\n${event.boundary ? 'Measured pre-load interval, included in totals' : event.recorded === false ? 'Derived interval' : 'Recorded call'} · total ${elapsed(event.duration_ns)} · self ${elapsed(event.self_ns)}\n${intervalDescription(event)}${event.source ? `\n${event.source}:${event.line}` : ''}`));
+      rect.addEventListener('click', () => inspect(event));
+      rect.addEventListener('dblclick', () => setRange(event.start_ns, event.start_ns + event.duration_ns, event.name));
+      rect.addEventListener('keydown', key => { if (key.key === 'Enter' || key.key === ' ') {key.preventDefault(); inspect(event);} });
+      group.append(rect);
+      if(muted){
+        const waitName=event.wait?.reason==='compositor'?'Wait: compositor':event.wait?.reason==='other descriptor'?`Wait: fd ${event.wait.ready_fds.join(',')}`:event.wait?.reason?`Wait: ${event.wait.reason}`:'Wait';
+        const name=event.kind==='untraced'?'Untraced':event.kind==='wait'?waitName:event.kind==='self'?'Caller self':event.name.replace(/^Idle — /,'');
+        const code={untraced:'U',wait:'W',idle:'I',self:'S'}[event.kind];
+        const candidates=[`${name} · ${elapsed(event.duration_ns)}`,name,code];
+        const label=candidates.find(value=>value.length*6.1+8<=w);
+        if(label){const id=`state-label-${labelSequence++}`,clip=svgNode('clipPath',{id});clip.append(svgNode('rect',{x:pos+2,y:top,width:Math.max(0,w-4),height:19}));defs.append(clip);group.append(svgNode('text',{x:pos+4,y:top+13,class:'state-label','clip-path':`url(#${id})`},label));}
+      }else if(w>30)group.append(svgNode('text',{x:pos+5,y:top+13,class:'call-label'},event.name.slice(0,Math.floor((w-8)/5.8))));
+    }
+    y += rowHeight(row);
+    group.append(svgNode('line', {x1: 10, x2: available - 10, y1: y - 9, y2: y - 9, stroke: 'var(--line)'}));
+    svg.append(group);
+  }
+  let previous = -Infinity, labelY = height - 24;
+  for (const [key, label, track] of [['scaffold_ms', 'Scaffold', 'gui'], ['first_document_ms', 'Viewport', 'document'], ['first_frame_ms', 'Ready', 'navigation']]) {
+    const ns = data.metrics[key] * 1e6;
+    if (!Number.isFinite(ns) || ns < visibleStart || ns > visibleEnd) continue;
+    const px = x(ns);
+    svg.append(svgNode('line', {x1: px, x2: px, y1: 47, y2: height - 43, stroke: colors[track], 'stroke-dasharray': '4 4', opacity: .9}));
+    if (px - previous < 95) labelY += 13; else labelY = height - 24;
+    const node = svgNode('text', {x: Math.min(available - 12, Math.max(left + 5, px - 3)), y: labelY, 'text-anchor': px > available - 100 ? 'end' : 'start'}, label);
+    node.append(svgNode('title', {}, `${label}: ${ms(ns)}`)); svg.append(node); previous = px;
+  }
+  surface.replaceChildren(svg);
+  text('zoom-value', `${fmt(zoom, Number.isInteger(zoom) ? 0 : 2)}×`);
+  $('zoom').setAttribute('aria-valuetext', `${fmt(zoom)} times zoom`);
+  $('fit').setAttribute('aria-pressed', String(!range && zoom === 1));
+  const maxScroll = Math.max(0, width - available), pan = $('pan');
+  $('chart-scrollbar').hidden = maxScroll < 1;
+  pan.max = maxScroll; pan.value = chart.scrollLeft;
+  pan.style.setProperty('--thumb-width', `${Math.max(36, available / zoom)}px`);
+}
+function applyDependencyZoom(value, anchor) {
+  const chart=$('dependencies'),svg=chart.querySelector('svg');
+  for(const id of ['dependency-fit','dependency-actual','dependency-out','dependency-in','dependency-zoom'])$(id).disabled=!svg;
+  if(!svg){text('dependency-zoom-value','—');return;}
+  const previous=Number(svg.dataset.zoom??1);
+  anchor??={x:chart.clientWidth/2,y:chart.clientHeight/2};
+  const x=(chart.scrollLeft+anchor.x)/previous,y=(chart.scrollTop+anchor.y)/previous;
+  dependencyZoom=Math.max(.05,Math.min(8,Number(value)));
+  svg.style.width=`${svg.viewBox.baseVal.width*dependencyZoom}px`;
+  svg.style.height=`${svg.viewBox.baseVal.height*dependencyZoom}px`;
+  svg.dataset.zoom=dependencyZoom;
+  chart.scrollLeft=x*dependencyZoom-anchor.x;chart.scrollTop=y*dependencyZoom-anchor.y;
+  $('dependency-zoom').value=dependencyZoom*100;
+  $('dependency-zoom').setAttribute('aria-valuetext',`${fmt(dependencyZoom*100,0)} percent`);
+  text('dependency-zoom-value',`${fmt(dependencyZoom*100,0)}%`);
+  $('dependency-fit').setAttribute('aria-pressed',String(dependencyFit));
+  $('dependency-actual').setAttribute('aria-pressed',String(!dependencyFit&&Math.abs(dependencyZoom-1)<.0001));
+  $('dependency-out').disabled=dependencyZoom<=.05;
+  $('dependency-in').disabled=dependencyZoom>=8;
+}
+function fitDependencyGraph(reset=false) {
+  dependencyFit=true;
+  const chart=$('dependencies'),svg=chart.querySelector('svg');
+  applyDependencyZoom(svg?chart.clientWidth/svg.viewBox.baseVal.width:1,reset?{x:0,y:0}:undefined);
+  if(reset)chart.scrollLeft=chart.scrollTop=0;
+}
+function setDependencyZoom(value,anchor) {
+  dependencyFit=false;applyDependencyZoom(value,anchor);
+}
+function dependencyGraph() {
+  finishDependencyDrag();
+  const sample=run(),model=sample.call_graph,container=$('dependencies');
+  $('gates').replaceChildren();
+  if(!model?.nodes.length){container.replaceChildren();applyDependencyZoom(1);return;}
+  const endpoint=$('dependency-endpoint').value,path=model.paths[endpoint];
+  const endpointLabel=endpoint==='viewport'?'first viewport':'fully ready';
+  const counted=new Set(path.node_ids),criticalPairs=new Set(path.node_ids.slice(1).map((id,index)=>`${path.node_ids[index]}:${id}`));
+  const events=new Map(sample.events.map(event=>[event.id,event]));
+  const nodes=model.nodes.map(node=>({...node,rows:node.rows.map(row=>({...row,event:events.get(row.event_id)}))
+    .filter(row=>!row.event.syscall||row.duration_ns>=100000)}));
+  const byId=new Map(nodes.map(node=>[node.id,node]));
+  const lanes=[...new Set(['launch','document','gui','input','fonts','navigation','images','fallback',...Object.keys(report.tracks)])].filter(track=>nodes.some(node=>node.track===track));
+  const wrap=(value,limit)=>{const lines=[];let line='';for(const word of value.split(' ')){if(line&&line.length+word.length+1>limit){lines.push(line);line=word;}else line+=(line?' ':'')+word;}if(line)lines.push(line);return lines;};
+  const columnWidth=324,gap=52,margin=20,top=56;
+  const width=margin*2+lanes.length*columnWidth+(lanes.length-1)*gap;
+  const graphMs=value=>ms(value,6);
+  for(const node of nodes){
+    node.title=node.label+(node.clipped?' (part)':'');
+    node.header=wrap(node.title,37);node.headerHeight=62+node.header.length*17;
+    let offset=node.headerHeight;
+    for(const row of node.rows){
+      row.lines=wrap(row.event.name+(row.clipped?' (part)':''),Math.max(13,Math.floor((columnWidth-130-row.level*10)/6)));
+      row.offset=offset;row.height=24+row.lines.length*14;offset+=row.height;
+    }
+    node.height=offset+(node.rows.length?9:0);node.x=margin+lanes.indexOf(node.track)*(columnWidth+gap);
+  }
+  const bottoms=Object.fromEntries(lanes.map(track=>[track,top-26]));
+  for(const node of nodes){
+    const prerequisites=model.edges.filter(edge=>edge.to===node.id).map(edge=>byId.get(edge.from)).filter(source=>source?.y!=null);
+    node.y=Math.max(bottoms[node.track]+26,...prerequisites.map(source=>source.y+source.height+26));
+    bottoms[node.track]=node.y+node.height;
+  }
+  const height=Math.max(...Object.values(bottoms))+24;
+  const svg=svgNode('svg',{viewBox:`0 0 ${width} ${height}`,width,height,role:'group','aria-label':'Vertical startup call and dependency graph'});
+  const defs=svgNode('defs');
+  for(const track of [...lanes,'critical']){
+    const marker=svgNode('marker',{id:`dependency-arrow-${track}`,markerWidth:8,markerHeight:8,refX:7,refY:4,orient:'auto',markerUnits:'userSpaceOnUse'});
+    marker.append(svgNode('path',{d:'M0 0L8 4L0 8Z',fill:track==='critical'?'var(--critical)':colors[track]}));defs.append(marker);
+  }
+  const waitPattern=svgNode('pattern',{id:'dependency-wait-pattern',width:8,height:8,patternUnits:'userSpaceOnUse',patternTransform:'rotate(45)'});
+  waitPattern.append(svgNode('rect',{width:8,height:8,fill:'var(--paper)'}),svgNode('rect',{width:2,height:8,fill:'var(--muted)',opacity:.12}));defs.append(waitPattern);svg.append(defs);
+  lanes.forEach((track,index)=>{const x=margin+index*(columnWidth+gap);svg.append(svgNode('rect',{x,y:15,width:10,height:10,rx:2,fill:colors[track]}),svgNode('text',{x:x+18,y:25,class:'thread'},report.tracks[track]));});
+  for(const edge of model.edges){
+    const source=byId.get(edge.from),target=byId.get(edge.to);if(!source||!target)continue;
+    const same=source.track===target.track;
+    const sx=same?source.x+columnWidth/2:source.x+(source.x<target.x?columnWidth:0),sy=source.y+source.height;
+    const tx=same?target.x+columnWidth/2:target.x+(source.x<target.x?0:columnWidth),ty=same?target.y:target.y+30;
+    const route=same?`M${sx} ${sy}L${tx} ${ty}`:`M${sx} ${sy-18}C${(sx+tx)/2} ${sy-18},${(sx+tx)/2} ${ty},${tx} ${ty}`;
+    const critical=criticalPairs.has(`${source.id}:${target.id}`);
+    const line=svgNode('path',{d:route,fill:'none',stroke:critical?'var(--critical)':colors[source.track],'stroke-width':critical?3:1.4,
+      'stroke-dasharray':edge.kind==='dispatch'?'5 4':'','marker-end':`url(#dependency-arrow-${critical?'critical':source.track})`,
+      'data-from':source.id,'data-to':target.id,'data-critical':critical});
+    line.append(svgNode('title',{},`${source.title} → ${target.title} · ${edge.kind}`));svg.append(line);
+  }
+  for(const node of nodes){
+    const color=colors[node.track],critical=counted.has(node.id),event=events.get(node.event_id);
+    const group=svgNode('g',{'data-node':node.id,'data-thread':node.track,'data-critical':critical,'data-start-ns':node.start_ns,'data-duration-ns':node.duration_ns});
+    const frame=svgNode('rect',{x:node.x,y:node.y,width:columnWidth,height:node.height,rx:5,
+      fill:node.kind==='wait'?'url(#dependency-wait-pattern)':`color-mix(in srgb,${color} 8%,var(--paper))`,
+      stroke:critical?'var(--critical)':color,'stroke-width':critical?2.4:1.5,'stroke-dasharray':node.kind==='untraced'?'4 3':'',
+      class:'graph-stage',tabindex:0,role:'button','aria-label':`${node.title}. Start ${graphMs(node.start_ns)} since t0. Total ${graphMs(node.duration_ns)}. ${short[node.track]}${critical?', counted critical path':''}`});
+    frame.append(svgNode('title',{},`${node.title}\nStart ${graphMs(node.start_ns)} since t0\nElapsed ${graphMs(node.duration_ns)}${event?`\nOriginal call: ${graphMs(event.duration_ns)} total; ${graphMs(event.self_ns)} own time`:''}${node.kind==='untraced'?'\nCause not measured':''}${critical?'\nCounted toward '+endpointLabel:''}`));
+    const select=()=>{if(event)inspect(event);if(node.milestone)setRange(0,node.start_ns,node.label,false);else setRange(node.start_ns,node.start_ns+node.duration_ns,node.title);$('timeline').scrollIntoView({block:'center',behavior:'smooth'});};
+    frame.addEventListener('click',select);frame.addEventListener('keydown',key=>{if(key.key==='Enter')select();});
+    group.append(frame,svgNode('rect',{x:node.x+1,y:node.y+1,width:columnWidth-2,height:4,rx:2,fill:color}));
+    node.header.forEach((line,index)=>group.append(svgNode('text',{x:node.x+12,y:node.y+24+index*17,class:'node-label'},line)));
+    group.append(svgNode('text',{x:node.x+12,y:node.y+node.headerHeight-32,class:'node-label'},node.milestone?'Milestone · 0 ms':`Total · ${graphMs(node.duration_ns)}`));
+    group.append(svgNode('text',{x:node.x+12,y:node.y+node.headerHeight-12},`Start ${graphMs(node.start_ns)} · ${short[node.track]}`));
+    for(const row of node.rows){
+      const event=row.event,x=node.x+10+row.level*10,y=node.y+row.offset;
+      const button=svgNode('rect',{x,y,width:columnWidth-20-row.level*10,height:row.height-2,rx:2,fill:'var(--paper)',stroke:'var(--line)',
+        'stroke-dasharray':event.kind==='wait'?'3 3':'',class:'graph-call',role:'button',tabindex:0,'data-call':event.id,
+        'aria-label':`${event.name}. Start ${graphMs(row.start_ns)}. Elapsed ${graphMs(row.duration_ns)}.`});
+      button.append(svgNode('title',{},`${event.name}\nStart ${graphMs(row.start_ns)} since t0\nElapsed in this block ${graphMs(row.duration_ns)}\nOriginal start ${graphMs(event.start_ns)}; full elapsed ${graphMs(event.duration_ns)}; own time ${graphMs(event.self_ns)}\nIncluded in the outer block; do not add twice.`));
+      const selectCall=()=>{inspect(event);setRange(row.start_ns,row.start_ns+row.duration_ns,event.name);$('timeline').scrollIntoView({block:'center',behavior:'smooth'});};
+      button.addEventListener('click',selectCall);button.addEventListener('keydown',key=>{if(key.key==='Enter')selectCall();});group.append(button);
+      row.lines.forEach((line,index)=>group.append(svgNode('text',{x:x+6,y:y+15+index*14,class:'graph-call-label'},line)));
+      group.append(svgNode('text',{x:node.x+columnWidth-15,y:y+15,'text-anchor':'end'},graphMs(row.duration_ns)),
+        svgNode('text',{x:x+6,y:y+row.height-7},`Start ${graphMs(row.start_ns)}`));
+    }
+    svg.append(group);
+  }
+  const totals=new Map();let displayed=0;
+  for(const id of path.node_ids){const node=byId.get(id);displayed+=node.duration_ns;totals.set(node.track,(totals.get(node.track)??0)+node.duration_ns);}
+  const expected=Math.round((endpoint==='viewport'?(sample.metrics.first_document_ms??sample.metrics.first_frame_ms):sample.metrics.first_frame_ms)*1e6);
+  if(displayed!==expected)throw new Error('Critical path block totals do not match the selected endpoint');
+  container.dataset.accountedNs=displayed;container.dataset.expectedNs=expected;container.dataset.endpoint=endpoint;
+  text('critical-key',`Critical path to ${endpointLabel}`);
+  text('wall-accounting',`Red block sum: ${[...totals].filter(([,cost])=>cost).map(([track,cost])=>`${short[track]} ${graphMs(cost)}`).join(' + ')} = ${graphMs(displayed)} to ${endpointLabel}. t0 is ${model.t0==='launch'?'process launch':'main (pre-load unavailable)'}.`);
+  container.replaceChildren(svg);container.scrollLeft=container.scrollTop=0;
+  if(dependencyFit)fitDependencyGraph(true);else applyDependencyZoom(dependencyZoom,{x:0,y:0});
+}
+function render(){
+  const data=run(),c=data.concurrency;picked=null;$('zoom-call').disabled=true;
+  text('call-name','Select a call to inspect its duration.');text('call-detail','Double-click a call to zoom into its children.');
+  $('syscall-details').hidden=true;
+  $('legend').replaceChildren();for(const track of Object.keys(report.tracks).filter(track=>data.events.some(event=>event.track===track&&event.kind==='work'))){const entry=document.createElement('span'),dot=document.createElement('i');dot.style.setProperty('--color',colors[track]);entry.append(dot,report.tracks[track]);$('legend').append(entry);}
+  $('parallel-list').replaceChildren();data.parallel_groups.forEach((group,index)=>{const button=document.createElement('button');button.textContent=`Parallel ${index+1} · ${group.tracks.map(track=>short[track]).join(' + ')} · ${ms(group.duration_ns)}`;button.addEventListener('click',()=>setRange(group.start_ns,group.start_ns+group.duration_ns,`Parallel group ${index+1}`));$('parallel-list').append(button);});
+  text('concurrency',`${fmt(c.overlap_ms)} ms parallel work · ${fmt(c.gui_wait_ms)} ms measured GUI wait · ${fmt(data.thread_summary?.gui?.untraced_ms ?? c.wait_or_untraced_ms)} ms untraced GUI time. Waits are excluded from work overlap; call durations are elapsed time.`);
+  text('warning',data.dropped_events?`${data.dropped_events} spans were dropped; this trace is incomplete.`:'');timeline();dependencyGraph();
+  const m=data.metrics;
+  text('launch-breakdown',m.pre_main_ms==null?'This capture starts in main; external launch timing is unavailable.':
+    `Selected launch: Pre-load (disk/loader/process setup) ${fmt(m.pre_main_ms)} ms + application ${fmt(m.in_app_viewport_ms)} ms = ${fmt(m.first_document_ms??m.first_frame_ms)} ms to viewport. Pre-load is included in the total. Profiler finish/exit: ${fmt(m.profiler_exit_ms)} ms.`);
+  const cache=data.cache_reset?.binary;
+  text('cache-status',cache?.verified_cold?`Cold executable verified: ${cache.resident_pages}/${cache.total_pages} pages resident before launch (mincore). ${data.cache_reset?.sync_scope??'global sync'} + drop_caches=3 ran before this check. ${data.cache_reset?.inputs?`${data.cache_reset.inputs.length} document/image files also passed zero-page verification.`:''}`:'This older capture has no executable page-residency proof. Re-run make profile for a verified cold launch.');
+  const conditions=data.runtime_conditions;
+  text('runtime-conditions',conditions?`Selected launch conditions: governor ${conditions.cpu_governors.join(', ')||'unavailable'} · ${conditions.cpu_affinity.length} allowed CPUs · system load average (1/5/15 min) ${conditions.load_average.map(value=>fmt(value)).join(' / ')}.`:'');
+  $('code-font').hidden=m.monospace_request_ms==null;
+  text('code-font',m.monospace_status==='ready'?`Code fonts: first viewport uses ${m.first_viewport_monospace?'system monospace':'Open Sans'}. ${m.monospace_family} is presented at ${fmt(m.monospace_frame_ms)} ms; background discovery starts at ${fmt(m.monospace_request_ms)} ms.`:
+    `Code keeps Open Sans: ${m.monospace_error??'system monospace unavailable'}. Discovery runs after the first viewport.`);
+  $('fallback-font').hidden=m.fallback_request_ms==null;
+  text('fallback-font',m.fallback_status==='ready'?`Glyph fallback: ${m.fallback_families}; presented at ${fmt(m.fallback_frame_ms)} ms after background discovery at ${fmt(m.fallback_request_ms)} ms. ${m.fallback_missing_glyphs?.length??0} characters lack an installed font.`:
+    `Glyph fallback unavailable: ${m.fallback_error??'no installed font covers the requested characters'}.`);
+  text('dependency-boundary',`Selected launch #${selected+1}: fully ready ${fmt(m.first_frame_ms,3)} ms; first Markdown viewport ${fmt(m.first_document_ms??m.first_frame_ms,3)} ms. ${m.first_document_commit_ms!=null?`First Markdown buffer commit ${fmt(m.first_document_commit_ms,3)} ms${m.first_document_flush_ms!=null?`, socket flush ${fmt(m.first_document_flush_ms,3)} ms`:''}. `:''}Both graphs use this launch. Summary cards above show batch statistics.`);
+  $('diagnostic-notice').hidden=!report.diagnostic;
+  if(report.diagnostic){text('diagnostic-notice',`SEPARATE STRACE DIAGNOSTIC — timings include tracing overhead and must not be compared with make profile. ${data.diagnostic?.parsed_calls??0} timed syscalls; clock correlation uncertainty up to ${elapsed(data.diagnostic?.clock_alignment_uncertainty_ns??0)}. Native scopes and syscalls belong to this same traced launch. No durations are copied into an untraced report. Unknown gaps may include user code, page faults, scheduler delay and observer overhead. Nested syscalls shorter than 0.1 ms stay in the flame chart and raw logs. The dependency graph omits those rows and retains outer block totals.`);
+    if(!data.cache_reset?.binary?.verified_cold)text('cache-status','Diagnostic used explicitly allowed warm caches; this is not a cold-start benchmark.');}
+}
+function selectDocument(index){
+  report={...archive,...documents[index]};selected=0;range=null;picked=null;zoom=1;
+  $('zoom').value=1;$('timeline').scrollLeft=0;text('range-label','Full startup');
+  document.querySelectorAll('#document-tabs [role=tab]').forEach((tab,i)=>{tab.setAttribute('aria-selected',String(i===index));tab.tabIndex=i===index?0:-1;});
+  $('document-results').setAttribute('aria-labelledby',`document-tab-${index}`);
+  const first=report.runs[0],external=first.main_entry_ns!=null;
+  text('viewport',`${fmt(report.statistics.median_ms)} ms`);text('p95',`${fmt(report.statistics.p95_ms)} ms`);
+  text('scaffold',`${fmt(report.scaffold_statistics.median_ms)} ms`);text('ready',`${fmt(report.full_ready_statistics.median_ms)} ms`);
+  text('viewport-label',`${external?'Launch → viewport':'First viewport'} · ${report.diagnostic?'traced launch':'median'}`);text('p95-label',`${external?'Launch → viewport':'First viewport'} · ${report.diagnostic?'traced launch':'p95'}`);
+  text('build',report.project?.build??first.mode);text('subtitle',`${report.document.split('/').pop()} · ${bytes(first.metrics.source_bytes)} · ${first.metrics.blocks} blocks · ${report.runs.length} ${report.diagnostic?'diagnostic':'cold'} launch${report.runs.length===1?'':'es'} · ${first.video_driver} / ${first.renderer}`);
+  const workload=report.workload;text('workload',workload?`Local image workload: ${workload.local_images} references · ${workload.unique_images} distinct files (${workload.png_images} PNG / ${workload.jpeg_images} JPEG) · ${bytes(workload.asset_bytes)} compressed assets${workload.missing_images?` · ${workload.missing_images} missing-image test`:''}.`:'');
+  $('launch').replaceChildren();$('runs').replaceChildren();
+  report.runs.forEach((sample,i)=>{const option=document.createElement('option');option.value=i;option.textContent=`#${i+1} · ${fmt(sample.metrics.first_document_ms??sample.metrics.first_frame_ms)} ms viewport / ${fmt(sample.metrics.first_frame_ms)} ms ready`;$('launch').append(option);
+    const row=document.createElement('tr');cell(row,`#${i+1}`);cell(row,sample.launch_sequence?`${sample.launch_sequence.round} / ${sample.launch_sequence.position} (launch #${sample.launch_sequence.launch})`:'—');const m=sample.metrics;
+    for(const value of [m.pre_main_ms,m.scaffold_ms,m.first_document_ms,m.first_frame_ms,m.profiler_exit_ms,m.cpu_user_ms+m.cpu_system_ms,m.rss_kib/1024])cell(row,fmt(value),true);$('runs').append(row);});
+  text('timing-boundary',external?
+    'CLOCK_MONOTONIC starts in the parent immediately before process creation. Pre-load includes spawn, exec, executable/shared-library page faults, ELF loading, linking and static initialization; it is not an isolated disk-I/O timer. Later demand paging stays inside application timings. A larger ELF does not mean every byte is read before main. The viewport timer runs in the deferred callback after FLTK flushes. The separate first-buffer-commit timestamp records the actual content submission request. Profiler finish/exit is separate. Physical Enter, shell parsing, and compositor scanout are outside this boundary. p95 uses nearest rank.':
+    'This older capture starts in main and ends after FLTK flushes the frame. It excludes process loading and compositor scanout. p95 uses nearest rank.');
+  render();
+}
+if(!archive.diagnostic&&documents.every(dataset=>dataset.statistics.mean_ms!=null)){
+  $('averages').hidden=false;
+  const allRuns=documents.flatMap(dataset=>dataset.runs),verified=allRuns.filter(sample=>sample.cache_reset?.binary?.verified_cold&&sample.cache_reset.binary.resident_pages===0).length;
+  text('averages-count',`${allRuns.length} launches · ${documents.length} samples`);
+  documents.forEach(dataset=>{
+    const row=document.createElement('tr');cell(row,dataset.document.split('/').pop());cell(row,dataset.runs.length,true);
+    for(const key of ['pre_main_statistics','scaffold_statistics','statistics','full_ready_statistics']){
+      const stats=dataset[key];cell(row,`${fmt(stats.mean_ms)}${stats.margin_95_ms!=null?` ± ${fmt(stats.margin_95_ms)}`:' (margin unavailable)'}`,true);
+    }
+    $('average-rows').append(row);
+  });
+  text('average-method',`${verified}/${allRuns.length} launches have verified zero resident executable pages before timing. ${archive.experiment?'Each round launches every sample once; sample order varies between rounds. ':''}Cache resets and residency checks are outside the measured launch time.`);
+  if(archive.experiment){
+    $('launch-orders').hidden=false;const experiment=archive.experiment;
+    text('order-method',`${experiment.order_policy}. ${experiment.rounds} rounds; order seed ${experiment.seed}. Each launch fsyncs its inputs, runs drop_caches=3, then verifies zero resident executable and document/image pages. A fresh process and empty application cache are used every time.`);
+    experiment.round_orders.forEach((order,index)=>{const row=document.createElement('tr');cell(row,index+1);cell(row,order.join(' → '));$('order-rows').append(row);});
+  }
+}
+documents.forEach((dataset,index)=>{
+  const tab=document.createElement('button');tab.type='button';tab.role='tab';tab.id=`document-tab-${index}`;
+  tab.textContent=dataset.document.split('/').pop();tab.setAttribute('aria-controls','document-results');
+  tab.addEventListener('click',()=>selectDocument(index));
+  tab.addEventListener('keydown',event=>{let next;if(event.key==='ArrowRight')next=(index+1)%documents.length;else if(event.key==='ArrowLeft')next=(index+documents.length-1)%documents.length;else if(event.key==='Home')next=0;else if(event.key==='End')next=documents.length-1;if(next!=null){event.preventDefault();selectDocument(next);$(`document-tab-${next}`).focus();}});
+  $('document-tabs').append(tab);
+});
+const project=report.project;
+if(project?.binary_size?.available){
+  $('size-section').hidden=false;text('size-total',`${project.binary_size.name} · ${bytes(project.binary_size.bytes)}`);
+  text('size-method',project.binary_size.symbols_available?
+    'Final file bytes, attributed by surviving symbols. LTO inlined code stays with its caller. Shared constants and ELF structure remain separate; shared libraries are listed below.':
+    'ELF sections and embedded fonts are measured directly. Rebuild with make profile for application and bundled-library symbol attribution. Shared libraries are listed below.');
+  if(project.binary_size.diagram_module){
+    const module=project.binary_size.diagram_module;
+    text('size-method',$('size-method').textContent+` Diagram module: ${bytes(module.packed_bytes)} compressed; ${bytes(module.expanded_bytes)} when loaded into memory. Expanded bytes are excluded from executable totals. Bundled static zlib handles decompression.`);
+  }
+  for(const module of project.binary_size.diagram_modules??[]){
+    text('size-method',$('size-method').textContent+` ${module.name}: ${bytes(module.packed_bytes)} compressed; ${bytes(module.expanded_bytes)} expanded only when needed.`);
+  }
+  sizeMap();
+}
+if(project?.libraries){
+  for(const file of project.binaries??[]){const item=document.createElement('span'),name=document.createElement('strong');name.textContent=file.path;item.append(name,` · ${bytes(file.bytes)}`);$('binaries').append(item);}
+  const groups=project.binary_size?.children??[],retained=Object.fromEntries((groups.find(group=>group.name==='Bundled libraries')?.children??[]).map(item=>[item.name,item.bytes]));
+  retained['Open Sans']=groups.find(group=>group.name==='Fonts')?.bytes;
+  const aliases={'libpng':'PNG','IJG JPEG':'JPEG','zlib':'ZLIB'};
+  for(const lib of project.libraries){
+    const embedded=lib.linkage==='bundled',row=document.createElement('tr');
+    cell(row,lib.name);cell(row,lib.version);cell(row,lib.role).className='role';
+    cell(row,embedded?bytes(lib.linked_bytes??retained[aliases[lib.name]??lib.name]):'—',true);
+    cell(row,embedded?'—':bytes(lib.bytes),true);cell(row,embedded?(['inside the shared compressed payload','independent compressed module'].includes(lib.size_basis)?'Compressed module':'Embedded'):'Shared');$('libraries').append(row);
+    if(embedded&&lib.bytes!=null){const input=document.createElement('tr');cell(input,lib.name);cell(input,bytes(lib.bytes),true);cell(input,lib.size_basis);$('input-libraries').append(input);}
+  }
+  $('build-inputs').hidden=!$('input-libraries').children.length;
+  const indirect=project.indirect_libraries??[];text('library-count',`${project.libraries.length} main dependencies`);
+  text('indirect-label',`Other shared libraries · ${indirect.length} files · ${bytes(indirect.reduce((sum,item)=>sum+item.bytes,0))}`);
+  for(const lib of indirect){const row=document.createElement('tr');cell(row,lib.name);cell(row,bytes(lib.bytes),true);$('indirect-libraries').append(row);}$('indirect').hidden=!indirect.length;
+}else $('library-section').hidden=true;
+text('method',`${report.cache_policy}. A new XDG cache is used for each launch. Resets and residency probes are outside launch timings. The desktop stays running; shared-library pages in active use may remain resident.${report.compositor?' Wayland environment: '+report.compositor+'.':''}`);text('footer',`${report.generated_at} · ${report.host} · ${report.logical_cpus} logical CPUs · one offline HTML file`);
+$('launch').addEventListener('change', () => {
+  selected = Number($('launch').value); range = null; zoom = 1; $('zoom').value = 1;
+  $('timeline').scrollLeft = 0; text('range-label', 'Full startup'); render();
+});
+$('zoom').addEventListener('input', () => setZoom(Number($('zoom').value)));
+$('dependency-endpoint').addEventListener('change',dependencyGraph);
+$('dependency-fit').addEventListener('click',()=>fitDependencyGraph(true));
+$('dependency-actual').addEventListener('click',()=>setDependencyZoom(1));
+$('dependency-out').addEventListener('click',()=>setDependencyZoom(dependencyZoom/1.25));
+$('dependency-in').addEventListener('click',()=>setDependencyZoom(dependencyZoom*1.25));
+$('dependency-zoom').addEventListener('input',()=>setDependencyZoom(Number($('dependency-zoom').value)/100));
+function finishDependencyDrag(event) {
+  const drag=dependencyDrag;
+  if(!drag||(event?.pointerId!=null&&event.pointerId!==drag.id))return;
+  dependencyDrag=null;
+  $('dependencies').classList.remove('panning');
+  if(drag.moved)dependencySuppressClick=true;
+  if(drag.target.hasPointerCapture(drag.id))drag.target.releasePointerCapture(drag.id);
+}
+$('dependencies').addEventListener('pointerdown',event=>{
+  if(event.button!==0||!event.isPrimary||!event.target.closest?.('svg'))return;
+  dependencySuppressClick=false;
+  dependencyDrag={id:event.pointerId,target:event.target,x:event.clientX,y:event.clientY,
+    left:$('dependencies').scrollLeft,top:$('dependencies').scrollTop,moved:false};
+  // Capture on the original target so a simple click still inspects its call.
+  event.target.setPointerCapture(event.pointerId);
+});
+$('dependencies').addEventListener('pointermove',event=>{
+  const drag=dependencyDrag;
+  if(!drag||event.pointerId!==drag.id)return;
+  const dx=event.clientX-drag.x,dy=event.clientY-drag.y;
+  if(!drag.moved&&Math.hypot(dx,dy)<4)return;
+  drag.moved=true;
+  const chart=$('dependencies');chart.classList.add('panning');
+  chart.scrollLeft=drag.left-dx;chart.scrollTop=drag.top-dy;
+  event.preventDefault();
+});
+for(const event of ['pointerup','pointercancel','lostpointercapture'])$('dependencies').addEventListener(event,finishDependencyDrag);
+window.addEventListener('blur',()=>finishDependencyDrag());
+$('dependencies').addEventListener('click',event=>{
+  if(!dependencySuppressClick||event.detail===0)return;
+  dependencySuppressClick=false;event.preventDefault();event.stopImmediatePropagation();
+},true);
+$('dependencies').addEventListener('wheel',event=>{
+  finishDependencyDrag();
+  if(!event.ctrlKey||!$('dependencies').querySelector('svg'))return;
+  event.preventDefault();
+  const chart=$('dependencies'),box=chart.getBoundingClientRect();
+  const unit=event.deltaMode===1?16:event.deltaMode===2?chart.clientHeight:1;
+  const delta=Math.max(-240,Math.min(240,(event.deltaY||event.deltaX)*unit));
+  setDependencyZoom(dependencyZoom*Math.exp(-delta*.003),{x:event.clientX-box.left-chart.clientLeft,y:event.clientY-box.top-chart.clientTop});
+},{passive:false});
+$('fit').addEventListener('click', () => {
+  range = null; zoom = 1; $('zoom').value = 1; text('range-label', 'Full startup');
+  $('timeline').scrollLeft = 0; timeline();
+});
+$('first-viewport').addEventListener('click', () => setRange(0, (run().metrics.first_document_ms ?? run().metrics.first_frame_ms) * 1e6, 'Through first viewport', false));
+$('zoom-call').addEventListener('click', () => {if (picked) setRange(picked.start_ns, picked.start_ns + picked.duration_ns, picked.name);});
+$('pan').addEventListener('input', () => {$('timeline').scrollLeft = Number($('pan').value);});
+let scrollFrame = 0;
+$('timeline').addEventListener('scroll', () => {
+  $('pan').value = $('timeline').scrollLeft;
+  if (!scrollFrame) scrollFrame = requestAnimationFrame(() => {scrollFrame = 0; timeline();});
+}, {passive: true});
+$('timeline').addEventListener('wheel', event => {
+  if (!event.ctrlKey) return;
+  event.preventDefault();
+  const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? $('timeline').clientWidth : 1;
+  const delta = Math.max(-240, Math.min(240, (event.deltaY || event.deltaX) * unit));
+  setZoom(zoom * Math.exp(-delta * .003), event.clientX - $('timeline').getBoundingClientRect().left - $('timeline').clientLeft);
+}, {passive: false});
+selectDocument(0);
+let observedWidth = $('timeline').clientWidth;
+new ResizeObserver(() => {
+  const width = $('timeline').clientWidth;
+  if (width !== observedWidth) {observedWidth = width; timeline();}
+}).observe($('timeline'));
+let dependencyWidth=$('dependencies').clientWidth;
+new ResizeObserver(()=>{const width=$('dependencies').clientWidth;if(width!==dependencyWidth){dependencyWidth=width;if(dependencyFit)fitDependencyGraph();}}).observe($('dependencies'));
+let sizeWidth=$('size-map').clientWidth;
+new ResizeObserver(()=>{const width=$('size-map').clientWidth;if(width!==sizeWidth){sizeWidth=width;sizeMap();}}).observe($('size-map'));
+</script>
+</html>

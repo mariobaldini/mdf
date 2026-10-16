@@ -1,2 +1,321 @@
-# mdv
-Markdown Visualizer
+# Markdown FAST
+
+A fast, minimal Markdown viewer for Linux with Wayland, including Fedora 44.
+It uses FLTK 1.4.5 with Cairo/Pango for the GUI and Zig with MD4C for document processing.
+It requires a Wayland compositor. If Wayland is unavailable, the viewer exits with a clear error.
+It opens local documents, reloads after saves, and ships as a single `mdf` executable.
+Mermaid and local vector/text SVG rendering use separate compressed modules inside that executable.
+The existing static zlib decompresses each required module into anonymous memory after the first Markdown viewport.
+SVG-only documents skip Mermaid. Mermaid uses the SVG module to render its generated vector output.
+The [module guide](docs/compressed-diagrams.md) describes the ABI, build, limits, and regression checks.
+The GUI includes a 48-pixel native title bar, light/dark mode, font controls, and optional auto-reload.
+The first toolbar icon shows or hides the table of contents. The right minimap supports click-and-drag navigation.
+The toolbar also has a light/dark toggle and one width button that cycles between 80% and 100%.
+The Preview button on the right shows or hides the minimap.
+The −, reset, and + buttons decrease the font size, reset it to the theme default, and increase it.
+Font controls also appear in the Font menu.
+Wrapping is on by default, with the toolbar button unselected. Selecting the button turns it blue and enables no-wrap mode.
+With wrapping off, a horizontal scrollbar appears below the document, outside the TOC and minimap.
+Use the scrollbar, Shift + wheel, a horizontal trackpad gesture, or the left/right arrow keys to pan the document.
+The UI and ordinary text use bundled Latin Open Sans. Missing document characters use system fonts prepared in the background.
+Fenced code blocks trigger deferred monospace loading; inline code uses it too when available.
+The Theme menu contains Classic (12), Paper (14, warm colors), and Terminal (11, green colors).
+Theme selection preserves light/dark mode. The sun/moon toolbar button switches that mode.
+The defaults are light mode, Open Sans, font size 12, and 80% text width.
+Enable **Settings > Save settings across sessions** to keep your preferences in
+`~/.config/mdf/settings.json`. This saves the theme, light/dark mode, font size, text width, line wrapping, sidebar visibility, and auto-reload.
+It also saves the window size and maximized state. The viewer ignores legacy `font_family` values and preserves other preferences.
+The Wayland compositor controls window placement.
+**Settings > Reset settings** restores the defaults and turns saving off.
+
+The executable embeds Latin subsets of Open Sans regular, bold, italic, and bold italic.
+Regular/bold stay immediately available. Each italic face is compressed separately and loaded once, only when its style is required.
+Markdown emphasis uses its final font before measurement and the first render. SVG text requests its own resolved styles on demand.
+The subsets preserve Latin accents, existing punctuation and symbols, kerning, and hinting.
+The viewer registers anonymous memory files in a private Fontconfig configuration before Pango or FLTK font registration.
+Before the first Markdown frame, it reads no system fonts, Fontconfig files, or font caches.
+After parsing, MDF checks the rendered text against the bundled font's character coverage.
+If characters are missing, a worker selects system Sans fonts covering those characters and loads only the required families into anonymous memory.
+A document with a code block also starts a separate worker to prepare the preferred system monospace family.
+Both workers start after the first Markdown frame. Latin documents without code blocks start neither worker, including documents containing only inline code.
+Existing font caches are read only. Missing caches trigger an uncached scan; the viewer creates no extracted font files or persistent font caches.
+The GUI adopts private Pango maps and reflows affected text while preserving the scroll position.
+Latin text retains Open Sans. Selected fallback faces also supply missing characters in headings, the TOC, minimap, and code.
+System fonts remain optional. If no installed font covers a character, it keeps an explicit missing-glyph marker. If no monospace is available, code keeps Open Sans.
+Reading and parsing overlap window initialization. Ready Markdown can appear in the first window frame, without a mandatory empty scaffold frame.
+Navigation preparation starts when the document is adopted, before waiting for that frame.
+A separate worker decodes PNG/JPEG pixels while the GUI handles window events and draws navigation.
+That worker also renders fenced `mermaid` diagrams through a bundled native renderer and resvg.
+Diagrams use embedded Open Sans and adapt to light/dark mode. Labels with missing characters receive the prepared system fallback data on the image worker.
+Flowcharts, sequence, class, state, ER, pie, Gantt, and the other supported native diagram families render offline.
+If diagram rendering fails, MDF keeps its source text and shows the error. Advanced syntax can differ from official Mermaid.
+Embedded images inside Mermaid diagrams are unsupported. Diagram source is limited to 256 KiB, 512 nodes, and 2048 edges.
+Rendered canvases are limited to 16384 pixels per side and 64 MiB of RGBA pixels.
+Tables measure word and line widths across all rows before allocating columns, keeping short labels and numbers intact where space permits.
+If navigation and image pixels are already prepared, the GUI includes them in the first frame.
+Otherwise Markdown appears first and the GUI adopts optional results when they finish. Sidebar spaces stay fixed during this work.
+
+Bundled FLTK startup patches prepare keyboard resources on a worker and preserve early input until adoption.
+Cursor-theme loading can finish after the first Markdown viewport. Fully-ready timing includes these resources.
+Window handling, drawing, and Wayland buffer submission stay on the GUI thread.
+Experimental frame preparation remains disabled because it did not pass the cold-launch regression guards.
+The [FLTK patch guide](frontend/patches/fltk/README.md) records the upstream version, patch order, ownership rules, and upgrade checks.
+
+## Install
+
+For a Wayland desktop on Linux x86_64 with glibc 2.38 or later, Cairo, Pango, Fontconfig, and libxkbcommon.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/mariobaldini/mdf/main/tools/installer.sh | bash
+```
+
+The script checks the OS and architecture, then installs the matching RPM or DEB through the system package manager.
+Each package installs one executable at `/usr/bin/mdf`.
+Package installation requires administrator access.
+
+### From source
+
+Requires Git LFS, GNU Make, Zig 0.16.0, Rust 1.88 or newer with Cargo, GCC/G++, CMake, Ninja, and the Wayland, Cairo/Pango, and Fontconfig development libraries.
+On Fedora 44, `make setup` installs missing requirements and downloads the pinned sources.
+
+```sh
+git clone https://github.com/mariobaldini/mdf.git
+cd mdf
+git lfs pull
+make setup
+make build
+make install
+```
+
+`make install` copies `mdf` into `~/.local/bin` without sudo and removes the retired companion library on upgrade.
+The `~/.local/bin` folder must be in your `PATH`.
+
+### Uninstall
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/mariobaldini/mdf/main/tools/installer.sh | bash -s -- --uninstall
+```
+
+The script removes the system package and `~/.config/mdf`.
+For a source installation, `make uninstall` removes the executable, any retired companion, and `~/.config/mdf`.
+
+## Development
+
+```sh
+make run-sample
+make test
+make test-gui
+```
+
+- `make setup` installs missing dependencies and downloads pinned libraries.
+- `make check-requirements` reports missing dependencies and Fedora installation commands.
+- `make build` compiles the Debug version offline into `build/bin/`. Intermediate files and compiler caches stay under `build/`.
+- `make test` runs core and workflow tests. `make test-gui` checks the native GUI in an isolated headless Wayland compositor.
+- `make test-images` compares bundled PNG/JPEG decoding against FLTK and checks worker cancellation and pixel ownership. It is included in `make test-gui`.
+- `make test-monospace` checks system font matching, fixed-width styles, uncached discovery without cache writes, missing-font fallback, cancellation, and resource ownership. It needs an installed monospace font and is included in `make test-gui`.
+- `make test-mermaid` checks all 23 native diagram families with embedded fonts in light/dark mode, malformed inputs, and allocation limits. It is included in `make test`.
+- `make test-samples` checks the compact syntax sample and the large handbook's distinct PNG/JPEG assets.
+- `make test-render` captures MDF and Typora at wide and narrow widths for visual review. Requirements and limits are below.
+- `make release` uses Zig ReleaseFast, GCC `-O3`, Rust optimization level 3, full link-time optimization, and dead-section removal for the app and bundled dependencies.
+  It strips debug symbols and omits frame pointers. C++ exception unwinding remains enabled.
+- `make release` also builds RPM and DEB packages. It requires `rpmbuild` and `dpkg-deb` (`rpm-build` and `dpkg` on Fedora).
+- The release files, packages, checksums, and build metadata appear in `build/`.
+- `make clean` removes `build/`, including binaries, packages, profiles, and compiler caches. It also removes legacy output directories.
+  It keeps downloaded dependencies in `zig-pkg/`.
+
+### Startup profile
+
+```sh
+make profile
+```
+
+This builds ReleaseFast and opens `SAMPLE-SMALL.md`, `SAMPLE.md`, and `SAMPLE-HUGE.md` 12 times each, for 36 cold launches.
+Each round opens every sample once. Shuffled cycles use all six sample orders, twice each in the default run.
+The report starts with each sample's average pre-load, scaffold, first viewport, and full readiness time, plus its 95% margin of error.
+These Student-t estimates include every run. They describe uncertainty in the mean; background load can correlate runs.
+The report records the order seed and every round's order. Use `scripts/profile.py --seed NUMBER` to repeat an order.
+Tabs below the summary switch the detailed measurements and call graphs between documents.
+Each launch records the scaffold, first Markdown viewport in Open Sans, and full readiness after optional font adoption.
+The app and all compiled dependencies use the release optimizations above. Profiling binaries have their own directory: `build/profile/runtime/bin/`.
+Debug builds in `build/bin/` cannot replace these files. Zig can reuse cached objects only when their build inputs and optimization settings match.
+Profiling creates one HTML file with a UTC datetime, such as `build/profile/profile-20261017T183045.123456Z.html`.
+The file works offline and contains the measurements for every launch.
+Startup timing begins in the parent before process creation. A matching `CLOCK_MONOTONIC` timestamp at `main` identifies the pre-main interval.
+The **Pre-load** interval includes process creation, executable loading, dynamic linking, scheduling, and static initialization. It is included in every startup total.
+It measures the complete pre-main interval, not disk I/O alone. ELF pages load on demand; a larger file does not imply that every byte is read before `main`.
+Disk page faults after `main` remain part of the application timings. The report separates pre-main time, in-app viewport time, and profiler finish/exit time.
+Frame timers end after FLTK flushes the frame. They exclude terminal input delivery, shell command parsing, and compositor scanout.
+For an Enter-to-screen measurement, capture command acceptance in the terminal or [Zsh's `accept-line` widget](https://zsh.sourceforge.io/Doc/Release/Zsh-Line-Editor.html).
+Then pair that timestamp with [Wayland presentation feedback](https://wayland.app/protocols/presentation-time) for the first Markdown surface commit.
+Both endpoints must use the same clock domain, or their clocks must be correlated explicitly.
+The current automated launcher measures process launch to frame submission; it does not install shell or terminal hooks.
+The flame chart groups nested calls by thread on a shared time axis. Each thread has its own color.
+Select a parallel group or double-click a call to inspect its subcalls. **Fit all** restores the complete interval.
+Ctrl + wheel zooms around the pointer, up to 256×. The large horizontal scrollbar supports panning.
+Each thread lane includes measured event waits, idle states, and untraced intervals. Child gaps show the caller's self time.
+The complete window flush has its own paint/buffer scope around the draw callback.
+Short shaded blocks use W (wait), U (untraced), I (idle/deferred), or S (caller self time). Selection shows surrounding calls and explains the interval.
+An untraced interval can contain real work; it does not prove that the CPU was idle or identify an OS wait.
+The profiler measures the GUI's event waits directly through `select` and `poll`. Untraced time remains labeled as untraced.
+Each native wait records the requested timeout, result, watched descriptors, and ready descriptors from that same launch.
+The report distinguishes compositor readability, another descriptor, an expired timeout, an interrupt, and an error.
+Compositor readability does not identify the exact protocol message or measure compositor CPU time.
+Synchronous Wayland dispatch and roundtrip calls have separate elapsed intervals, labeled **wait + callbacks** because they include event handling.
+The dependency graph shows recorded calls, waits, and worker handoffs in a vertical layout.
+Each thread has its own color. Blocks contain their recorded calls and subcalls.
+Use **Fit width**, **100%**, the +/− buttons, or the 5–800% slider to zoom this graph.
+Ctrl + wheel zooms around the pointer. Click and drag anywhere in the diagram to pan, including over call blocks.
+A simple click still inspects a call. Horizontal and vertical scrollbars also support panning.
+Each block shows its start in milliseconds since t0 and its total elapsed duration in milliseconds.
+Nested rows show their start times and inclusive elapsed durations. Their durations are already included in the outer block.
+A block marked **part** is split at a handoff or endpoint. Its tooltip retains the original call duration.
+
+The red path defaults to **First viewport**. The **Fully ready** selector includes the deferred work through final readiness.
+The sum of the outer red block durations equals the selected endpoint time, with pre-load counted once.
+Both graphs use the selected launch. The summary cards show batch statistics, which can differ from that launch.
+Parallel work stays visible in its thread color.
+
+A worker enters the red path only with evidence that its result blocked the GUI during a measured wait.
+Work that finishes while the GUI remains busy does not enter the red path.
+Waits and untraced intervals have separate blocks. Untraced intervals retain their unknown cause.
+The eager startup graph connects document adoption to navigation preparation, then navigation readiness to image decoding.
+Optional results that are already ready can share the first useful frame. Work that is still pending does not delay the Markdown viewport.
+Milestones from one submitted frame share a graph node, rather than appearing as fictitious serial paints.
+The image/diagram worker owns its source buffers and rendered pixels. It uses the bundled codecs and native Mermaid/resvg libraries, then sends a GUI wakeup.
+Mermaid layout uses embedded Open Sans metrics and any prepared fallback faces needed by its labels.
+SVG shaping uses a separate in-memory database. The image worker receives anonymous font data and does no system font discovery.
+System-font discovery and raster-image decoding features are disabled in the SVG library; external image resolution is disabled.
+FLTK image objects, widget changes and drawing stay on the GUI thread. GIF/BMP decoding retains the existing GUI path.
+Workers are joined on cancellation and shutdown; adopted pixel buffers outlive their GUI image wrappers.
+The report also lists library versions and file sizes, executable sizes, launch timings, CPU time, and memory use.
+The main library table shows attributed bytes retained in `mdf`, separately from external shared-library file sizes.
+Archive and header sizes appear under **Build inputs**. Archives include unused objects and compiler/LTO metadata, so an archive can exceed the final executable's size.
+The size treemap divides the executable into fonts, application code, bundled libraries, language runtimes, shared data, and ELF structure.
+Click a group to inspect its parts. Sizes use the final file and matching build symbols; LTO inlined code stays with its caller.
+Symbol metadata stays in the build directory and is not installed or included in release packages.
+Font timings separate configuration creation, anonymous font data, each face, Pango adoption, FLTK registration, and Wayland initialization.
+Deferred monospace and Sans fallback have distinct worker tracks after the first viewport, with catalogue lookup, selected-file loading, GUI adoption, and upgraded frames.
+The report lists the selected system family and its font-file bytes separately from embedded executable data. Full readiness includes deferred font preparation; the first-viewport timer does not.
+Before every launch, the profiler fsyncs its executable, document, and local images, then clears Linux page, dentry, and inode caches through `sudo`.
+It then uses `PROT_NONE` mappings and `mincore` to verify zero resident executable, document, and image pages without reading their contents.
+If executable pages remain cached, profiling stops before launching. Each report displays the measured resident/total page count.
+It also uses an empty application cache and disables Mesa/NVIDIA shader disk caches.
+If sudo needs authentication, run `sudo -v` in the terminal first. Cache resets affect the whole system.
+These tests keep the running desktop session. Shared active libraries, storage-controller caches, and other device state can remain warm.
+Each launch records the CPU governor, allowed CPU count, and system load average before its cache reset.
+The report shows these conditions beside the selected launch so power modes and background load remain visible when comparing timings.
+The profile requires a running Wayland session and uses default settings. Saved preferences remain untouched.
+If the display socket is missing, profiling stops before cache resets.
+`make setup` installs Python 3 and missing cache-reset tools. No sampling profiler is required.
+Use `make profile PROFILE_RUNS=24` for more samples, or `PROFILE_RUNS=1` for a smoke check without an error estimate.
+`make clean` removes all profile artifacts.
+Each document tab records its text size, local image references, distinct files, PNG/JPEG counts, and compressed asset bytes.
+The small sample contains regular and bold text, headings, lists, a quotation, links, and a table.
+It has no images, diagrams, italics, or code blocks, so it needs no deferred rendering or font workers.
+The regular sample covers Markdown syntax, code, and wide tables. The large sample is a fictional 100-station handbook with different data and images.
+All three use only characters covered by the bundled Open Sans faces. Code in the regular and huge samples still triggers deferred monospace loading.
+`SAMPLE-EXTENDED.md` contains Greek, Cyrillic, Arabic, Hebrew, CJK, emoji, and additional symbols for the system Sans fallback checks.
+See [the fixture notes](assets/SAMPLES.md) for provenance and regeneration instructions.
+For a separate scrolling check, run `build/profile/runtime/bin/mdf --profile-scroll SAMPLE.md`.
+Its `scroll_draw_ms` values measure synchronous native drawing, excluding compositor display latency.
+
+### Separate syscall diagnostic
+
+```sh
+make profile-trace
+```
+
+This builds the same optimized application and traces one fresh launch of each sample with `strace -ff -ttt -T -yy -vvv`.
+The result is a separate timestamped HTML report under `build/profile-trace/`, with per-thread text logs in an adjacent directory.
+It never changes regular `make profile` results or copies syscall durations between launches.
+**Tracing adds overhead. Its timings are diagnostic, not performance measurements of an ordinary launch.**
+Both graphs within a report use events from that same launch. The regular report uses the untraced optimized launch.
+
+Native thread IDs connect syscalls to the GUI and document/navigation workers. Other runtime threads get their own colors.
+The diagnostic shows timed file opens, mappings, reads, descriptor readiness, and futex operations beneath native calls.
+Select a syscall for arguments, its result, and the descriptor identity. Successful futex wakes at the same address are candidate wakers.
+They do not prove lock ownership. `EAGAIN` futex calls are work checks, not sleeping waits.
+The parser tracks descriptor reuse and reports which descriptors became ready, rather than labeling every watched descriptor as the waker.
+Syscall duration includes kernel work, waiting, scheduling, and observer overhead. Mapping a file is not a measurement of all its disk I/O.
+Page faults, user code, and scheduler delays outside observed syscalls can remain untraced.
+The launcher correlates realtime syscall timestamps with monotonic native timestamps and records the clock uncertainty.
+It stops if the clock offset changes too much. Incomplete syscall records are counted.
+
+Read/write/socket payloads use raw pointers, and exec environment expansion is excluded.
+Use `python3 scripts/profile-trace.py --stacks` after the build for optional `-k` caller stacks, which add much more overhead.
+Matching build symbols stay in the diagnostic directory. Stack frames identify callers; they are not individually timed subcalls.
+Use `--warm` to inspect calls without a cache reset. That option explicitly disables the cold-start claim.
+For exact Wayland message context, prefix the separate diagnostic with `WAYLAND_DEBUG=client`.
+Its adjacent text log then includes window configuration, frame callbacks and buffer messages. These diagnostic timings remain separate from regular profiles.
+
+To compare two optimized executables with balanced cold pairs:
+
+```sh
+python3 scripts/benchmark-startup.py --before /path/to/saved/mdf --after build/profile/runtime/bin/mdf
+```
+
+The default comparison runs two batches of ten pairs per document: 80 cold launches.
+It reports means, medians, p95, maxima, approximate paired 95% confidence margins, and both native call graphs.
+The report separates first buffer commit, the deferred viewport callback, scaffold, and full readiness.
+It also records the first socket flush. Viewport readiness requires a committed, flushed Markdown frame.
+Selection requires better viewport medians in both batches without worse scaffold medians, viewport p95, or fully-ready median/p95.
+If only confidence remains inconclusive, the comparison collects two additional batches.
+It preserves all observations, checks unchanged CPU affinity/governors, and uses the normal cache policy. It does not change the machine's power settings.
+The reset flushes the executable, document, and local images, then clears Linux reclaimable caches with `drop_caches=3`.
+`mincore` verifies zero resident pages for those inputs before timing. A warm input aborts the launch.
+File-specific flushing avoids a stalled global `sync()` on unrelated dirty filesystems.
+
+### Visual rendering comparison
+
+```sh
+make test-render
+```
+
+This optional test needs Python Pillow, Weston 15 with its development headers, GCC, and the installed Typora Flatpak (`io.typora.Typora`).
+Flatpak launches the reference application only. MDF runs as the native release executable.
+The test uses private Wayland desktops, disposable Typora profiles, and read-only copies of the sample.
+It captures 29 sections at 1040 and 480 pixels wide, producing 58 section pairs and a local HTML gallery under `build/render-comparison/`.
+Script and symbol captures use `SAMPLE-EXTENDED.md`; the other cases use `SAMPLE.md`. Both applications receive identical frozen bytes for each case.
+`--capture-reader` hides MDF navigation for these captures. `--capture-anchor ID` positions a requested heading in the viewport.
+Both options require `--capture PNG` and `--profile` or `--benchmark`.
+
+Review the gallery for missing content, overlap, clipping, malformed tables, and failed local images.
+Capture checks reject blank frames and verify MDF's requested heading is visible. Passing capture checks does not prove rendering equivalence.
+Pixel equality is not expected: fonts, spacing, code styling, UI chrome, and enabled Markdown extensions differ.
+MDF keeps math source as text and renders supported Mermaid diagrams. Unsupported characters use installed system fonts when available; otherwise they show missing-glyph markers.
+Arabic and Hebrew glyphs shape within each word, but paragraph-level bidirectional word ordering remains a layout limitation.
+This comparison checks rendering correctness, not application speed. Ordinary tests and CI do not require Typora.
+
+After reviewing a capture directory, create a focused standalone A/B findings file:
+
+```sh
+python3 scripts/render-findings.py build/render-comparison/render-UTC --reviewed
+```
+
+The report embeds its cropped details and original screenshots, with 1×–3× zoom and finding filters. No image sidecars are needed to share it.
+Its curated notes show remaining font limits, intentional code styling and reference-editor differences first. Verified table and Mermaid fixes follow in a separate section.
+Use `--images-captures DIRECTORY` to include the separate image check. Without `--reviewed`, the file is labeled as a draft.
+Review the images again before applying these annotations to another renderer version.
+
+To compare the shipped Latin subset with the original full fonts on this computer:
+
+```sh
+make build OPTIMIZE=ReleaseFast BUILD_PREFIX=build/profile/runtime
+python3 scripts/benchmark-fonts.py --prepare --full-fonts /path/to/original-open-sans
+python3 scripts/benchmark-fonts.py
+```
+
+Preparation requires Python `fontTools` and the four full upstream TTF files from the package recorded in `assets/fonts/README.md`.
+It keeps source assets unchanged and verifies that the subset rebuild matches the production executable.
+The comparison runs 100 cold launches per build for each sample, plus 100 identical-binary control launches.
+It also runs isolated font preparation and Pango/Cairo checks. Results include averages and approximate 95% confidence margins across ten batches.
+The diagnostic requires this computer's performance governor and CPU cores 0–3. It does not change the governor.
+For a short check under the current powersave mode and ordinary CPU scheduling, use `--startup-only --startup-pairs 10 --governor powersave --cpu-set all`.
+It checks unchanged preferences, matching workloads, empty executable page caches, and identical pixels for covered Latin text.
+Greek/Cyrillic rendering is measured separately because subsetting removes those glyphs.
+
+Version tags such as `v0.2.0` publish a GitHub release after all build and test checks pass.
+
+FLTK is built with Wayland enabled, X11 and OpenGL disabled, and its bundled Cairo title-bar plugin.
+The Markdown pane draws visible blocks directly through FLTK. It caches text layouts and the small minimap image.
+See [the roadmap](docs/mdf-todo.md) for implementation details.

@@ -1,0 +1,149 @@
+--- a/src/drivers/Wayland/Fl_Wayland_Screen_Driver.cxx
++++ b/src/drivers/Wayland/Fl_Wayland_Screen_Driver.cxx
+@@ -1,3 +1,4 @@
++#include "mdf_startup.h"
+ //
+ // Implementation of Wayland Screen interface
+ //
+@@ -465,6 +466,7 @@
+ 
+ 
+ static void init_cursors(struct Fl_Wayland_Screen_Driver::seat *seat) {
++  MDF_TRACE("Load Wayland cursor theme");
+   char *name;
+   int size;
+   struct wl_cursor_theme *theme;
+@@ -507,6 +509,7 @@
+       wl_keyboard_get_version(wl_keyboard) >= 7 ? MAP_PRIVATE : MAP_SHARED, fd, 0);
+   assert(map_shm != MAP_FAILED);
+ 
++  MDF_TRACE("Compile Wayland keyboard keymap");
+   struct xkb_keymap *xkb_keymap = xkb_keymap_new_from_string(seat->xkb_context, map_shm,
+               XKB_KEYMAP_FORMAT_TEXT_V1, XKB_KEYMAP_COMPILE_NO_FLAGS);
+   munmap(map_shm, size);
+@@ -1120,6 +1123,7 @@
+ 
+ static void output_done(void *data, struct wl_output *wl_output)
+ {
++  MDF_TRACE("Handle Wayland output configuration");
+   // Runs at startup and when desktop scale factor is changed
+   Fl_Wayland_Screen_Driver::output *output = (Fl_Wayland_Screen_Driver::output*)data;
+ //fprintf(stderr, "output_done output=%p\n",output);
+@@ -1186,6 +1190,7 @@
+ // with the present code, that information is received at startup only.
+ static void registry_handle_global(void *user_data, struct wl_registry *wl_registry,
+            uint32_t id, const char *interface, uint32_t version) {
++  MDF_TRACE("Handle Wayland registry global");
+ //fprintf(stderr, "interface=%s version=%u\n", interface, version);
+   Fl_Wayland_Screen_Driver *scr_driver = (Fl_Wayland_Screen_Driver*)Fl::screen_driver();
+   if (strcmp(interface, "wl_compositor") == 0) {
+@@ -1224,6 +1229,7 @@
+         locale = getenv("LANG");
+       if (!locale || !*locale)
+         locale = "C";
++      MDF_TRACE("Compile keyboard Compose table");
+       struct xkb_compose_table *table =
+         xkb_compose_table_new_from_locale(scr_driver->seat->xkb_context, locale,
+                                           XKB_COMPOSE_COMPILE_NO_FLAGS);
+@@ -1355,6 +1361,7 @@
+ 
+ 
+ static void libdecor_fd_callback(int fd, struct libdecor *libdecor_context) {
++  MDF_TRACE("Dispatch libdecor callbacks");
+   if (libdecor_dispatch(libdecor_context, 0) >= 0) return;
+   if (wl_display_get_error(Fl_Wayland_Screen_Driver::wl_display) == EPROTO) {
+     const struct wl_interface *interface;
+@@ -1436,7 +1443,10 @@
+   struct wl_callback *registry_cb = wl_display_sync(wl_display);
+   wl_callback_add_listener(registry_cb, &sync_listener, &registry_cb);
+   while (registry_cb) wl_display_dispatch(wl_display);
+-  libdecor_context = libdecor_new(wl_display, &libdecor_iface);
++  {
++    MDF_TRACE("Initialize bundled libdecor");
++    libdecor_context = libdecor_new(wl_display, &libdecor_iface);
++  }
+   Fl::add_fd(libdecor_get_fd(libdecor_context), FL_READ, (Fl_FD_Handler)libdecor_fd_callback,
+              libdecor_context);
+   fl_create_print_window();
+--- a/src/drivers/Wayland/Fl_Wayland_Window_Driver.cxx
++++ b/src/drivers/Wayland/Fl_Wayland_Window_Driver.cxx
+@@ -1,3 +1,4 @@
++#include "mdf_startup.h"
+ //
+ // Implementation of the Wayland window driver.
+ //
+@@ -859,6 +860,7 @@
+ static void handle_configure(struct libdecor_frame *frame,
+      struct libdecor_configuration *configuration, void *user_data)
+ {
++  MDF_TRACE("Handle Wayland window configure");
+   struct wld_window *window = (struct wld_window*)user_data;
+   if (!window->wl_surface) return;
+   int width, height;
+--- a/src/drivers/Wayland/Fl_Wayland_Graphics_Driver.cxx
++++ b/src/drivers/Wayland/Fl_Wayland_Graphics_Driver.cxx
+@@ -1,3 +1,4 @@
++#include "mdf_startup.h"
+ //
+ // Implementation of the Wayland graphics driver.
+ //
+@@ -50,6 +51,7 @@
+ 
+ 
+ void Fl_Wayland_Graphics_Driver::create_shm_buffer(Fl_Wayland_Graphics_Driver::wld_buffer *buffer) {
++  MDF_TRACE("Allocate Wayland shared buffer");
+   int width = buffer->draw_buffer.width;
+   int stride = buffer->draw_buffer.stride;
+   int height = buffer->draw_buffer.data_size / stride;
+@@ -109,6 +111,7 @@
+ 
+ struct Fl_Wayland_Graphics_Driver::wld_buffer *
+     Fl_Wayland_Graphics_Driver::create_wld_buffer(int width, int height, bool with_shm) {
++  MDF_TRACE("Allocate Cairo drawing buffer");
+   struct wld_buffer *buffer = (struct wld_buffer*)calloc(1, sizeof(struct wld_buffer));
+   int stride = cairo_format_stride_for_width(cairo_format, width);
+   cairo_init(&buffer->draw_buffer, width, height, stride, cairo_format);
+@@ -172,6 +175,7 @@
+ 
+ void Fl_Wayland_Graphics_Driver::buffer_commit(struct wld_window *window, cairo_region_t *r)
+ {
++  MDF_TRACE("Copy and submit Wayland buffer");
+   if (!window->buffer->wl_buffer) create_shm_buffer(window->buffer);
+   cairo_surface_t *surf = cairo_get_target(window->buffer->draw_buffer.cairo_);
+   cairo_surface_flush(surf);
+@@ -190,6 +194,7 @@
+     wl_callback_add_listener(window->frame_cb, p_surface_frame_listener, window);
+   }
+   wl_surface_commit(window->wl_surface);
++  if (fl_mdf_buffer_committed) fl_mdf_buffer_committed(window->fl_win);
+   window->buffer->draw_buffer_needs_commit = false;
+ }
+ 
+--- /dev/null
++++ b/src/drivers/Wayland/mdf_startup.h
+@@ -0,0 +1,25 @@
++// MDF hooks are private to the bundled build. See frontend/patches/fltk/README.md.
++#ifndef MDF_WAYLAND_STARTUP_H
++#define MDF_WAYLAND_STARTUP_H
++#include <stdint.h>
++extern "C" {
++uint64_t fl_mdf_trace_begin(const char *, const char *, int) __attribute__((weak));
++void fl_mdf_trace_end(const char *, const char *, int, uint64_t) __attribute__((weak));
++void fl_mdf_buffer_committed(void *) __attribute__((weak));
++}
++class MdfTrace {
++  const char *name_, *file_;
++  int line_;
++  uint64_t start_;
++public:
++  MdfTrace(const char *name, const char *file, int line)
++    : name_(name), file_(file), line_(line),
++      start_(fl_mdf_trace_begin ? fl_mdf_trace_begin(name, file, line) : 0) {}
++  ~MdfTrace() {
++    if (start_ && fl_mdf_trace_end) fl_mdf_trace_end(name_, file_, line_, start_);
++  }
++};
++#define MDF_TRACE_JOIN_(a,b) a##b
++#define MDF_TRACE_JOIN(a,b) MDF_TRACE_JOIN_(a,b)
++#define MDF_TRACE(name) MdfTrace MDF_TRACE_JOIN(mdf_trace_,__LINE__)(name,__FILE__,__LINE__)
++#endif

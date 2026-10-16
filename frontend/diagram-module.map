@@ -1,0 +1,1 @@
+{ global: mdf_diagram_api; local: *; };

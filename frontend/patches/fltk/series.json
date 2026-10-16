@@ -1,0 +1,61 @@
+{
+  "version": "1.4.5",
+  "upstream_sha256": "7715e69ce081fa9ce6da48bb0dd3b07a4cf2cf937813814c04272f36fff593ea",
+  "patches": [
+    {
+      "patch": "0001-title-height.patch",
+      "files": {
+        "libdecor/src/plugins/cairo/libdecor-cairo.c": {
+          "before": "faacf5584024f894855b8393f953f55d7d411ea48e56ba63f728b8eabd181ab8",
+          "after": "756620cdee15cde8e4ca5e1c1dbc1ced0350528b02efcc5fbf47db81511ef1ca"
+        }
+      }
+    },
+    {
+      "patch": "0002-startup-tracing.patch",
+      "files": {
+        "src/drivers/Wayland/Fl_Wayland_Screen_Driver.cxx": {
+          "before": "833c5c9b2cf309e460b9540d87ab72d6bb30e3cae0d93cace065d4b2c2b65f58",
+          "after": "169140dbcbe53601032e35cacd19f5d500617dbb7701695ed0b7a01e49c4fcf8"
+        },
+        "src/drivers/Wayland/Fl_Wayland_Window_Driver.cxx": {
+          "before": "ab8c9ed3b5d9a1a7e862e98cf9ce8ff907791d39df9191b31e79a3ec0dfd37d1",
+          "after": "7b445c0c51a8e69a1c98035f5968307ae82c6402bdcadeb1313f034cc89671ec"
+        },
+        "src/drivers/Wayland/Fl_Wayland_Graphics_Driver.cxx": {
+          "before": "3aff90517a09fddd135fa631b1d324181d62a683447cfe463681c55b1570bc61",
+          "after": "fb887cdf97590ca5f22a4de7321f5d7acbefa3da78d80ecbb130125bbd53096f"
+        },
+        "src/drivers/Wayland/mdf_startup.h": {
+          "before": null,
+          "after": "75b405365fd50a526a7358079a569529b1544c2e7c791eeaf5ba9632510a6813"
+        }
+      }
+    },
+    {
+      "patch": "0003-parallel-startup.patch",
+      "files": {
+        "src/drivers/Wayland/Fl_Wayland_Screen_Driver.cxx": {
+          "before": "169140dbcbe53601032e35cacd19f5d500617dbb7701695ed0b7a01e49c4fcf8",
+          "after": "b62adbdbde409537fe75796d3f062c25e16ffa786a609fb7318238f280832197"
+        },
+        "src/drivers/Wayland/Fl_Wayland_Window_Driver.cxx": {
+          "before": "7b445c0c51a8e69a1c98035f5968307ae82c6402bdcadeb1313f034cc89671ec",
+          "after": "f67f1ccae1b17a0b5377dd79a863ef83034a89bf7ee5d9bcf2afc45790ea32b1"
+        },
+        "src/drivers/Wayland/mdf_startup.h": {
+          "before": "75b405365fd50a526a7358079a569529b1544c2e7c791eeaf5ba9632510a6813",
+          "after": "e9828fc1ae56e0f2f82f8eb8d663b4eb327c0a99bb2a29aa909a5a8fc45b589b"
+        },
+        "src/drivers/Wayland/Fl_Wayland_Graphics_Driver.cxx": {
+          "before": "fb887cdf97590ca5f22a4de7321f5d7acbefa3da78d80ecbb130125bbd53096f",
+          "after": "cb699a0d3a93cef38ca69c107da35316fa7587d1faf69fca6e026797b0280fc8"
+        },
+        "src/drivers/Wayland/Fl_Wayland_Window_Driver.H": {
+          "before": "b94ab2d62557588dd6054cb4bc321917006ee814e69d5de7b652ab0f35e6be78",
+          "after": "9a291a00eb942ea3863e03984e98d7df3abfba1eab215e375edcfc3fe8c44ce4"
+        }
+      }
+    }
+  ]
+}
