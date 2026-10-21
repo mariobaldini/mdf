@@ -5,12 +5,12 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 real_make=$(command -v make)
 scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT HUP INT TERM
-mkdir -p "$scratch/project/scripts" "$scratch/project/zig-pkg/fltk" "$scratch/project/zig-pkg/nlohmann" "$scratch/project/zig-pkg/mermaid-renderer" "$scratch/project/zig-pkg/mermaid-deps" "$scratch/bin"
+mkdir -p "$scratch/project/scripts" "$scratch/project/zig-pkg/fltk" "$scratch/project/zig-pkg/nlohmann" "$scratch/project/modules/pozeiden/src" "$scratch/project/zig-pkg/svg-deps" "$scratch/bin"
 cp "$root/Makefile" "$root/.zig-version" "$scratch/project/"
-cp "$root/scripts/common.sh" "$root/scripts/check-requirements.sh" "$root/scripts/build-frontend.sh" "$root/scripts/build-mermaid.sh" "$scratch/project/scripts/"
+cp "$root/scripts/common.sh" "$root/scripts/check-requirements.sh" "$root/scripts/build-frontend.sh" "$root/scripts/build-svg.sh" "$scratch/project/scripts/"
 : > "$scratch/project/zig-pkg/fltk/CMakeLists.txt"
 : > "$scratch/project/zig-pkg/nlohmann/json.hpp"
-: > "$scratch/project/zig-pkg/mermaid-renderer/Cargo.toml"
+: > "$scratch/project/modules/pozeiden/src/root.zig"
 : > "$scratch/libstdc++.a"
 export MDF_TEST_LOG="$scratch/commands" MDF_TEST_STDLIB="$scratch/libstdc++.a"
 for utility in sh bash dirname cat head grep rm mktemp id mkdir cp mv chmod cmp env;do ln -s "$(command -v "$utility")" "$scratch/bin/$utility";done

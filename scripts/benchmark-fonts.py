@@ -92,6 +92,8 @@ def prepare(work, full_fonts=None):
             shutil.copy2(ROOT / name, source / name)
         for name in ['src', 'frontend', 'assets']:
             shutil.copytree(ROOT / name, source / name, dirs_exist_ok=True)
+        shutil.copytree(ROOT / 'modules/pozeiden', source / 'modules/pozeiden',
+                        ignore=shutil.ignore_patterns('.git', '.zig-cache', 'zig-out'), dirs_exist_ok=True)
         (source / 'scripts').mkdir(exist_ok=True)
         shutil.copy2(ROOT / 'scripts/pack-font.py', source / 'scripts/pack-font.py')
         for name in names:

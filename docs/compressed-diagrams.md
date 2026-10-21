@@ -2,7 +2,8 @@
 
 MDF distributes one executable with two independent compressed rendering modules and the static zlib decompressor from FLTK.
 The Mermaid module parses diagrams, calculates layout, and produces SVG text. The SVG module parses and rasterizes SVG.
-Each module contains the Rust support code that it uses. Splitting the modules can duplicate support code, but SVG-only documents skip Mermaid entirely.
+Pozeiden calculates Mermaid layout in Zig. The SVG module contains resvg and the Rust support code that it uses.
+SVG-only documents skip Mermaid entirely.
 
 ## Startup and ownership
 
@@ -22,7 +23,7 @@ The loader checks the size and CRC32, removes the writable mapping, and seals th
 Then `dlopen` maps the module with `RTLD_NOW | RTLD_LOCAL`.
 The loader never extracts a module to a disk file.
 
-Each loaded module stays until process exit. This lifetime preserves code pointers in Rust thread-local destructors.
+Each loaded module stays until process exit. This lifetime also preserves code pointers in Rust thread-local destructors.
 The application joins image workers before it releases their inputs and results.
 The host supplies a font callback. Initialization requests regular and bold only.
 SVG's font resolver requests an italic face only when an actual text style requires it, including inherited CSS styles.
@@ -31,13 +32,52 @@ Successful pixels use libc `malloc`. The host releases them with `free`.
 
 ## Build and ABI
 
-The Rust build retains full release optimization and unused-code removal.
-Separate Cargo feature builds exclude Mermaid dependencies from SVG and SVG dependencies from Mermaid.
+Both modules retain full release optimization and unused-code removal.
+`frontend/pozeiden.zig` adapts the pinned submodule to the existing C ABI. The Zig build produces `libmdf-pozeiden.a`.
+`frontend/svg/Cargo.toml` and its lockfile contain only SVG dependencies. `scripts/build-svg.sh` builds this Rust archive offline.
 CMake links each archive with `diagram-module.c` and the existing libm compatibility adapter.
 Only `mdf_diagram_api` appears in the exported symbol table.
 The ABI 2 table contains version, size, module kind, reserved flags, font-provider initialization, and the applicable rendering function.
 The Mermaid function returns C-allocated SVG text. The SVG function returns C-allocated pixels. The host frees both.
 The host checks every table field before it calls initialization.
+
+## Pozeiden integration and upgrades
+
+The Git submodule `modules/pozeiden` pins version 0.4.1 at `071fbbb85fb73a06994c163c6093123bd3ac11f6`.
+Its public license is PolyForm Noncommercial 1.0.0. Commercial use requires separate upstream permission.
+`assets/MERMAID-NOTICE.txt` includes the complete license, required notice, mvzr license, and SVG dependency licenses.
+`make setup` initializes a missing submodule and downloads its pinned mvzr dependency. Normal builds stay offline.
+
+MDF uses strict type detection. The 17 supported families generate SVG, then the independent SVG module rasterizes that output.
+Journey, packet, architecture, treemap, radar, and ZenUML retain source text with an unsupported-type message.
+No legacy Mermaid renderer remains. Unsupported types do not load the SVG module.
+Input is limited to 256 KiB of UTF-8, and generated SVG is limited to 16 MiB.
+Pozeiden estimates label widths instead of measuring font metrics. The SVG module shapes the final text with actual fonts.
+Advanced syntax, Markdown labels, newer shape declarations, and embedded images remain compatibility limits.
+
+The submodule stays unchanged. `frontend/core-build.zig` copies its sources into the Zig cache and normalizes eight renderer files:
+
+| Generated file | MDF adjustment | Reason |
+| --- | --- | --- |
+| `renderers/sequence.zig` | Use theme fields for note and reference fills/strokes. Use the loop theme fill for default dark blocks. | Keep light text readable on dark notes and sequence blocks. Explicit rectangle colors remain intact. |
+| `renderers/flowchart.zig` | Use subgraph theme fields and the theme text color for subgraph titles. | Keep dark subgraphs and titles readable. |
+| `renderers/state.zig` | Use note theme fields for note fill/stroke. | Keep dark state notes readable. |
+| `renderers/class.zig` | Use note theme fields and dark namespace fills, titles, and stereotype text. | Keep dark notes, namespaces, and labels readable. Light namespace colors stay intact. |
+| `renderers/timeline.zig` | Use the dark node fill for default event boxes. | Keep light event text readable. |
+| `renderers/quadrant.zig` | Use the dark subgraph fill for the default plot area. | Keep light point labels readable. |
+| `renderers/pie.zig` | Use the theme text color for dark percentage labels. | Keep percentages readable outside the slices. |
+| `renderers/c4.zig` | Use light text for dark boundary and relationship labels. | Keep labels readable on the dark canvas. Element colors stay intact. |
+
+Each source replacement must match exactly once. The build stops if an upstream update changes these source locations.
+The adapter preserves upstream light fills and sets dark fills before rendering. It resets the thread-local theme after each call.
+For dark SVG, the adapter recolors only the exact canonical `arrow_marker_defs` block from `svg/writer.zig`.
+Explicit user colors elsewhere stay intact. A regression check detects changes to the arrow definitions.
+The existing image worker calls the renderer serially. Successful SVG buffers use the C allocator and the host calls `free`.
+
+For an upgrade, update the gitlink, `frontend/dependencies.json`, and the version in `frontend/core-build.zig` together.
+Review the palette replacements, canonical markers, supported families, license, and nested dependency hashes.
+Regenerate notices with `python3 scripts/mermaid-notices.py` after fetching the new dependencies.
+Run the checks below and inspect light/dark diagrams before accepting the upgrade.
 
 The packer compresses the stripped module with zlib level 9.
 The module and its debug symbols remain build artifacts. Installers copy only the final executable.
@@ -94,9 +134,13 @@ make release
 make test-packages
 ```
 
+`make test-mermaid` checks the adapter and upstream Zig tests, including all 17 families in both themes.
+The image checks rasterize all 17 families through the actual worker in both themes.
+Set `MDF_DIAGRAM_GALLERY` to an output directory to save those 34 images for inspection.
 The module checks cover an empty working directory, damaged payloads, an incompatible ABI, cancellation, and repeated use.
 The package checks examine glibc requirements in both the host and the expanded module.
 The GUI checks require all module preparation to start after the first committed and flushed Markdown viewport.
+They also check source/error fallback for the six unsupported families without loading the SVG module.
 
 For a cold comparison, preserve both executable files and their matching debug symbols first.
 Then run the benchmark with the compressed-renderer policy:

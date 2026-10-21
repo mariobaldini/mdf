@@ -87,8 +87,9 @@ def benchmark(before, after, output, batches, pairs, policy='startup', documents
     with zipfile.ZipFile(directory/'sources.zip','w',zipfile.ZIP_DEFLATED) as bundle:
         for pattern in ('src/*.zig','frontend/*.cpp','frontend/*.hpp','frontend/*.c','frontend/*.h',
                         'frontend/CMakeLists.txt','frontend/core-build.zig','frontend/dependencies.json','frontend/diagram-module.map','frontend/patches/fltk/*',
-                        'frontend/mermaid/*.rs','frontend/mermaid/src/*.rs','frontend/mermaid/Cargo.*',
-                        'scripts/build-frontend.sh','scripts/build-mermaid.sh','scripts/prepare-fltk.py','scripts/pack-diagram.py','scripts/pack-font.py'):
+                        'frontend/pozeiden.zig','frontend/svg/*.txt','frontend/svg/src/*.rs','frontend/svg/Cargo.*',
+                        'modules/pozeiden/**/*.zig','modules/pozeiden/build.zig.zon','modules/pozeiden/**/*.langium','modules/pozeiden/LICENSE','.gitmodules',
+                        'scripts/build-frontend.sh','scripts/build-svg.sh','scripts/prepare-fltk.py','scripts/pack-diagram.py','scripts/pack-font.py'):
             for path in sorted(ROOT.glob(pattern)):
                 if path.is_file():bundle.write(path,path.relative_to(ROOT))
     documents=documents or [ROOT/'SAMPLE.md',ROOT/'SAMPLE-HUGE.md']

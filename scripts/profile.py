@@ -54,7 +54,7 @@ def dependencies(manifest):
     """Read the pinned URL/hash records from the project's flat ZON manifests."""
     section = manifest.split(".dependencies = .{", 1)[-1]
     records = {}
-    for name, body in re.findall(r"\.([A-Za-z0-9_]+)\s*=\s*\.\{(.*?)\n\s*\},", section, re.S):
+    for name, body in re.findall(r"\.([A-Za-z0-9_]+)\s*=\s*\.\{([^{}]*)\}", section):
         record = dict(re.findall(r'\.(url|hash|version)\s*=\s*"([^"]+)"', body))
         if "hash" in record:
             records[name] = record
@@ -326,8 +326,10 @@ def project_context(root, binary, document, run):
     bundled("MD4C", match.group(1) if match else "pinned commit", "Markdown parser")
     bundled("nlohmann JSON", frontend["nlohmann_json"]["version"], "Control messages",
             [root / "zig-pkg/nlohmann/json.hpp"], "header file")
-    if "mermaid" in frontend and "rendered_diagrams" in run.get("metrics", {}):
-        bundled("Mermaid renderer", frontend["mermaid"]["version"], "Native diagram parsing and layout")
+    if "rendered_diagrams" in run.get("metrics", {}):
+        pozeiden = run["metrics"].get("mermaid_engine") == "pozeiden"
+        version = "Pozeiden " + frontend["pozeiden"]["version"] if pozeiden else frontend.get("mermaid", {}).get("version", "0.3.1 (previous Rust renderer)")
+        bundled("Mermaid renderer", version, "Zig/Pozeiden Mermaid parsing and layout" if pozeiden else "Native Rust diagram parsing and layout")
         bundled("SVG rendering", "resvg/usvg 0.47.0", "Diagram rasterization and embedded-font shaping")
     for name, directory, filename, pattern, archive, role in (
         ("libpng", "png", "png.h", r'#define PNG_LIBPNG_VER_STRING\s+"([^"]+)"', "png", "PNG decoding"),

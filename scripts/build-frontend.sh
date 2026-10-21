@@ -7,8 +7,8 @@ case "$mdf_mode" in
     Debug) mdf_cmake_mode=Debug;mdf_lto=OFF;mdf_rust_profile=debug;;
     *) printf '%s\n' 'The GUI supports Debug or ReleaseFast. Core tests also support ReleaseSafe.' >&2;exit 1;;
 esac
-printf 'Building native Mermaid renderer (%s, offline)...\n' "$mdf_mode"
-sh scripts/build-mermaid.sh "$mdf_mode"
+printf 'Building SVG rasterizer (%s, offline)...\n' "$mdf_mode"
+sh scripts/build-svg.sh "$mdf_mode"
 export ZIG_LOCAL_CACHE_DIR="$MDF_ROOT/build/.zig-cache/local"
 export CCACHE_DIR="$MDF_ROOT/build/.ccache"
 mdf_core="$MDF_ROOT/build/fltk-core/$mdf_mode"
@@ -20,10 +20,12 @@ rm -f "$mdf_core/bin/libmdf-extra.so"
 mdf_lib="$mdf_core/lib"
 if [ "$mdf_lto" = ON ];then
     mkdir -p "$mdf_core/native"
-    "$ZIG" ld.lld -r -O3 --lto-O3 --whole-archive "$mdf_lib/libmdf-core.a" --no-whole-archive -o "$mdf_core/native/core.o"
-    rm -f "$mdf_core/native/libmdf-core.next.a"
-    "$ZIG" ar rcs "$mdf_core/native/libmdf-core.next.a" "$mdf_core/native/core.o"
-    if ! cmp -s "$mdf_core/native/libmdf-core.a" "$mdf_core/native/libmdf-core.next.a";then mv "$mdf_core/native/libmdf-core.next.a" "$mdf_core/native/libmdf-core.a";else rm "$mdf_core/native/libmdf-core.next.a";fi
+    for mdf_archive in mdf-core mdf-pozeiden;do
+        "$ZIG" ld.lld -r -O3 --lto-O3 --whole-archive "$mdf_lib/lib$mdf_archive.a" --no-whole-archive -o "$mdf_core/native/$mdf_archive.o"
+        rm -f "$mdf_core/native/lib$mdf_archive.next.a"
+        "$ZIG" ar rcs "$mdf_core/native/lib$mdf_archive.next.a" "$mdf_core/native/$mdf_archive.o"
+        if ! cmp -s "$mdf_core/native/lib$mdf_archive.a" "$mdf_core/native/lib$mdf_archive.next.a";then mv "$mdf_core/native/lib$mdf_archive.next.a" "$mdf_core/native/lib$mdf_archive.a";else rm "$mdf_core/native/lib$mdf_archive.next.a";fi
+    done
     mdf_lib="$mdf_core/native"
 fi
 printf 'Configuring FLTK 1.4.5 (%s, Wayland only, Cairo/Pango, X11=OFF, OpenGL=OFF)...\n' "$mdf_cmake_mode"
@@ -51,8 +53,8 @@ cmake -S frontend -B "$mdf_ui" -G Ninja \
     "-DCMAKE_BUILD_TYPE=$mdf_cmake_mode" "-DFLTK_DIR=$mdf_sdk" "-DMDF_CORE_DIR=$mdf_lib" \
     "-DMDF_FLTK_PATCH_ID=$mdf_fltk_patch" \
     "-DMDF_ASYNC_INPUT=${MDF_ASYNC_INPUT:-ON}" "-DMDF_PREPARE_FRAME=${MDF_PREPARE_FRAME:-OFF}" \
-    "-DMDF_MERMAID_LIBRARY=$MDF_ROOT/build/mermaid/mermaid/$mdf_rust_profile/libmdf_mermaid.a" \
-    "-DMDF_SVG_LIBRARY=$MDF_ROOT/build/mermaid/svg/$mdf_rust_profile/libmdf_mermaid.a"
+    "-DMDF_MERMAID_LIBRARY=$mdf_lib/libmdf-pozeiden.a" \
+    "-DMDF_SVG_LIBRARY=$MDF_ROOT/build/svg/$mdf_rust_profile/libmdf_svg.a"
 cmake --build "$mdf_ui" --parallel "${MDF_BUILD_JOBS:-2}"
 mkdir -p "$mdf_prefix/bin"
 cp "$mdf_ui/mdf" "$mdf_prefix/bin/mdf.new"

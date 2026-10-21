@@ -75,8 +75,8 @@ offline_graph_check() {
 
 check_frontend_cache() {
     test -f "$MDF_ROOT/zig-pkg/fltk/CMakeLists.txt" && test -f "$MDF_ROOT/zig-pkg/nlohmann/json.hpp" && \
-        test -f "$MDF_ROOT/zig-pkg/mermaid-renderer/Cargo.toml" && test -d "$MDF_ROOT/zig-pkg/mermaid-deps" || {
-        printf '%s\n' 'Missing pinned FLTK/JSON/Mermaid sources. Run make setup.' >&2
+    test -f "$MDF_ROOT/modules/pozeiden/src/root.zig" && test -d "$MDF_ROOT/zig-pkg/svg-deps" || {
+        printf '%s\n' 'Missing pinned FLTK/JSON/SVG sources or Pozeiden submodule. Run make setup (or git submodule update --init --recursive).' >&2
         return 1
     }
 }

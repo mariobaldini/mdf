@@ -220,5 +220,25 @@ for name,mask in [('small',3),('italic',7),('bold-italic',11),('italic-html',15)
         for e in events: assert (e['start_ns']+e['duration_ns'])/1e6 < m['first_document_commit_ms'],name
 print('PASS: small text skips italics; Markdown, bold emphasis, HTML and table headers load only actual styles before first pixels')
 PY
+
+# Unsupported families retain their fenced source and an error. No SVG
+# placeholder or legacy Rust Mermaid renderer may be loaded for these cases.
+for kind in journey packet-beta architecture-beta treemap-beta radar-beta zenuml;do
+    printf '# Unsupported diagram\n\n```mermaid\n%s\n```\n' "$kind" > "$mdf_test/unsupported-$kind.md"
+    env -u WAYLAND_SOCKET XDG_RUNTIME_DIR="$mdf_test/runtime" WAYLAND_DISPLAY=mdf-test \
+        "$mdf_binary" --profile --capture "$mdf_test/unsupported-$kind.png" "$mdf_test/unsupported-$kind.md" \
+        >"$mdf_test/unsupported-$kind.log" 2>"$mdf_test/unsupported-$kind.err"
+done
+python3 - "$mdf_test" <<'PY'
+import json,sys
+from pathlib import Path
+for path in Path(sys.argv[1]).glob('unsupported-*.log'):
+    data=json.loads(path.read_text());m=data['metrics']
+    assert m['mermaid_engine']=='pozeiden' and m['mermaid_module_loaded'] and not m['svg_module_loaded'],path
+    assert m['rendered_diagrams']==0 and m['diagram_errors']==1,path
+    assert m['monospace_status'] in ('ready','unavailable'),path
+    assert not any(event['name']=='Prepare bundled SVG module' for event in data['events']),path
+print('PASS: all six unsupported families use source/error view without SVG or a legacy renderer')
+PY
 python3 "$mdf_root/tests/frame-submission.py" "$mdf_test"
 printf 'GUI artifacts: %s\n' "$mdf_test"

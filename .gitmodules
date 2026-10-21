@@ -1,0 +1,3 @@
+[submodule "modules/pozeiden"]
+	path = modules/pozeiden
+	url = https://github.com/sc2in/pozeiden.git

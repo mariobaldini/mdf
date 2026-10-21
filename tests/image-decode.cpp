@@ -14,6 +14,23 @@
 #include <vector>
 #include <chrono>
 #include <thread>
+#include <cairo.h>
+
+static void save_diagram(const MdfPixels &image, const std::filesystem::path &path) {
+  std::vector<unsigned char> argb(size_t(image.width) * image.height * 4);
+  for (size_t at = 0; at < argb.size(); at += 4) {
+    const unsigned alpha = image.data[at + 3];
+    argb[at] = (unsigned(image.data[at + 2]) * alpha + 127) / 255;
+    argb[at + 1] = (unsigned(image.data[at + 1]) * alpha + 127) / 255;
+    argb[at + 2] = (unsigned(image.data[at]) * alpha + 127) / 255;
+    argb[at + 3] = alpha;
+  }
+  auto *surface = cairo_image_surface_create_for_data(argb.data(), CAIRO_FORMAT_ARGB32,
+      image.width, image.height, image.width * 4);
+  const auto status = cairo_surface_write_to_png(surface, path.c_str());
+  cairo_surface_destroy(surface);
+  assert(status == CAIRO_STATUS_SUCCESS);
+}
 
 int main(int argc, char **argv) {
   if (argc != 2) return 2;
@@ -128,6 +145,41 @@ int main(int argc, char **argv) {
     worker.reset();
     if (prepared[0].pixels->image.data[0] != first) return 10;
   }
+  // Exercise the actual separate Zig and Rust modules through the production
+  // worker, not only Pozeiden's SVG-generation unit tests.
+  const std::vector<const char *> families = {"pie", "flowchart", "sequence", "gitgraph", "class", "state", "er", "gantt",
+      "timeline", "xychart", "quadrant", "mindmap", "sankey", "c4", "block", "requirement", "kanban"};
+  const auto examples = std::filesystem::absolute(argv[1]).parent_path() / "modules/pozeiden/examples";
+  std::vector<EncodedImage> diagrams;
+  for (const auto *name : families) {
+    std::ifstream input(examples / (std::string(name) + ".mmd"), std::ios::binary);
+    std::vector<unsigned char> source((std::istreambuf_iterator<char>(input)), {});
+    assert(!source.empty());
+    diagrams.push_back({int(diagrams.size()), std::move(source), EncodedImage::mermaid});
+  }
+  const char *gallery = std::getenv("MDF_DIAGRAM_GALLERY");
+  if (gallery) std::filesystem::create_directories(gallery);
+  for (bool dark : {false, true}) {
+    ImageWorker worker;
+    worker.start(1, diagrams, 64 * 1024 * 1024, +[]() {}, dark);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+    while (!worker.complete()) {
+      assert(std::chrono::steady_clock::now() < deadline);
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    auto images = worker.take();
+    assert(images.size() == families.size());
+    for (size_t i = 0; i < images.size(); ++i) {
+      if (!images[i].error.empty()) {
+        std::cerr << families[i] << ": " << images[i].error << '\n';
+        return 23;
+      }
+      assert(images[i].pixels->image.data && images[i].logical_width > 0 && images[i].logical_height > 0);
+      if (gallery) save_diagram(images[i].pixels->image,
+          std::filesystem::path(gallery) / (std::string(families[i]) + (dark ? "-dark.png" : "-light.png")));
+    }
+  }
   std::cout << "PASS: " << count << " PNG/JPEG fixtures match FLTK pixels exactly; size limits and truncated PNGs fail cleanly\n";
   std::cout << "PASS: image/diagram worker completion, cancellation, adopted pixel lifetimes and malformed Mermaid recovery\n";
+  std::cout << "PASS: all 17 Pozeiden families produce real resvg pixels in light and dark modes\n";
 }

@@ -45,11 +45,16 @@ System fonts remain optional. If no installed font covers a character, it keeps 
 Reading and parsing overlap window initialization. Ready Markdown can appear in the first window frame, without a mandatory empty scaffold frame.
 Navigation preparation starts when the document is adopted, before waiting for that frame.
 A separate worker decodes PNG/JPEG pixels while the GUI handles window events and draws navigation.
-That worker also renders fenced `mermaid` diagrams through a bundled native renderer and resvg.
+That worker also renders fenced `mermaid` diagrams through Pozeiden (Zig) and resvg (Rust).
 Diagrams use embedded Open Sans and adapt to light/dark mode. Labels with missing characters receive the prepared system fallback data on the image worker.
-Flowcharts, sequence, class, state, ER, pie, Gantt, and the other supported native diagram families render offline.
+The 17 supported families are flowchart, sequence, class, state, ER, pie, Gantt, Git graph, timeline,
+XY chart, quadrant, mindmap, Sankey, C4, block, requirement, and Kanban.
+Journey, packet, architecture, treemap, radar, and ZenUML show their source with an unsupported-type message.
 If diagram rendering fails, MDF keeps its source text and shows the error. Advanced syntax can differ from official Mermaid.
-Embedded images inside Mermaid diagrams are unsupported. Diagram source is limited to 256 KiB, 512 nodes, and 2048 edges.
+Pozeiden estimates label widths. SVG rasterization uses the actual font data, so complex labels can need manual line breaks.
+Embedded images, Markdown labels, and newer `@{shape: ...}` syntax are unsupported.
+Diagram source is limited to 256 KiB, and generated SVG is limited to 16 MiB.
+Pozeiden also limits graph layout to 10,000 nodes and 20,000 edges, flowcharts to 500 subgraphs, and mindmaps to 100 nesting levels.
 Rendered canvases are limited to 16384 pixels per side and 64 MiB of RGBA pixels.
 Tables measure word and line widths across all rows before allocating columns, keeping short labels and numbers intact where space permits.
 If navigation and image pixels are already prepared, the GUI includes them in the first frame.
@@ -79,7 +84,7 @@ Requires Git LFS, GNU Make, Zig 0.16.0, Rust 1.88 or newer with Cargo, GCC/G++, 
 On Fedora 44, `make setup` installs missing requirements and downloads the pinned sources.
 
 ```sh
-git clone https://github.com/mariobaldini/mdf.git
+git clone --recurse-submodules https://github.com/mariobaldini/mdf.git
 cd mdf
 git lfs pull
 make setup
@@ -89,6 +94,10 @@ make install
 
 `make install` copies `mdf` into `~/.local/bin` without sudo and removes the retired companion library on upgrade.
 The `~/.local/bin` folder must be in your `PATH`.
+For an existing checkout, run `git submodule update --init --recursive` before building.
+Pozeiden 0.4.1 is pinned in `modules/pozeiden`. Its public license is PolyForm Noncommercial 1.0.0.
+Commercial use requires separate permission from its author. The [upstream licensing guide](modules/pozeiden/LICENSING.md) explains these terms.
+`mdf --licenses` includes the complete license and required notice. SVG rasterization still requires Rust at build time.
 
 ### Uninstall
 
@@ -113,7 +122,8 @@ make test-gui
 - `make test` runs core and workflow tests. `make test-gui` checks the native GUI in an isolated headless Wayland compositor.
 - `make test-images` compares bundled PNG/JPEG decoding against FLTK and checks worker cancellation and pixel ownership. It is included in `make test-gui`.
 - `make test-monospace` checks system font matching, fixed-width styles, uncached discovery without cache writes, missing-font fallback, cancellation, and resource ownership. It needs an installed monospace font and is included in `make test-gui`.
-- `make test-mermaid` checks all 23 native diagram families with embedded fonts in light/dark mode, malformed inputs, and allocation limits. It is included in `make test`.
+- `make test-mermaid` checks all 17 Pozeiden families in light/dark mode, unsupported types, malformed input, limits, and dependency notices.
+- `make test-svg` checks SVG rasterization, font styles, malformed input, and allocation limits. Both targets are included in `make test`.
 - `make test-samples` checks the compact syntax sample and the large handbook's distinct PNG/JPEG assets.
 - `make test-render` captures MDF and Typora at wide and narrow widths for visual review. Requirements and limits are below.
 - `make release` uses Zig ReleaseFast, GCC `-O3`, Rust optimization level 3, full link-time optimization, and dead-section removal for the app and bundled dependencies.
@@ -121,7 +131,7 @@ make test-gui
 - `make release` also builds RPM and DEB packages. It requires `rpmbuild` and `dpkg-deb` (`rpm-build` and `dpkg` on Fedora).
 - The release files, packages, checksums, and build metadata appear in `build/`.
 - `make clean` removes `build/`, including binaries, packages, profiles, and compiler caches. It also removes legacy output directories.
-  It keeps downloaded dependencies in `zig-pkg/`.
+  It keeps downloaded dependencies in `zig-pkg/` and submodules in `modules/`.
 
 ### Startup profile
 
@@ -182,7 +192,7 @@ The eager startup graph connects document adoption to navigation preparation, th
 Optional results that are already ready can share the first useful frame. Work that is still pending does not delay the Markdown viewport.
 Milestones from one submitted frame share a graph node, rather than appearing as fictitious serial paints.
 The image/diagram worker owns its source buffers and rendered pixels. It uses the bundled codecs and native Mermaid/resvg libraries, then sends a GUI wakeup.
-Mermaid layout uses embedded Open Sans metrics and any prepared fallback faces needed by its labels.
+Pozeiden calculates Mermaid layout in Zig with estimated label widths. It does not measure the actual font metrics.
 SVG shaping uses a separate in-memory database. The image worker receives anonymous font data and does no system font discovery.
 System-font discovery and raster-image decoding features are disabled in the SVG library; external image resolution is disabled.
 FLTK image objects, widget changes and drawing stay on the GUI thread. GIF/BMP decoding retains the existing GUI path.

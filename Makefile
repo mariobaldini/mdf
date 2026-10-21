@@ -16,7 +16,7 @@ CACHE_FLAGS := --cache-dir build/.zig-cache
 TARGET_FLAGS := -Dtarget=$(MDF_TARGET) -Dcpu=baseline
 BUILD_FLAGS := -Doptimize=$(OPTIMIZE) $(TARGET_FLAGS)
 
-.PHONY: setup check-requirements check-package-tools check-profile-tools build clean install uninstall run run-sample profile profile-trace test test-gui test-images test-monospace test-startup test-patches test-mermaid test-render test-samples test-workflow test-install test-packages test-profile release
+.PHONY: setup check-requirements check-package-tools check-profile-tools build clean install uninstall run run-sample profile profile-trace test test-gui test-images test-monospace test-startup test-patches test-mermaid test-svg test-render test-samples test-workflow test-install test-packages test-profile release
 
 setup:
 	@sh scripts/setup.sh
@@ -62,7 +62,7 @@ profile-trace: check-profile-tools
 	@$(MAKE) --no-print-directory build OPTIMIZE=ReleaseFast BUILD_PREFIX=build/profile-trace/runtime
 	@python3 scripts/profile-trace.py --binary build/profile-trace/runtime/bin/mdf --document SAMPLE.md --document SAMPLE-HUGE.md --output build/profile-trace/trace.html
 
-test: check-requirements test-workflow test-install test-profile test-samples test-mermaid test-patches
+test: check-requirements test-workflow test-install test-profile test-samples test-mermaid test-svg test-patches
 	"$(ZIG)" build test $(OFFLINE_FLAGS) $(CACHE_FLAGS) $(TARGET_FLAGS) -Doptimize=Debug
 	"$(ZIG)" build test $(OFFLINE_FLAGS) $(CACHE_FLAGS) $(TARGET_FLAGS) -Doptimize=ReleaseSafe
 
@@ -88,7 +88,11 @@ test-render:
 
 test-mermaid:
 	@python3 scripts/mermaid-notices.py --check
-	@sh scripts/build-mermaid.sh Debug test
+	@python3 tests/mermaid-dependencies.py
+	@"$(ZIG)" build test-mermaid $(OFFLINE_FLAGS) $(CACHE_FLAGS) $(TARGET_FLAGS) -Doptimize=Debug
+
+test-svg:
+	@sh scripts/build-svg.sh Debug test
 
 test-packages: check-package-tools
 	@bash tests/packages.sh

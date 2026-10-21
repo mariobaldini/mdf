@@ -21,6 +21,9 @@ sh scripts/packages.sh "$mdf_stage" "$mdf_version"
     printf 'size_bytes: %s\n' "$(wc -c < "$mdf_stage/mdf" | tr -d ' ')"
     printf 'runtime_files: mdf (single executable)\n'
     printf 'diagrams: independent Mermaid and SVG modules, separate zlib-compressed non-allocated ELF sections; anonymous-memory loading after first viewport\n'
+    printf 'mermaid: Zig/Pozeiden 0.4.1; 17 supported types; unsupported types show source and an error\n'
+    printf 'pozeiden_commit: 071fbbb85fb73a06994c163c6093123bd3ac11f6\n'
+    printf 'pozeiden_license: PolyForm-Noncommercial-1.0.0; commercial use requires separate upstream permission\n'
     printf 'decompression: statically bundled FLTK zlib; no additional runtime extractor\n'
     printf 'fonts: bundled Latin Open Sans regular/bold; independent on-demand compressed italic/bold-italic; conditional system Sans glyph fallback and monospace for code blocks\n'
     printf 'font_discovery: only after first Markdown frame, on separate font workers; existing caches read-only\n'
@@ -32,7 +35,7 @@ sh scripts/packages.sh "$mdf_stage" "$mdf_version"
     printf 'cpp_optimization: O3, full LTO, baseline x86_64\n'
     printf 'rust: '
     rustc --version
-    printf 'rust_optimization: O3, full LTO, baseline x86_64; native Mermaid/resvg; no runtime browser\n'
+    printf 'rust_optimization: O3, full LTO, baseline x86_64; SVG/resvg only; no runtime browser\n'
     printf 'libm_compatibility: GLIBC_2.2.5 float entry points; small non-LTO ABI shim\n'
     sha256sum frontend/dependencies.json
     printf 'md4c: 472c417005c2c71b8617de4f7b8d6b30411d78f4\n'

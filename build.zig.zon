@@ -4,10 +4,11 @@
     .version = "0.2.0",
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
+        .pozeiden = .{ .path = "modules/pozeiden" },
         .md4c = .{
             .url = "https://github.com/mity/md4c/archive/472c417005c2c71b8617de4f7b8d6b30411d78f4.tar.gz",
             .hash = "N-V-__8AAF-DEADsiGuy83YqbGOj9AVrUnWIMka5RE7AHvK7",
         },
     },
-    .paths = .{ "build.zig", "build.zig.zon", "src", "frontend", "assets", "tests", ".zig-version" },
+    .paths = .{ "build.zig", "build.zig.zon", "src", "frontend", "assets", "tests", "modules", "scripts", ".zig-version" },
 }

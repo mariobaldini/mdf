@@ -879,6 +879,13 @@ class ProfileTests(unittest.TestCase):
             self.assertEqual(len(list((base / "output").iterdir())), 1)
             self.assertNotIn("runs", report)  # Shared build metadata is stored only once.
 
+    def test_inline_path_dependency_does_not_consume_the_next_url_dependency(self):
+        records = profile.dependencies('''.dependencies = .{
+            .pozeiden = .{ .path = "modules/pozeiden" },
+            .md4c = .{ .url = "https://example.org/md4c.tar.gz", .hash = "pinned-hash" },
+        }''')
+        self.assertEqual(records, {"md4c": {"url": "https://example.org/md4c.tar.gz", "hash": "pinned-hash"}})
+
     def test_library_inventory_uses_file_sizes_without_embedding_sources_or_sample(self):
         with tempfile.TemporaryDirectory() as directory:
             project = Path(directory)

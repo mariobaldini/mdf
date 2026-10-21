@@ -15,7 +15,7 @@ set(CMAKE_SKIP_BUILD_RPATH TRUE)
 # Preserve the assembler symbol-version aliases across GCC's LTO link stage.
 set_source_files_properties(compat.c PROPERTIES COMPILE_OPTIONS "-fno-lto")
 set(MDF_DIAGRAM_PACKER "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/pack-diagram.py")
-# Each optional renderer has its own feature-limited Rust archive, module,
+# Mermaid uses Zig/Pozeiden; SVG uses Rust/resvg. Each has its own archive,
 # compressed stream and non-allocated section. SVG never loads Mermaid.
 foreach(renderer mermaid svg)
   if(renderer STREQUAL "mermaid")

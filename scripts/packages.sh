@@ -18,7 +18,7 @@ Name: mdf
 Version: $mdf_version
 Release: 1
 Summary: Markdown FAST native Markdown viewer
-License: LicenseRef-Markdown-FAST
+License: LicenseRef-Markdown-FAST AND PolyForm-Noncommercial-1.0.0
 URL: https://github.com/mariobaldini/mdf
 BuildArch: x86_64
 Requires: glibc >= 2.38
@@ -33,6 +33,7 @@ Requires: libfontconfig.so.1()(64bit)
 %description
 Markdown FAST is a native Markdown viewer with a table of contents and minimap.
 Bundled license notices are available with mdf --licenses.
+Includes Pozeiden under PolyForm Noncommercial 1.0.0; commercial use requires separate upstream permission.
 
 %prep
 %build
@@ -64,6 +65,7 @@ Homepage: https://github.com/mariobaldini/mdf
 Description: Markdown FAST native Markdown viewer
  A native Markdown viewer with a table of contents and minimap.
  Bundled license notices are available with mdf --licenses.
+ Includes Pozeiden under PolyForm Noncommercial 1.0.0; commercial use requires separate upstream permission.
 CONTROL
 (cd "$mdf_deb_root" && md5sum usr/bin/mdf > DEBIAN/md5sums)
 dpkg-deb --build --root-owner-group -Zxz -z9 "$mdf_deb_root" "$mdf_stage/mdf_${mdf_version}_amd64.deb"

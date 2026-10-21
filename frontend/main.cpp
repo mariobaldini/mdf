@@ -1179,6 +1179,7 @@ struct App {
     metrics["rendered_svgs"] = reader->diagram_sizes.size() - mermaid_count;
     metrics["diagram_errors"] = reader->diagram_errors.size();
     metrics["diagram_module_loaded"] = diagram_renderer_loaded();
+    metrics["mermaid_engine"] = "pozeiden";
     metrics["bundled_font_styles"] = fonts.styles;
     metrics["bundled_font_data_styles"] = bundled_font_data_styles();
     for (auto kind : {DiagramModule::mermaid, DiagramModule::svg}) {
