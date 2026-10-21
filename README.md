@@ -43,10 +43,17 @@ The GUI adopts private Pango maps and reflows affected text while preserving the
 Latin text retains Open Sans. Selected fallback faces also supply missing characters in headings, the TOC, minimap, and code.
 System fonts remain optional. If no installed font covers a character, it keeps an explicit missing-glyph marker. If no monospace is available, code keeps Open Sans.
 Reading and parsing overlap window initialization. Ready Markdown can appear in the first window frame, without a mandatory empty scaffold frame.
+Startup uses a libc-only Zig launcher. Separate workers prepare the embedded UI engine and its system libraries while the core parses the document.
+Image-file reads and heading preparation start before the UI handoff. Preview reflow retains those image bytes.
+The UI engine is uncompressed and loads from anonymous memory. The distribution remains one executable.
+The GUI prepares first-frame buffers and visible layout while the compositor configures the window, then reuses that layout for painting.
+See [parallel startup](docs/parallel-bootstrap.md) for the ABI, ownership, profiling, and upgrade rules.
 Navigation preparation starts when the document is adopted, before waiting for that frame.
 A separate worker decodes PNG/JPEG pixels while the GUI handles window events and draws navigation.
-That worker also renders fenced `mermaid` diagrams through Pozeiden (Zig) and resvg (Rust).
-Diagrams use embedded Open Sans and adapt to light/dark mode. Labels with missing characters receive the prepared system fallback data on the image worker.
+That worker also renders fenced `mermaid` diagrams through Pozeiden and zig-svg/z2d, all written in Zig.
+Diagrams use embedded Open Sans and adapt to light/dark mode. SVG text has limited font fallback and no complex-script shaping.
+Explicit RTL or vertical SVG text produces a readable error. Arabic joining and automatic missing-glyph fallback remain unsupported in SVG labels.
+Some system font collections are unsupported. These limits affect SVG and diagram labels; Markdown body text keeps its separate Pango font support.
 The 17 supported families are flowchart, sequence, class, state, ER, pie, Gantt, Git graph, timeline,
 XY chart, quadrant, mindmap, Sankey, C4, block, requirement, and Kanban.
 Journey, packet, architecture, treemap, radar, and ZenUML show their source with an unsupported-type message.
@@ -80,8 +87,10 @@ Package installation requires administrator access.
 
 ### From source
 
-Requires Git LFS, GNU Make, Zig 0.16.0, Rust 1.88 or newer with Cargo, GCC/G++, CMake, Ninja, and the Wayland, Cairo/Pango, and Fontconfig development libraries.
+Requires Git LFS, GNU Make, Zig 0.17.0, GCC/G++, CMake, Ninja, and the Wayland, Cairo/Pango, and Fontconfig development libraries.
 On Fedora 44, `make setup` installs missing requirements and downloads the pinned sources.
+If the default compiler has another version, setup caches the exact official compiler in `zig-pkg/zig-0.17.0/`.
+Make uses that cached compiler automatically. An explicit `ZIG=/path/to/zig` overrides this choice.
 
 ```sh
 git clone --recurse-submodules https://github.com/mariobaldini/mdf.git
@@ -97,7 +106,9 @@ The `~/.local/bin` folder must be in your `PATH`.
 For an existing checkout, run `git submodule update --init --recursive` before building.
 Pozeiden 0.4.1 is pinned in `modules/pozeiden`. Its public license is PolyForm Noncommercial 1.0.0.
 Commercial use requires separate permission from its author. The [upstream licensing guide](modules/pozeiden/LICENSING.md) explains these terms.
-`mdf --licenses` includes the complete license and required notice. SVG rasterization still requires Rust at build time.
+`mdf --licenses` includes the complete license and required notice.
+zig-svg 0.2.0 is pinned in `modules/zig-svg`. It uses MIT, and its z2d dependency uses MPL 2.0.
+The build requires no Rust compiler or Cargo.
 
 ### Uninstall
 
@@ -126,7 +137,7 @@ make test-gui
 - `make test-svg` checks SVG rasterization, font styles, malformed input, and allocation limits. Both targets are included in `make test`.
 - `make test-samples` checks the compact syntax sample and the large handbook's distinct PNG/JPEG assets.
 - `make test-render` captures MDF and Typora at wide and narrow widths for visual review. Requirements and limits are below.
-- `make release` uses Zig ReleaseFast, GCC `-O3`, Rust optimization level 3, full link-time optimization, and dead-section removal for the app and bundled dependencies.
+- `make release` uses Zig ReleaseFast, GCC `-O3`, full link-time optimization, and dead-section removal for the app and bundled dependencies.
   It strips debug symbols and omits frame pointers. C++ exception unwinding remains enabled.
 - `make release` also builds RPM and DEB packages. It requires `rpmbuild` and `dpkg-deb` (`rpm-build` and `dpkg` on Fedora).
 - The release files, packages, checksums, and build metadata appear in `build/`.
@@ -159,6 +170,15 @@ For an Enter-to-screen measurement, capture command acceptance in the terminal o
 Then pair that timestamp with [Wayland presentation feedback](https://wayland.app/protocols/presentation-time) for the first Markdown surface commit.
 Both endpoints must use the same clock domain, or their clocks must be correlated explicitly.
 The current automated launcher measures process launch to frame submission; it does not install shell or terminal hooks.
+
+Use `make benchmark-launch` to measure the launch baseline without graphics or linked libraries.
+It builds two small ReleaseFast Zig programs: normal `main()` and a bare Linux entry point that skips Zig startup.
+Each program records a monotonic timestamp before printing Hello World.
+The default measures 50 cold and 200 warm launches per program, with balanced executable order and no discarded outliers.
+Cold launches use the same cache reset and zero-resident-page checks as MDF profiling. Warm launches verify that the executable is fully cached.
+The results include averages, 95% margins, medians, minima, and p95. Exact sources, executables, and JSON stay under `build/launch-baseline/`.
+This baseline requires Linux x86_64 and no desktop. Use `LAUNCH_RUNS=100` for twice the samples.
+
 The flame chart groups nested calls by thread on a shared time axis. Each thread has its own color.
 Select a parallel group or double-click a call to inspect its subcalls. **Fit all** restores the complete interval.
 Ctrl + wheel zooms around the pointer, up to 256×. The large horizontal scrollbar supports panning.
@@ -191,10 +211,10 @@ Waits and untraced intervals have separate blocks. Untraced intervals retain the
 The eager startup graph connects document adoption to navigation preparation, then navigation readiness to image decoding.
 Optional results that are already ready can share the first useful frame. Work that is still pending does not delay the Markdown viewport.
 Milestones from one submitted frame share a graph node, rather than appearing as fictitious serial paints.
-The image/diagram worker owns its source buffers and rendered pixels. It uses the bundled codecs and native Mermaid/resvg libraries, then sends a GUI wakeup.
+The image/diagram worker owns its source buffers and rendered pixels. It uses the bundled codecs and native Mermaid/SVG libraries, then sends a GUI wakeup.
 Pozeiden calculates Mermaid layout in Zig with estimated label widths. It does not measure the actual font metrics.
-SVG shaping uses a separate in-memory database. The image worker receives anonymous font data and does no system font discovery.
-System-font discovery and raster-image decoding features are disabled in the SVG library; external image resolution is disabled.
+SVG uses in-memory font callbacks. The image worker receives anonymous font data and does no system font discovery.
+The host rejects embedded images and external resources, including unused definitions. The SVG renderer performs no file or network I/O.
 FLTK image objects, widget changes and drawing stay on the GUI thread. GIF/BMP decoding retains the existing GUI path.
 Workers are joined on cancellation and shutdown; adopted pixel buffers outlive their GUI image wrappers.
 The report also lists library versions and file sizes, executable sizes, launch timings, CPU time, and memory use.

@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Check the vendored renderer identity, notices, and Zig/Rust boundary."""
+"""Check pinned renderer identities, notices, and the Rust-free build path."""
 import configparser
 import json
 from pathlib import Path
 import subprocess
-import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
 record = json.loads((ROOT / 'frontend/dependencies.json').read_text())['pozeiden']
@@ -26,10 +25,17 @@ license_text = (ROOT / entry['path'] / 'LICENSE').read_text().strip()
 assert license_text in notices and 'Required Notice:' in license_text
 assert f"Pozeiden {record['version']}" in notices
 
-manifest = tomllib.loads((ROOT / 'frontend/svg/Cargo.toml').read_text())
-assert manifest['package']['name'] == 'mdf-svg'
-assert set(manifest['dependencies']) == {'resvg', 'roxmltree'}
-packages = tomllib.loads((ROOT / 'frontend/svg/Cargo.lock').read_text())['package']
-assert not any('mermaid' in package['name'] for package in packages)
+svg_record = json.loads((ROOT / 'frontend/dependencies.json').read_text())['zig_svg']
+svg_entry = modules['submodule "modules/zig-svg"']
+mode,commit,_stage,path = git('ls-files','--stage','modules/zig-svg').split()
+assert mode == '160000' and commit == svg_record['commit'] and path == svg_entry['path']
+assert git('-C',path,'rev-parse','HEAD') == commit
+assert not git('-C',path,'diff','--name-only','HEAD')
+assert svg_entry['url'] == svg_record['url'] and svg_record['license'] == 'MIT'
+assert (ROOT/path/'LICENSES/MIT.txt').read_text().strip() in notices
+assert (ROOT/'assets/licenses/z2d-MPL-2.0.txt').read_text().strip() in notices
+assert not list((ROOT/'frontend').rglob('Cargo.*'))
+assert not list((ROOT/'frontend').rglob('*.rs'))
+assert (ROOT/'frontend/svg.zig').is_file()
 assert not (ROOT / 'frontend/mermaid').exists(), 'Remove the legacy Rust Mermaid adapter'
-print('PASS: pinned clean Pozeiden submodule, noncommercial notice, and SVG-only Rust dependencies')
+print('PASS: pinned pristine Pozeiden/zig-svg submodules, complete notices, and Rust-free renderer sources')

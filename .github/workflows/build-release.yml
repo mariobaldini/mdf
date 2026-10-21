@@ -21,7 +21,7 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Install build tools
-        run: dnf install -y make git git-lfs ca-certificates curl tar xz python3 strace cmake ninja-build gcc gcc-c++ libstdc++-static pkgconf-pkg-config pango-devel cairo-devel fontconfig-devel wayland-devel wayland-protocols-devel libxkbcommon-devel weston weston-devel dejavu-sans-mono-fonts cargo rust rpm-build dpkg cpio
+        run: dnf install -y make git git-lfs ca-certificates curl tar xz python3 strace cmake ninja-build gcc gcc-c++ libstdc++-static pkgconf-pkg-config pango-devel cairo-devel fontconfig-devel wayland-devel wayland-protocols-devel libxkbcommon-devel weston weston-devel dejavu-sans-mono-fonts rpm-build dpkg cpio
 
       - uses: actions/checkout@v7
         with:

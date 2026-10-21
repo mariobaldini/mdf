@@ -14,7 +14,7 @@ cp build/bin/mdf "$mdf_app/"
 test "$(find "$mdf_app" -type f | wc -l)" -eq 1
 MDF_TEST_CWD="$mdf_test/elsewhere" sh scripts/fltk-gui.sh "$mdf_app/mdf"
 if env -u WAYLAND_SOCKET WAYLAND_DISPLAY=mdf-font-failure \
-    strace -f -e trace=memfd_create -e inject=memfd_create:error=EMFILE:when=1 \
+    strace -f -e trace=memfd_create -e inject=memfd_create:error=EMFILE:when=2 \
     -o "$mdf_test/font-failure.trace" "$mdf_app/mdf" --profile SAMPLE.md >"$mdf_test/font-failure.log" 2>&1;then
     printf '%s\n' 'Font preparation failure unexpectedly continued.' >&2;exit 1
 fi

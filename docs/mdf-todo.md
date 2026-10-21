@@ -46,7 +46,8 @@ Code starts in Open Sans. Code blocks trigger a deferred system monospace worker
 Missing document glyphs trigger a separate system Sans worker. It loads the required families and leaves Latin text in Open Sans.
 Native headings, the TOC, minimap and code receive the same selected fallback faces. Characters without an installed font remain explicit missing glyphs.
 Remaining layout defect: Arabic and Hebrew words are still positioned in left-to-right source order. Paragraph-level bidirectional layout must also preserve wrapping, selection, and hit testing.
-Mermaid fences render through a pinned native renderer and resvg, using embedded Open Sans plus prepared fallback data for labels needing it.
+Mermaid fences render through pinned Pozeiden and zig-svg/z2d libraries, all written in Zig, using embedded Open Sans.
+SVG labels lack automatic glyph fallback and complex-script shaping. Explicit RTL or vertical SVG text and some system font formats produce readable errors.
 Rendering failures keep readable source and an error. Advanced Mermaid syntax can differ from the official renderer. Tables share measured word-based column widths across rows.
 The first Markdown frame reads no system fonts, Fontconfig files, or font caches. Deferred font discovery reads those resources on its workers, without extracting fonts or writing persistent caches.
 

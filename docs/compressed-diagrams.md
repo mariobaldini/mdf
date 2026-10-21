@@ -2,8 +2,10 @@
 
 MDF distributes one executable with two independent compressed rendering modules and the static zlib decompressor from FLTK.
 The Mermaid module parses diagrams, calculates layout, and produces SVG text. The SVG module parses and rasterizes SVG.
-Pozeiden calculates Mermaid layout in Zig. The SVG module contains resvg and the Rust support code that it uses.
+Pozeiden calculates Mermaid layout in Zig. zig-svg and z2d parse and rasterize SVG in Zig.
 SVG-only documents skip Mermaid entirely.
+The UI engine is a separate uncompressed embedded module loaded during [parallel startup](parallel-bootstrap.md).
+Its mandatory loading precedes the first viewport; the optional rendering modules below keep their post-viewport gate.
 
 ## Startup and ownership
 
@@ -23,18 +25,19 @@ The loader checks the size and CRC32, removes the writable mapping, and seals th
 Then `dlopen` maps the module with `RTLD_NOW | RTLD_LOCAL`.
 The loader never extracts a module to a disk file.
 
-Each loaded module stays until process exit. This lifetime also preserves code pointers in Rust thread-local destructors.
+Each loaded module stays until process exit. Its callbacks and thread-local state remain valid for that lifetime.
 The application joins image workers before it releases their inputs and results.
 The host supplies a font callback. Initialization requests regular and bold only.
 SVG's font resolver requests an italic face only when an actual text style requires it, including inherited CSS styles.
-The module copies prepared fallback font data for each rendering call. It does not discover system fonts.
+The module borrows prepared font data for each rendering call. It does not discover system fonts.
 Successful pixels use libc `malloc`. The host releases them with `free`.
 
 ## Build and ABI
 
 Both modules retain full release optimization and unused-code removal.
 `frontend/pozeiden.zig` adapts the pinned submodule to the existing C ABI. The Zig build produces `libmdf-pozeiden.a`.
-`frontend/svg/Cargo.toml` and its lockfile contain only SVG dependencies. `scripts/build-svg.sh` builds this Rust archive offline.
+`frontend/svg.zig` adapts zig-svg to the same C ABI. The Zig build produces `libmdf-svg.a` beside the core and Mermaid archives.
+Zig 0.17.0 builds all three archives offline. Rust and Cargo are not required.
 CMake links each archive with `diagram-module.c` and the existing libm compatibility adapter.
 Only `mdf_diagram_api` appears in the exported symbol table.
 The ABI 2 table contains version, size, module kind, reserved flags, font-provider initialization, and the applicable rendering function.
@@ -52,10 +55,10 @@ MDF uses strict type detection. The 17 supported families generate SVG, then the
 Journey, packet, architecture, treemap, radar, and ZenUML retain source text with an unsupported-type message.
 No legacy Mermaid renderer remains. Unsupported types do not load the SVG module.
 Input is limited to 256 KiB of UTF-8, and generated SVG is limited to 16 MiB.
-Pozeiden estimates label widths instead of measuring font metrics. The SVG module shapes the final text with actual fonts.
+Pozeiden estimates label widths instead of measuring font metrics. The SVG module draws the final text with actual font outlines.
 Advanced syntax, Markdown labels, newer shape declarations, and embedded images remain compatibility limits.
 
-The submodule stays unchanged. `frontend/core-build.zig` copies its sources into the Zig cache and normalizes eight renderer files:
+The submodule stays unchanged. `frontend/core-build.zig` copies its sources into the Zig cache and normalizes these renderer files:
 
 | Generated file | MDF adjustment | Reason |
 | --- | --- | --- |
@@ -67,6 +70,7 @@ The submodule stays unchanged. `frontend/core-build.zig` copies its sources into
 | `renderers/quadrant.zig` | Use the dark subgraph fill for the default plot area. | Keep light point labels readable. |
 | `renderers/pie.zig` | Use the theme text color for dark percentage labels. | Keep percentages readable outside the slices. |
 | `renderers/c4.zig` | Use light text for dark boundary and relationship labels. | Keep labels readable on the dark canvas. Element colors stay intact. |
+| `renderers/state.zig`, `renderers/block.zig`, `svg/layout.zig` | Replace removed array repetition with equivalent `@splat` initialization. | Compile the pinned Zig 0.16 sources with Zig 0.17. |
 
 Each source replacement must match exactly once. The build stops if an upstream update changes these source locations.
 The adapter preserves upstream light fills and sets dark fills before rendering. It resets the thread-local theme after each call.
@@ -74,10 +78,40 @@ For dark SVG, the adapter recolors only the exact canonical `arrow_marker_defs` 
 Explicit user colors elsewhere stay intact. A regression check detects changes to the arrow definitions.
 The existing image worker calls the renderer serially. Successful SVG buffers use the C allocator and the host calls `free`.
 
+The adapter changes the generated invalid attribute `font-weight="italic"` to the intended `font-style="italic"`.
+This repairs sequence separator text for the strict SVG parser. A focused regression check preserves this behavior.
+MDF builds Pozeiden's library sources directly because its standalone CLI build still uses the retired `b.args` API.
+The parent manifest pins mvzr. `scripts/prepare-mvzr.py` replaces its removed array repetition in a generated cache file.
+The mvzr source and submodule sources stay unchanged. The script checks every expected replacement count before writing output.
+
 For an upgrade, update the gitlink, `frontend/dependencies.json`, and the version in `frontend/core-build.zig` together.
 Review the palette replacements, canonical markers, supported families, license, and nested dependency hashes.
+Also review the Zig 0.17 array adaptations and the sequence font-style correction.
 Regenerate notices with `python3 scripts/mermaid-notices.py` after fetching the new dependencies.
 Run the checks below and inspect light/dark diagrams before accepting the upgrade.
+
+## zig-svg integration and limits
+
+`modules/zig-svg` pins version 0.2.0 at `6feaa8d4aee609b0945473931fb27fdcdf1ebfef`.
+Its source stays unchanged. The parent build imports its public SVG and z2d modules.
+The adapter parses an SVG once, checks the resource policy and canvas bounds, then draws from that parsed tree.
+SVGs with media-dependent CSS use the library's full rendering path so output-size queries remain correct.
+Internal allocations use Zig's SMP allocator. Successful output buffers use libc allocation for the existing host ABI.
+
+The source graph uses the libraries' default features. `scripts/zig_deps.py` fetches transitive pinned packages and excludes inactive lazy dependencies.
+Cached sources and the optional cached compiler stay in `zig-pkg/` through `make clean`.
+Notices include every active package's license and pinned source URL. z2d's normalized archive omits its license text.
+`assets/licenses/z2d-MPL-2.0.txt` supplies that standard text, with copyright notices collected from the pinned source headers.
+
+SVG font callbacks select bundled Open Sans styles and can use an explicitly prepared system face.
+Automatic per-character font fallback, Arabic contextual shaping, and RTL/vertical layout remain unsupported.
+RTL/vertical requests produce a readable error. Some system font formats produce an unsupported-font error.
+Markdown body text keeps its existing Pango shaping and fallback behavior.
+
+The accepted migration trades SVG performance and text coverage for a Zig-only diagram stack.
+The isolated evaluation used 12 paired cold runs per engine for each of four workloads, with no discarded outliers.
+Its latest prototype reduced executable size by 6.18%, while the SVG-heavy workload's full readiness increased by 72.43%.
+First-viewport changes on the standard samples stayed within measurement uncertainty. Those figures describe the frozen prototype, not later builds.
 
 The packer compresses the stripped module with zlib level 9.
 The module and its debug symbols remain build artifacts. Installers copy only the final executable.
@@ -104,7 +138,8 @@ The document and ordinary image decoders remain usable.
 ## Local SVG
 
 Local SVG files use only the SVG module, with the same pixel ownership rules as Mermaid.
-SVG text uses bundled Open Sans and available prepared fallback fonts.
+SVG text uses bundled Open Sans or an explicitly selected prepared system face.
+It retains the font coverage and shaping limits listed above.
 SVG images retain their logical dimensions when the renderer creates pixels at twice the logical resolution.
 The existing 16 MiB local-image input limit also applies to SVG.
 The renderer rejects canvases larger than 16384 pixels per dimension and respects the image allocation limit.

@@ -1,12 +1,14 @@
 .DEFAULT_GOAL := run-sample
 
-ZIG ?= zig
+MDF_ZIG_VERSION := $(shell cat .zig-version)
+ZIG ?= $(if $(wildcard zig-pkg/zig-$(MDF_ZIG_VERSION)/zig),$(CURDIR)/zig-pkg/zig-$(MDF_ZIG_VERSION)/zig,zig)
 OPTIMIZE ?= Debug
 ZIG_GLOBAL_CACHE_DIR ?= $(CURDIR)/build/.zig-cache/global
 BINDIR ?= $(HOME)/.local/bin
 MDF_CONFIG_HOME ?= $(HOME)/.config
 MDF_TARGET := x86_64-linux-gnu.2.38
 PROFILE_RUNS ?= 12
+LAUNCH_RUNS ?= 50
 BUILD_PREFIX ?= build
 export ZIG OPTIMIZE ZIG_GLOBAL_CACHE_DIR MDF_TARGET
 
@@ -16,7 +18,7 @@ CACHE_FLAGS := --cache-dir build/.zig-cache
 TARGET_FLAGS := -Dtarget=$(MDF_TARGET) -Dcpu=baseline
 BUILD_FLAGS := -Doptimize=$(OPTIMIZE) $(TARGET_FLAGS)
 
-.PHONY: setup check-requirements check-package-tools check-profile-tools build clean install uninstall run run-sample profile profile-trace test test-gui test-images test-monospace test-startup test-patches test-mermaid test-svg test-render test-samples test-workflow test-install test-packages test-profile release
+.PHONY: setup check-requirements check-package-tools check-profile-tools build clean install uninstall run run-sample profile profile-trace benchmark-launch test test-launcher test-gui test-images test-monospace test-startup test-patches test-mermaid test-svg test-render test-samples test-workflow test-install test-packages test-profile release
 
 setup:
 	@sh scripts/setup.sh
@@ -62,7 +64,10 @@ profile-trace: check-profile-tools
 	@$(MAKE) --no-print-directory build OPTIMIZE=ReleaseFast BUILD_PREFIX=build/profile-trace/runtime
 	@python3 scripts/profile-trace.py --binary build/profile-trace/runtime/bin/mdf --document SAMPLE.md --document SAMPLE-HUGE.md --output build/profile-trace/trace.html
 
-test: check-requirements test-workflow test-install test-profile test-samples test-mermaid test-svg test-patches
+benchmark-launch: check-profile-tools
+	@python3 scripts/benchmark-launch.py --zig "$(ZIG)" --runs "$(LAUNCH_RUNS)"
+
+test: check-requirements test-workflow test-install test-profile test-samples test-mermaid test-svg test-patches test-launcher
 	"$(ZIG)" build test $(OFFLINE_FLAGS) $(CACHE_FLAGS) $(TARGET_FLAGS) -Doptimize=Debug
 	"$(ZIG)" build test $(OFFLINE_FLAGS) $(CACHE_FLAGS) $(TARGET_FLAGS) -Doptimize=ReleaseSafe
 
@@ -92,7 +97,7 @@ test-mermaid:
 	@"$(ZIG)" build test-mermaid $(OFFLINE_FLAGS) $(CACHE_FLAGS) $(TARGET_FLAGS) -Doptimize=Debug
 
 test-svg:
-	@sh scripts/build-svg.sh Debug test
+	@"$(ZIG)" build test-svg $(OFFLINE_FLAGS) $(CACHE_FLAGS) $(TARGET_FLAGS) -Doptimize=Debug
 
 test-packages: check-package-tools
 	@bash tests/packages.sh
@@ -113,7 +118,10 @@ test-startup: build
 	@cmake --build "build/fltk-ui/$(OPTIMIZE)" --target mdf-startup-tests --parallel 2
 	@"build/fltk-ui/$(OPTIMIZE)/mdf-startup-tests"
 
-test-gui: test-images test-monospace test-startup
+test-launcher: build
+	@python3 tests/launcher.py "$(BUILD_PREFIX)/bin/mdf"
+
+test-gui: test-images test-monospace test-startup test-launcher
 	@sh tests/gui.sh
 
 release: check-package-tools

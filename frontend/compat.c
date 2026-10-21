@@ -1,5 +1,5 @@
 /* New glibc releases version some libm functions again. Keep the documented
-   x86_64 glibc 2.38 minimum when Rust's float operations are linked on Fedora. */
+   x86_64 glibc 2.38 minimum when renderer float operations are linked on Fedora. */
 extern float mdf_legacy_acosf(float);
 extern float mdf_legacy_atan2f(float, float);
 __asm__(".symver mdf_legacy_acosf,acosf@GLIBC_2.2.5");

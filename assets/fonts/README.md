@@ -20,8 +20,10 @@ The Latin subset keeps accented Latin text, existing punctuation, and symbols.
 Greek, Cyrillic, CJK, and other characters outside its coverage use installed fallback fonts when available.
 Characters without an installed font still display missing-glyph markers. No font can guarantee complete Unicode coverage.
 The original full Open Sans files add Greek and Cyrillic. They still lack Arabic, Hebrew, CJK, many arrows, and emoji.
-Mermaid and SVG use bundled faces and explicitly prepared fallback data for labels needing it.
-Pozeiden estimates Mermaid label widths during layout. The SVG rasterizer shapes text with the actual font data.
+Mermaid and SVG use bundled faces. The image worker can also supply prepared system font data.
+zig-svg has limited explicit font selection and lacks automatic character-based fallback and complex-script shaping.
+Some system font collections cannot load. These limits affect SVG labels; Markdown body text keeps Pango's separate fallback support.
+Pozeiden estimates Mermaid label widths during layout. The SVG rasterizer measures and draws the actual font outlines.
 SVG text requests an italic face only when its resolved text style needs that face. A normal SVG does not inflate either italic font.
 The image worker never discovers system fonts.
 All license notices remain available through `mdf --licenses`.

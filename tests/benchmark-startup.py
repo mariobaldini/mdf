@@ -19,6 +19,16 @@ def fixture():
 
 
 class Selection(unittest.TestCase):
+    def test_power_preference_and_limits_must_stay_constant(self):
+        initial={'cpu_affinity':[0,1], 'cpu_governors':['performance'],
+                 'cpu_power':{'energy_preference':'performance','max_freq':5200000},
+                 'load_average':[1,1,1]}
+        benchmark.check_conditions(initial,{**initial,'load_average':[2,2,2]})
+        for changed in ({'energy_preference':'balance_power','max_freq':5200000},
+                        {'energy_preference':'performance','max_freq':2000000}):
+            with self.assertRaisesRegex(RuntimeError,'power settings changed'):
+                benchmark.check_conditions(initial,{**initial,'cpu_power':changed})
+
     def test_consistent_savings_pass(self):
         self.assertEqual(benchmark.assess(fixture())['status'], 'retained')
 

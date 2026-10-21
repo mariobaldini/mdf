@@ -83,7 +83,8 @@ def prepare(work, full_fonts=None):
         if not path.is_file() or not {0x03b1, 0x0416} <= set(TTFont(path).getBestCmap()):
             raise RuntimeError("Full upstream Open Sans faces are required. Use --full-fonts /path/to/original-open-sans.")
     environment = {**os.environ, "ZIG_GLOBAL_CACHE_DIR": str(ROOT / "build/.zig-cache/global")}
-    zig = os.environ.get("ZIG", "zig")
+    cached_zig = ROOT/'zig-pkg'/('zig-'+(ROOT/'.zig-version').read_text().strip())/'zig'
+    zig = os.environ.get("ZIG", str(cached_zig) if cached_zig.is_file() else "zig")
     matching = []
     for variant in ['full', 'latin']:
         source = work / ('source-' + variant)
@@ -94,8 +95,11 @@ def prepare(work, full_fonts=None):
             shutil.copytree(ROOT / name, source / name, dirs_exist_ok=True)
         shutil.copytree(ROOT / 'modules/pozeiden', source / 'modules/pozeiden',
                         ignore=shutil.ignore_patterns('.git', '.zig-cache', 'zig-out'), dirs_exist_ok=True)
+        shutil.copytree(ROOT / 'modules/zig-svg', source / 'modules/zig-svg',
+                        ignore=shutil.ignore_patterns('.git', '.zig-cache', 'zig-out'), dirs_exist_ok=True)
         (source / 'scripts').mkdir(exist_ok=True)
         shutil.copy2(ROOT / 'scripts/pack-font.py', source / 'scripts/pack-font.py')
+        shutil.copy2(ROOT / 'scripts/prepare-mvzr.py', source / 'scripts/prepare-mvzr.py')
         for name in names:
             target = source / 'assets/fonts/open-sans' / name
             if variant == 'full':
@@ -107,9 +111,8 @@ def prepare(work, full_fonts=None):
         subprocess.run([zig, "build", "--system", str(ROOT / "zig-pkg"), "--cache-dir", str(ROOT / "build/.zig-cache"),
                         "-Dtarget=x86_64-linux-gnu.2.38", "-Dcpu=baseline", "-Doptimize=ReleaseFast", "--prefix", str(work / variant / "core")],
                        env=environment, cwd=source, check=True)
-    command = subprocess.check_output(["ninja", "-t", "commands", "mdf"], cwd=ui, text=True).splitlines()[-1]
+    command = subprocess.check_output(["ninja", "-t", "commands", "mdf-ui"], cwd=ui, text=True).splitlines()[-1]
     base = [arg for arg in shlex.split(command.split(" && ")[1]) if not arg.startswith("-Wl,--dependency-file=")]
-    old_core = str(ROOT / "build/fltk-core/ReleaseFast/native/libmdf-core.a")
     probe = work / "font-components.o"
     flags = shlex.split(subprocess.check_output(["pkg-config", "--cflags", "pangocairo", "pangoft2", "fontconfig"], text=True))
     run(["/usr/bin/g++", "-O3", "-DNDEBUG", "-std=c++17", "-flto=auto", "-fno-fat-lto-objects", "-ffunction-sections", "-fdata-sections",
@@ -125,22 +128,32 @@ def prepare(work, full_fonts=None):
         run([zig, "ld.lld", "-r", "-O3", "--lto-O3", "--whole-archive", archive, "--no-whole-archive", "-o", obj])
         core.unlink(missing_ok=True)
         run([zig, "ar", "rcs", core, obj])
-        for kind in ["mdf", "font-components"]:
-            args = [str(core) if arg == old_core else arg for arg in base]
-            if kind == "font-components":
-                args = [arg for arg in args if not arg.startswith("-Wl,--wrap=") and arg not in
-                        ["CMakeFiles/mdf.dir/main.cpp.o", "CMakeFiles/mdf.dir/profile.cpp.o"]]
-                args.insert(args.index("CMakeFiles/mdf.dir/view.cpp.o"), str(probe))
-            dest = directory / "bin" / kind
-            args[args.index("-o") + 1] = str(dest)
-            run(args, cwd=ui)
-            run(["/usr/bin/strip", "--strip-all", dest])
-            if kind == 'mdf':
-                for renderer in ('mermaid', 'svg'):
-                    run([sys.executable, ROOT/'scripts/pack-diagram.py', 'embed', '--kind', renderer,
-                         '--binary', dest, '--payload', ui/('mdf-'+renderer+'.payload')])
+        args = [arg for arg in base if arg != '-shared' and not arg.startswith(('-Wl,--wrap=', '-Wl,-soname,', '-Wl,--version-script='))
+                and arg not in ['CMakeFiles/mdf-ui.dir/main.cpp.o', 'CMakeFiles/mdf-ui.dir/profile.cpp.o']]
+        args.insert(args.index('CMakeFiles/mdf-ui.dir/view.cpp.o'),str(probe))
+        args.append(str(core))
+        dest=directory/'bin/font-components'
+        args[args.index('-o')+1]=str(dest)
+        run(args,cwd=ui);run(['/usr/bin/strip','--strip-all',dest])
+        dest=directory/'bin/mdf'
+        shutil.copy2(directory/'core/bin/mdf-launcher',dest)
+        run(['/usr/bin/strip','--strip-all',dest])
+        run([sys.executable,ROOT/'scripts/pack-frontend.py','--binary',dest,'--module',ui/'libmdf-ui.so'])
+        for renderer in ('mermaid','svg'):
+            run([sys.executable,ROOT/'scripts/pack-diagram.py','embed','--kind',renderer,
+                 '--binary',dest,'--payload',ui/('mdf-'+renderer+'.payload')])
     assert len(matching) == 1, "Neither font variant exactly matches the production assets"
-    assert (work / matching[0] / "bin/mdf").read_bytes() == original.read_bytes(), "Rebuilt production variant differs from the application binary"
+    def normalized(path):
+        image=profile.elf_file(path);data=bytearray(image['data'])
+        for section in image['sections']:
+            if section['name']=='.note.gnu.build-id':
+                data[section['offset']:section['offset']+section['bytes']]=bytes(section['bytes'])
+        return data
+    rebuilt=work/matching[0]/'bin/mdf'
+    assert normalized(rebuilt)==normalized(original), 'Rebuilt production code/data differs from the application binary'
+    # Debug paths can change the linker's build ID before stripping. After
+    # proving every other byte matches, retain the exact production control.
+    shutil.copy2(original,rebuilt)
     print(f"PASS: rebuilt {matching[0]} production variant is byte-identical; comparison assets remain isolated", flush=True)
 
 

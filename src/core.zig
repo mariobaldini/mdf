@@ -36,9 +36,9 @@ fn borrowed(bytes: []const u8) Buffer {
     return .{ .ptr = bytes.ptr, .len = bytes.len };
 }
 const Wake = *const fn () callconv(.c) void;
-var wake_callback: ?Wake = null;
+var wake_callback: std.atomic.Value(?Wake) = .init(null);
 fn notify() void {
-    if (wake_callback) |wake| wake();
+    if (wake_callback.load(.acquire)) |wake| wake();
 }
 
 const Core = struct {
@@ -73,11 +73,12 @@ export fn mdf_now_ns() u64 {
     return profiling.nowNs();
 }
 export fn mdf_core_mode() [*:0]const u8 {
-    return @tagName(@import("builtin").mode);
+    const mode = @tagName(@import("builtin").mode);
+    return if (std.mem.eql(u8, mode, "fast")) "ReleaseFast" else if (std.mem.eql(u8, mode, "safe")) "ReleaseSafe" else if (std.mem.eql(u8, mode, "small")) "ReleaseSmall" else if (std.mem.eql(u8, mode, "debug")) "Debug" else mode;
 }
 export fn mdf_core_create(home: [*]const u8, home_len: usize, profile: bool, origin: u64, wake: Wake) ?*Core {
     const self = a.create(Core) catch return null;
-    wake_callback = wake;
+    wake_callback.store(wake, .release);
     self.* = .{
         .loader = undefined,
         .nav = undefined,
@@ -122,7 +123,7 @@ export fn mdf_core_create(home: [*]const u8, home_len: usize, profile: bool, ori
 export fn mdf_core_destroy(self: *Core) void {
     self.loader.destroy();
     self.nav.destroy();
-    wake_callback = null;
+    wake_callback.store(null, .release);
     if (self.doc) |*doc| doc.deinit();
     if (self.store) |*store| store.deinit();
     if (self.recorder) |r| {
@@ -130,6 +131,13 @@ export fn mdf_core_destroy(self: *Core) void {
         a.destroy(r);
     }
     a.destroy(self);
+}
+export fn mdf_core_set_wake(self: *Core, wake: ?Wake) void {
+    _ = self;
+    wake_callback.store(wake, .release);
+    // Results can become ready during the bootstrap-to-GUI handoff.
+    // Notify the new consumer even if the previous callback is in flight.
+    notify();
 }
 export fn mdf_core_open(self: *Core, ptr: [*]const u8, len: usize) Buffer {
     profiling.signal(@src(), "Request document", .gui);
@@ -151,6 +159,10 @@ export fn mdf_core_poll(self: *Core) Buffer {
     self.watch_available = result.watch_available;
     self.revision += 1;
     const doc = &self.doc.?;
+    // File reads and outline preparation do not need GUI/font metrics. Start
+    // them while the bootstrap's other worker loads the UI dependency graph.
+    profiling.signal(@src(), "Request early document assets", .gui);
+    self.nav.start(doc.blocks, doc.path, .{ .width = 0, .zoom = 1, .character_width = 1 }) catch {};
     // Bulk text uses borrowed typed views, avoiding a second giant JSON tree.
     return json(.{
         .revision = self.revision,
@@ -216,7 +228,7 @@ export fn mdf_core_cell(self: *Core, index: usize, cell: usize) CellView {
     const doc = self.doc orelse return .{};
     if (index >= doc.blocks.len or cell >= doc.blocks[index].cells.len) return .{};
     const value = doc.blocks[index].cells[cell];
-    return .{ .spans = value.spans.len, .alignment = @intFromEnum(value.alignment) };
+    return .{ .spans = value.spans.len, .alignment = @backingInt(value.alignment) };
 }
 export fn mdf_core_column(self: *Core, index: usize, column: usize) usize {
     const doc = self.doc orelse return 0;

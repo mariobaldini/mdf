@@ -9,4 +9,4 @@ if ! check_tools; then
 fi
 offline_graph_check
 check_frontend_cache
-printf 'Requirements satisfied: GNU Make, Zig %s, Rust/Cargo, FLTK/Wayland development tools, and pinned local dependencies.\n' "$MDF_ZIG_VERSION"
+printf 'Requirements satisfied: GNU Make, Zig %s, FLTK/Wayland development tools, and pinned local dependencies.\n' "$MDF_ZIG_VERSION"

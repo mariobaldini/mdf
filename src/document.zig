@@ -119,7 +119,7 @@ pub const Document = struct {
         try ctx.flush();
         try ctx.appendFootnotes(parser);
         try ctx.finish(path, load_images);
-        const owned_path = try a.dupeZ(u8, path);
+        const owned_path = try a.dupeSentinel(u8, path, 0);
         const blocks = try ctx.blocks.toOwnedSlice(a);
         return .{
             .arena = arena,
@@ -626,7 +626,7 @@ pub fn localImage(a: Allocator, path: []const u8, src: []const u8) !?[]const u8 
         else => return null,
     };
     const resolved = try std.fs.path.resolve(a, &.{ std.fs.path.dirname(path) orelse ".", decoded });
-    const filename = try a.dupeZ(u8, resolved);
+    const filename = try a.dupeSentinel(u8, resolved, 0);
     const fd = c.open(filename.ptr, c.O_RDONLY | c.O_CLOEXEC | c.O_NONBLOCK);
     if (fd < 0) return null;
     defer _ = c.close(fd);
@@ -830,7 +830,7 @@ test "local images resolve percent encoded paths and unavailable images retain a
     const directory = c.mkdtemp(&template) orelse return error.TestDirectoryFailed;
     defer _ = c.rmdir(directory);
     var buffer: [256]u8 = undefined;
-    const image = try std.fmt.bufPrintZ(&buffer, "{s}/sample image.gif", .{directory});
+    const image = try std.fmt.bufPrintSentinel(&buffer, "{s}/sample image.gif", .{directory}, 0);
     defer _ = c.unlink(image.ptr);
     const fd = c.open(image.ptr, c.O_WRONLY | c.O_CREAT | c.O_TRUNC, @as(c_uint, 0o600));
     if (fd < 0) return error.TestWriteFailed;

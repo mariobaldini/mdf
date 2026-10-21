@@ -20,6 +20,8 @@ sh scripts/packages.sh "$mdf_stage" "$mdf_version"
     printf '%s\n' 'lto: full' 'dead_sections: removed' 'debug_symbols: stripped' 'frame_pointers: omitted' 'zig_unwind_tables: none' 'cpp_unwind_tables: retained for exceptions'
     printf 'size_bytes: %s\n' "$(wc -c < "$mdf_stage/mdf" | tr -d ' ')"
     printf 'runtime_files: mdf (single executable)\n'
+    printf 'startup: libc-only Zig bootstrap; parallel document/assets, anonymous UI image, and system UI dependency loading\n'
+    printf 'ui_engine: uncompressed non-allocated ELF section; GUI work on the main thread after the private ABI handoff\n'
     printf 'diagrams: independent Mermaid and SVG modules, separate zlib-compressed non-allocated ELF sections; anonymous-memory loading after first viewport\n'
     printf 'mermaid: Zig/Pozeiden 0.4.1; 17 supported types; unsupported types show source and an error\n'
     printf 'pozeiden_commit: 071fbbb85fb73a06994c163c6093123bd3ac11f6\n'
@@ -33,9 +35,9 @@ sh scripts/packages.sh "$mdf_stage" "$mdf_version"
     printf 'cpp: '
     /usr/bin/g++ --version | head -n1
     printf 'cpp_optimization: O3, full LTO, baseline x86_64\n'
-    printf 'rust: '
-    rustc --version
-    printf 'rust_optimization: O3, full LTO, baseline x86_64; SVG/resvg only; no runtime browser\n'
+    printf 'svg: Zig/zig-svg 0.2.0 with z2d; no Rust build/runtime dependency\n'
+    printf 'svg_commit: 6feaa8d4aee609b0945473931fb27fdcdf1ebfef\n'
+    printf 'svg_text_limits: no automatic glyph fallback or complex-script shaping; some system font formats unsupported\n'
     printf 'libm_compatibility: GLIBC_2.2.5 float entry points; small non-LTO ABI shim\n'
     sha256sum frontend/dependencies.json
     printf 'md4c: 472c417005c2c71b8617de4f7b8d6b30411d78f4\n'

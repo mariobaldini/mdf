@@ -145,7 +145,7 @@ int main(int argc, char **argv) {
     worker.reset();
     if (prepared[0].pixels->image.data[0] != first) return 10;
   }
-  // Exercise the actual separate Zig and Rust modules through the production
+  // Exercise the actual separate Zig modules through the production
   // worker, not only Pozeiden's SVG-generation unit tests.
   const std::vector<const char *> families = {"pie", "flowchart", "sequence", "gitgraph", "class", "state", "er", "gantt",
       "timeline", "xychart", "quadrant", "mindmap", "sankey", "c4", "block", "requirement", "kanban"};
@@ -181,5 +181,5 @@ int main(int argc, char **argv) {
   }
   std::cout << "PASS: " << count << " PNG/JPEG fixtures match FLTK pixels exactly; size limits and truncated PNGs fail cleanly\n";
   std::cout << "PASS: image/diagram worker completion, cancellation, adopted pixel lifetimes and malformed Mermaid recovery\n";
-  std::cout << "PASS: all 17 Pozeiden families produce real resvg pixels in light and dark modes\n";
+  std::cout << "PASS: all 17 Pozeiden families produce real zig-svg pixels in light and dark modes\n";
 }

@@ -88,10 +88,14 @@ class ProfileTests(unittest.TestCase):
     def test_runtime_conditions_preserve_power_mode_affinity_and_system_load(self):
         with mock.patch.object(profile.os, "sched_getaffinity", return_value={3, 1}), \
              mock.patch.object(profile.os, "getloadavg", return_value=(17.5, 14.0, 8.0)), \
-             mock.patch.object(Path, "read_text", return_value="powersave\n"):
-            self.assertEqual(profile.runtime_conditions(), {
+             mock.patch.object(Path, "read_text", return_value="powersave\n"), \
+             mock.patch.object(Path, "glob", return_value=()):
+            result=profile.runtime_conditions()
+            self.assertEqual({k:result[k] for k in ('cpu_affinity','cpu_governors','load_average')}, {
                 "cpu_affinity": [1, 3], "cpu_governors": ["powersave"],
                 "load_average": [17.5, 14.0, 8.0]})
+            self.assertEqual(result['cpu_power']['platform_profile'],'powersave')
+            self.assertEqual(result['cpu_power']['no_turbo'],'powersave')
 
     def test_cache_probe_observes_owned_file_pages_without_reading_the_file(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -311,6 +315,55 @@ class ProfileTests(unittest.TestCase):
             self.assertEqual(any(n['track']=='fonts' for n in counted),expected)
             self.assertEqual(sum(n['duration_ns'] for n in counted),10_000_000)
             self.assertFalse(any(nodes[key]['track']=='fonts' for key in model['paths']['viewport']['node_ids']))
+
+    def test_bootstrap_critical_path_follows_nested_library_handoff(self):
+        data={'profile_version':1,'metrics':{'first_document_ms':15,'first_frame_ms':16},'events':[
+            span('Create bootstrap document workers','gui',0,1),
+            span('Request UI engine','gui',1,0,kind='signal'),
+            span('Request document','gui',1,0,kind='signal'),
+            span('Read Markdown','document',1.1,1.9),
+            span('Document ready','document',3,0,kind='signal'),
+            span('Accept document','gui',3.2,0,kind='signal'),
+            span('Wait for UI engine / document worker','gui',1,2.2,kind='wait'),
+            span('Wait for UI engine / document worker','gui',3.4,8.8,kind='wait'),
+            span('Map embedded UI engine into anonymous memory','ui',1.1,2.9),
+            span('Request UI dependencies','ui',1.5,0,kind='signal'),
+            span('Preload UI graphics and font libraries','ui_dependencies',1.6,8.4),
+            span('UI dependencies ready','ui_dependencies',10,0,kind='signal'),
+            span('Wait for UI dependency loader','ui',4,6.2,kind='wait'),
+            span('UI dependencies adopted','ui',10.2,0,kind='signal'),
+            span('Load UI libraries and initialize frontend','ui',10.3,1.7),
+            span('UI engine ready','ui',12,0,kind='signal'),
+            span('UI frontend entered','gui',12.3,0,kind='signal'),
+            span('Draw first viewport','gui',12.3,2.7),
+            span('Finish startup','gui',15,1)]}
+        model=profile.analyze_run(data)['call_graph'];nodes={n['id']:n for n in model['nodes']}
+        for endpoint in ('viewport','ready'):
+            path=model['paths'][endpoint];counted=[nodes[key] for key in path['node_ids']]
+            self.assertEqual(sum(n['duration_ns'] for n in counted),path['total_ns'])
+            self.assertTrue(any(n['track']=='ui_dependencies' for n in counted))
+            self.assertTrue(any(n['track']=='ui' for n in counted))
+            self.assertFalse(any(n['track']=='document' for n in counted))
+
+    def test_frame_memory_join_inside_gui_setup_follows_the_actual_blocker(self):
+        for prepared in (4, 8):
+            events = [span('Initialize window', 'gui', 0, 5),
+                span('Request first-frame shared memory', 'gui', 1, 0, kind='signal'),
+                span('Prepare first-frame shared memory', 'frame_memory', 1.1, prepared-1.1),
+                span('First-frame shared memory prepared', 'frame_memory', prepared, 0, kind='signal'),
+                span('Prepare first viewport', 'gui', 5, 5),
+                span('Adopt prepared first-frame shared memory', 'gui', max(prepared, 6)+.1, .1, 1),
+                span('First-frame shared memory adopted', 'gui', max(prepared, 6)+.2, 0, kind='signal')]
+            if prepared > 6:
+                events.append(span('Wait for first-frame shared memory', 'gui', 6, prepared-6+.01, 1, kind='wait'))
+            data = {'profile_version':1, 'metrics':{'first_document_ms':10,'first_frame_ms':12},
+                    'events':events}
+            run=profile.analyze_run(data);model=run['call_graph'];nodes={n['id']:n for n in model['nodes']}
+            self.assertIn('frame_memory',run['thread_summary'])
+            for path in model['paths'].values():
+                counted=[nodes[key] for key in path['node_ids']]
+                self.assertEqual(sum(n['duration_ns'] for n in counted),path['total_ns'])
+                self.assertEqual(any(n['track']=='frame_memory' for n in counted),prepared>6)
 
     def test_worker_finishing_during_gui_work_does_not_enter_critical_sum(self):
         data={'profile_version':1,'metrics':{'first_document_ms':2,'first_frame_ms':10},'events':[
@@ -906,7 +959,7 @@ class ProfileTests(unittest.TestCase):
             shared.write_bytes(b"actual shared library size")
             def command(arguments, **kwargs):
                 return f"libcairo.so.2 => {shared} (0x1234)" if arguments[0] == "ldd" else "1.2.3"
-            size_map = {"children": [{"name": "Bundled libraries", "children": [{"name": "FLTK", "bytes": 5}, {"name": "MD4C", "bytes": 2}]}]}
+            size_map = {"name": "mdf", "bytes": 7, "children": [{"name": "Bundled libraries", "bytes": 7, "children": [{"name": "FLTK", "bytes": 5}, {"name": "MD4C", "bytes": 2}]}]}
             with mock.patch.object(profile, "command_output", side_effect=command), \
                     mock.patch.object(profile, "binary_breakdown", return_value=size_map):
                 context = profile.project_context(project, binary, document, {"version": "test", "mode": "ReleaseFast"})

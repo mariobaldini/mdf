@@ -1,13 +1,21 @@
 const std = @import("std");
 pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) void {
-    const release = optimize == .ReleaseFast;
-    const pozeiden = b.dependency("pozeiden", .{ .target = target, .optimize = optimize, .version = "0.4.1" });
+    const release = optimize == .fast;
+    // Build only the pinned library sources. Its standalone CLI build script
+    // uses the retired b.args API; MDF does not need that CLI or C wrapper.
+    const mvzr = b.dependency("mvzr", .{ .target = target, .optimize = optimize });
+    const mvzr_module = mvzr.module("mvzr");
+    const prepare_mvzr = b.addSystemCommand(&.{"python3"});
+    prepare_mvzr.addFileArg(b.path("scripts/prepare-mvzr.py"));
+    prepare_mvzr.addFileArg(mvzr.path("src/mvzr.zig"));
+    mvzr_module.root_source_file = prepare_mvzr.addOutputFileArg("mvzr.zig");
+    const layout_config = b.addOptions();
+    layout_config.addOption([]const u8, "version", "0.4.1");
     // Normalize a generated copy; the pinned submodule stays pristine.
     // Palette adjustments are documented in docs/compressed-diagrams.md.
     const layout_sources = b.addWriteFiles();
-    _ = layout_sources.addCopyDirectory(pozeiden.path("src"), "pozeiden", .{
-        .exclude_extensions = &.{ "renderers/sequence.zig", "renderers/flowchart.zig", "renderers/state.zig",
-            "renderers/class.zig", "renderers/timeline.zig", "renderers/quadrant.zig", "renderers/pie.zig", "renderers/c4.zig" },
+    _ = layout_sources.addCopyDirectory(b.path("modules/pozeiden/src"), "pozeiden", .{
+        .exclude_extensions = &.{ "renderers/sequence.zig", "renderers/flowchart.zig", "renderers/state.zig", "renderers/class.zig", "renderers/timeline.zig", "renderers/quadrant.zig", "renderers/pie.zig", "renderers/c4.zig", "renderers/block.zig", "svg/layout.zig" },
     });
     const PaletteSource = struct { file: []const u8, source: []const u8, changes: []const [2][]const u8 };
     for ([_]PaletteSource{
@@ -22,6 +30,7 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         } },
         .{ .file = "state", .source = @embedFile("../modules/pozeiden/src/renderers/state.zig"), .changes = &.{
             .{ "\"#fffde7\", \"#f0c040\", 1.2", "theme.note_fill, theme.note_stroke, 1.2" },
+            .{ "var col_count = [_]usize{0} ** 64", "var col_count: [64]usize = @splat(0)" },
         } },
         .{ .file = "class", .source = @embedFile("../modules/pozeiden/src/renderers/class.zig"), .changes = &.{
             .{ "\"#fffde7\", \"#f0c040\", 1.2", "theme.note_fill, theme.note_stroke, 1.2" },
@@ -52,14 +61,24 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         }
         _ = layout_sources.add(b.fmt("pozeiden/renderers/{s}.zig", .{palette.file}), source);
     }
+    const block_source = @embedFile("../modules/pozeiden/src/renderers/block.zig");
+    if (std.mem.count(u8, block_source, "@memset(track_end_x, .{0} ** MAX_TRACKS)") != 1)
+        std.debug.panic("Pozeiden block initialization changed; review the documented adapter", .{});
+    _ = layout_sources.add("pozeiden/renderers/block.zig", std.mem.replaceOwned(u8, b.allocator, block_source, "@memset(track_end_x, .{0} ** MAX_TRACKS)", "@memset(track_end_x, @splat(0))") catch @panic("OOM"));
+    const svg_layout_source = @embedFile("../modules/pozeiden/src/svg/layout.zig");
+    if (std.mem.count(u8, svg_layout_source, "var seen = [_]bool{false} ** kids") != 1)
+        std.debug.panic("Pozeiden SVG layout initialization changed; review the documented adapter", .{});
+    _ = layout_sources.add("pozeiden/svg/layout.zig", std.mem.replaceOwned(u8, b.allocator, svg_layout_source, "var seen = [_]bool{false} ** kids", "var seen: [kids]bool = @splat(false)") catch @panic("OOM"));
     const layout_source = layout_sources.addCopyFile(b.path("frontend/pozeiden.zig"), "pozeiden/mdf.zig");
-    const upstream_module = pozeiden.module("pozeiden");
     const layout_module = b.createModule(.{
-        .root_source_file = layout_source, .target = target, .optimize = optimize,
-        .link_libc = true, .pic = true,
+        .root_source_file = layout_source,
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .pic = true,
     });
-    for (upstream_module.import_table.keys(), upstream_module.import_table.values()) |name, module|
-        layout_module.addImport(name, module);
+    layout_module.addImport("mvzr", mvzr_module);
+    layout_module.addOptions("config", layout_config);
     const layout = b.addLibrary(.{ .name = "mdf-pozeiden", .linkage = .static, .root_module = layout_module });
     layout.bundle_compiler_rt = true;
     layout.bundle_ubsan_rt = !release;
@@ -69,17 +88,37 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     }
     b.installArtifact(layout);
     const layout_tests_module = b.createModule(.{
-        .root_source_file = layout_source, .target = target, .optimize = optimize,
+        .root_source_file = layout_source,
+        .target = target,
+        .optimize = optimize,
         .link_libc = true,
     });
-    for (upstream_module.import_table.keys(), upstream_module.import_table.values()) |name, module|
-        layout_tests_module.addImport(name, module);
-    inline for (.{ "pie", "flowchart", "sequence", "gitgraph", "class", "state", "er", "gantt",
-        "timeline", "xychart", "quadrant", "mindmap", "sankey", "c4", "block", "requirement", "kanban" }) |name| {
-        layout_tests_module.addAnonymousImport("pozeiden-fixture-" ++ name, .{ .root_source_file = pozeiden.path("examples/" ++ name ++ ".mmd") });
+    layout_tests_module.addImport("mvzr", mvzr_module);
+    layout_tests_module.addOptions("config", layout_config);
+    inline for (.{ "pie", "flowchart", "sequence", "gitgraph", "class", "state", "er", "gantt", "timeline", "xychart", "quadrant", "mindmap", "sankey", "c4", "block", "requirement", "kanban" }) |name| {
+        layout_tests_module.addAnonymousImport("pozeiden-fixture-" ++ name, .{ .root_source_file = b.path("modules/pozeiden/examples/" ++ name ++ ".mmd") });
     }
     const layout_tests = b.addTest(.{ .root_module = layout_tests_module });
     b.step("test-mermaid", "Check Pozeiden SVG generation, supported families and error handling").dependOn(&b.addRunArtifact(layout_tests).step);
+    const svg_dependency = b.dependency("zig_svg", .{ .target = target, .optimize = optimize });
+    const svg_module = b.createModule(.{ .root_source_file = b.path("frontend/svg.zig"), .target = target, .optimize = optimize, .link_libc = true, .pic = true });
+    svg_module.addImport("svg", svg_dependency.module("svg"));
+    svg_module.addImport("z2d", svg_dependency.module("svg").import_table.get("z2d").?);
+    const svg_library = b.addLibrary(.{ .name = "mdf-svg", .linkage = .static, .root_module = svg_module });
+    svg_library.bundle_compiler_rt = true;
+    svg_library.bundle_ubsan_rt = !release;
+    if (release) {
+        var visited: std.AutoHashMapUnmanaged(*std.Build.Module, void) = .empty;
+        optimizeArtifact(b, svg_library, &visited);
+    }
+    b.installArtifact(svg_library);
+    const svg_test_module = b.createModule(.{ .root_source_file = b.path("frontend/svg.zig"), .target = target, .optimize = optimize, .link_libc = true });
+    svg_test_module.addImport("svg", svg_dependency.module("svg"));
+    svg_test_module.addImport("z2d", svg_dependency.module("svg").import_table.get("z2d").?);
+    inline for (.{ "Regular", "Bold", "Italic", "BoldItalic" }) |face| {
+        svg_test_module.addAnonymousImport("svg-font-" ++ face, .{ .root_source_file = b.path("assets/fonts/open-sans/OpenSans-" ++ face ++ ".ttf") });
+    }
+    b.step("test-svg", "Check Zig SVG rasterization, resources, font styles and ABI ownership").dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = svg_test_module })).step);
     const md4c = b.dependency("md4c", .{});
     const native = b.addTranslateC(.{
         .root_source_file = b.path("src/native.h"),
@@ -131,6 +170,20 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     for (core.root_module.import_table.keys(), core.root_module.import_table.values()) |name, module| tests_module.addImport(name, module);
     const tests = b.addTest(.{ .root_module = tests_module });
     b.step("test", "Run parser, loader, settings, navigation and profiling tests").dependOn(&b.addRunArtifact(tests).step);
+    const startup_native = b.addTranslateC(.{ .root_source_file = b.path("frontend/launcher-native.h"), .target = target, .optimize = optimize, .link_libc = true });
+    const launcher_module = b.createModule(.{ .root_source_file = b.path("frontend/launcher.zig"), .target = target, .optimize = optimize, .link_libc = true });
+    launcher_module.addImport("startup_native", startup_native.createModule());
+    launcher_module.linkLibrary(core);
+    const launcher = b.addExecutable(.{ .name = "mdf-launcher", .root_module = launcher_module });
+    launcher.rdynamic = true;
+    launcher.build_id = .sha1;
+    launcher.bundle_compiler_rt = true;
+    if (release) {
+        var visited: std.AutoHashMapUnmanaged(*std.Build.Module, void) = .empty;
+        optimizeArtifact(b, launcher, &visited);
+        launcher.root_module.strip = false;
+    }
+    b.installArtifact(launcher);
     b.installArtifact(core);
 }
 
@@ -146,7 +199,7 @@ fn optimizeArtifact(b: *std.Build, artifact: *std.Build.Step.Compile, visited: *
 fn optimizeModule(b: *std.Build, module: *std.Build.Module, visited: *std.AutoHashMapUnmanaged(*std.Build.Module, void)) void {
     const entry = visited.getOrPut(b.allocator, module) catch @panic("OOM");
     if (entry.found_existing) return;
-    module.optimize = .ReleaseFast;
+    module.optimize = .fast;
     module.strip = true;
     module.omit_frame_pointer = true;
     module.unwind_tables = .none;

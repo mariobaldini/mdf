@@ -9,12 +9,12 @@ pub fn nowNs() u64 {
 }
 
 pub fn absolutePath(a: Allocator, path: []const u8) ![:0]u8 {
-    if (std.fs.path.isAbsolute(path)) return a.dupeZ(u8, path);
+    if (std.fs.path.isAbsolute(path)) return a.dupeSentinel(u8, path, 0);
     var cwd: [4096]u8 = undefined;
     if (c.getcwd(&cwd, cwd.len) == null) return error.CurrentDirectoryUnavailable;
     const resolved = try std.fs.path.resolve(a, &.{ std.mem.sliceTo(&cwd, 0), path });
     defer a.free(resolved);
-    return a.dupeZ(u8, resolved);
+    return a.dupeSentinel(u8, resolved, 0);
 }
 
 pub fn readDocument(a: Allocator, path: [:0]const u8) ![]u8 {
@@ -213,7 +213,7 @@ pub const Loader = struct {
                 if (active) |old| self.allocator.free(old.path);
                 active = req;
                 if (watch >= 0) _ = c.inotify_rm_watch(self.watch_fd, watch);
-                const parent = self.allocator.dupeZ(u8, std.fs.path.dirname(req.path) orelse ".") catch {
+                const parent = self.allocator.dupeSentinel(u8, std.fs.path.dirname(req.path) orelse ".", 0) catch {
                     self.publish(.{ .generation = req.generation, .failure = error.OutOfMemory });
                     continue;
                 };
@@ -320,10 +320,10 @@ test "real file watcher handles saves, replacement, deletion, and recreation" {
     const directory = c.mkdtemp(&template) orelse return error.TestDirectoryFailed;
     defer _ = c.rmdir(directory);
     var path_buffer: [256]u8 = undefined;
-    const path = try std.fmt.bufPrintZ(&path_buffer, "{s}/file.md", .{directory});
+    const path = try std.fmt.bufPrintSentinel(&path_buffer, "{s}/file.md", .{directory}, 0);
     defer _ = c.unlink(path.ptr);
     var other_buffer: [256]u8 = undefined;
-    const other = try std.fmt.bufPrintZ(&other_buffer, "{s}/replacement.md", .{directory});
+    const other = try std.fmt.bufPrintSentinel(&other_buffer, "{s}/replacement.md", .{directory}, 0);
     defer _ = c.unlink(other.ptr);
     try testWrite(path, "# First");
     const loader = try Loader.create(std.testing.allocator, struct {

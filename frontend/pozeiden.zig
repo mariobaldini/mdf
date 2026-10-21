@@ -31,7 +31,7 @@ fn generate(allocator: std.mem.Allocator, source: []const u8, dark: bool, limit:
         theme.loop_fill = "#292c31";
         theme.loop_stroke = "#687386";
     }
-    const svg = try pozeiden.renderWithOptions(allocator, source, .{
+    var svg = try pozeiden.renderWithOptions(allocator, source, .{
         .strict = true,
         .max_input_bytes = max_input,
         .theme_override = if (dark) .{
@@ -44,6 +44,13 @@ fn generate(allocator: std.mem.Allocator, source: []const u8, dark: bool, limit:
         } else .{ .font_family = "Open Sans" },
     });
     errdefer allocator.free(svg);
+    // Upstream sends "italic" through the writer's font-weight argument in
+    // sequence separators. Emit the intended style as a valid SVG attribute.
+    if (std.mem.indexOf(u8, svg, "font-weight=\"italic\"") != null) {
+        const valid = try std.mem.replaceOwned(u8, allocator, svg, "font-weight=\"italic\"", "font-style=\"italic\"");
+        allocator.free(svg);
+        svg = valid;
+    }
     if (svg.len > @min(limit, max_svg)) return error.OutputTooLarge;
     if (dark) {
         // Upstream's canonical arrow markers hardcode a dark ink. Recolor
@@ -115,6 +122,13 @@ test "unsupported families report errors instead of placeholder diagrams" {
         "radar-beta\n", "zenuml\nAlice->Bob: Hello", "not a diagram" }) |source| {
         try std.testing.expectError(error.UnknownDiagramType, generate(std.testing.allocator, source, false, max_svg));
     }
+}
+
+test "sequence separator italics use valid SVG font style" {
+    const result = try generate(std.testing.allocator, @embedFile("pozeiden-fixture-sequence"), false, max_svg);
+    defer std.testing.allocator.free(result);
+    try std.testing.expect(std.mem.indexOf(u8, result, "font-weight=\"italic\"") == null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "font-style=\"italic\"") != null);
 }
 
 test "dark sequence actors notes and signals use a complete readable palette" {

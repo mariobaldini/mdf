@@ -30,7 +30,7 @@ spec.loader.exec_module(profile)
 # Payload-bearing operations use raw pointers, not source/font/socket contents.
 PAYLOAD = 'read,write,readv,writev,pread64,pwrite64,recvmsg,sendmsg,recvfrom,sendto'
 SYSCALLS = (PAYLOAD + ',openat,openat2,close,access,faccessat,faccessat2,newfstatat,fstat,statx,readlink,readlinkat,'
-            'getdents64,mmap,mprotect,munmap,madvise,brk,memfd_create,fcntl,dup,dup2,dup3,pipe,pipe2,eventfd2,'
+            'getdents64,mmap,mprotect,munmap,madvise,brk,memfd_create,sendfile,fcntl,dup,dup2,dup3,pipe,pipe2,eventfd2,'
             'socket,socketpair,connect,shutdown,getsockopt,setsockopt,poll,ppoll,select,pselect6,epoll_wait,'
             'epoll_pwait,epoll_pwait2,futex,clock_nanosleep,nanosleep,sched_yield,clone,clone3,wait4,ioctl')
 LINE = re.compile(r'^(\d+\.\d+)\s+(\w+)\((.*)\)\s+=\s+(.*?)\s+<(\d+\.\d+)>$')
@@ -254,6 +254,19 @@ def trace(binary, documents, output, cold=True, stacks=False):
     if stacks and debug.is_file() and profile.elf_file(debug)['build_id']==profile.elf_file(copied)['build_id']:
         shutil.copy2(debug,directory/'mdf.debug')
         subprocess.run(['objcopy','--add-gnu-debuglink='+str(directory/'mdf.debug'),str(copied)],check=True)
+    # The UI now lives in a memfd, so a filesystem debuglink cannot find its
+    # private symbols. This separate -k diagnostic may embed the matching
+    # unstripped engine. Regular profiling and distributed bytes stay intact.
+    ui_symbols=ROOT/'build/fltk-ui/ReleaseFast/mdf-ui.unstripped.so'
+    ui_payload=profile.embedded_ui(profile.elf_file(copied)) if stacks else None
+    if ui_payload and ui_symbols.is_file():
+        original=directory/'ui-original.so';original.write_bytes(ui_payload)
+        full=profile.elf_file(ui_symbols);small=profile.elf_file(original)
+        if full['build_id'] and full['build_id']==small['build_id']:
+            saved=directory/'ui-with-symbols.so';shutil.copy2(ui_symbols,saved)
+            pack_spec=importlib.util.spec_from_file_location('pack_frontend',ROOT/'scripts/pack-frontend.py')
+            packer=importlib.util.module_from_spec(pack_spec);pack_spec.loader.exec_module(packer)
+            packer.embed(copied,saved)
     collected=[]
     tracks=dict(profile.TRACKS)
     for index,document in enumerate(documents):

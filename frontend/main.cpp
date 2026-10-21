@@ -123,6 +123,7 @@ public:
     fl_pop_clip();
   }
 };
+static const MdfStartup *launch_context = nullptr;
 struct App {
   static constexpr int scrollbar_width = 20;
   Core &core;
@@ -1180,6 +1181,11 @@ struct App {
     metrics["diagram_errors"] = reader->diagram_errors.size();
     metrics["diagram_module_loaded"] = diagram_renderer_loaded();
     metrics["mermaid_engine"] = "pozeiden";
+    metrics["svg_engine"] = "zig-svg";
+    if (launch_context) {
+      metrics["ui_module_ready_ms"] = ms(launch_context->ui_ready_ns);
+      metrics["ui_module_bytes"] = launch_context->ui_module_bytes;
+    }
     metrics["bundled_font_styles"] = fonts.styles;
     metrics["bundled_font_data_styles"] = bundled_font_data_styles();
     for (auto kind : {DiagramModule::mermaid, DiagramModule::svg}) {
@@ -1243,7 +1249,7 @@ struct App {
                    {"fltk_patch_id", MDF_FLTK_PATCH_ID},
                    {"keyboard_preparation", MDF_ASYNC_INPUT ? "worker" : "synchronous"},
                    {"frame_preparation", MDF_PREPARE_FRAME ? "preconfigure" : "on-demand"},
-                   {"startup_policy", "eager-preparation"},
+                   {"startup_policy", "parallel-bootstrap"},
                    {"renderer", "cairo"},
                    {"video_driver", "wayland"},
                    {"navigation_status", "ready"},
@@ -1769,76 +1775,23 @@ static void wake() {
       },
       nullptr);
 }
-int main(int argc, char **argv) {
+static int frontend_main(MdfStartup *startup) {
   try {
-    const uint64_t origin = mdf_now_ns();
-    bool prof = false, bench = false, test = false, scroll = false,
-         capture_reader = false;
-    std::string path, capture, capture_anchor;
-    for (int i = 1; i < argc; ++i) {
-      std::string arg = argv[i];
-      if (arg == "--version") {
-        std::cout << "mdf 0.2.0\n";
-        return 0;
-      }
-      if (arg == "--help" || arg == "-h") {
-        std::cout << "Markdown FAST 0.2.0\nUsage: mdf [FILE.md]\n  --version   "
-                     " Show version\n  --licenses   Print third-party "
-                     "notices\n  --profile    Report startup metrics and "
-                     "exit\n  --profile-scroll Report startup and scrolling "
-                     "metrics\n  --capture PNG Save the ready frame with --profile\n"
-                     "  --capture-anchor ID Select a heading for --capture\n"
-                     "  --capture-reader Capture the reader with navigation hidden\n"
-                     "Requires a Linux Wayland session.\n";
-        return 0;
-      }
-      if (arg == "--licenses") {
-        auto bytes = mdf_notices();
-        std::cout.write((const char *)bytes.ptr, bytes.len);
-        return 0;
-      }
-      if (arg == "--profile")
-        prof = true;
-      else if (arg == "--benchmark" || arg == "--bench")
-        bench = true;
-      else if (arg == "--profile-scroll") {
-        prof = true;
-        scroll = true;
-      } else if (arg == "--self-test") {
-        test = true;
-        prof = true;
-      } else if (arg == "--capture") {
-        if (++i == argc)
-          throw std::runtime_error("--capture requires a PNG path");
-        capture = argv[i];
-      } else if (arg == "--capture-anchor") {
-        if (++i == argc)
-          throw std::runtime_error("--capture-anchor requires a heading ID");
-        capture_anchor = argv[i];
-      } else if (arg == "--capture-reader") {
-        capture_reader = true;
-      } else if (!arg.empty() && arg[0] == '-')
-        throw std::runtime_error("Unknown option: " + arg);
-      else if (!path.empty())
-        throw std::runtime_error("Open one document at a time");
-      else
-        path = arg;
-    }
-    if ((prof || bench) && path.empty())
-      throw std::runtime_error("Profiling requires a Markdown file");
-    if ((!capture_anchor.empty() || capture_reader) && (capture.empty() || !(prof || bench)))
-      throw std::runtime_error("Capture options require --capture and --profile or --benchmark");
-    if (!std::getenv("WAYLAND_DISPLAY") && !std::getenv("WAYLAND_SOCKET"))
-      throw std::runtime_error("Markdown FAST requires a Wayland session "
-                               "(WAYLAND_DISPLAY is not set).");
-    setenv("FLTK_BACKEND", "wayland", 1);
-    setenv("GDK_BACKEND", "wayland", 1);
+    if (!startup || startup->abi != MDF_FRONTEND_ABI || startup->size != sizeof(MdfStartup))
+      throw std::runtime_error("Bootstrap/frontend ABI mismatch");
+    launch_context = startup;
+    const uint64_t origin = startup->origin_ns;
+    const auto flags = startup->options.flags;
+    const bool prof = flags & MDF_LAUNCH_PROFILE, bench = flags & MDF_LAUNCH_BENCHMARK,
+               test = flags & MDF_LAUNCH_TEST, scroll = flags & MDF_LAUNCH_SCROLL,
+               capture_reader = flags & MDF_LAUNCH_READER;
+    const std::string path = startup->options.path, capture = startup->options.capture,
+                      capture_anchor = startup->options.anchor;
     Fl::lock();
     profile_enabled = prof || bench;
     profile_gui_thread = true;
-    Core core(prof || bench, origin, wake);
-    if (!path.empty())
-      core.open(path);
+    Core core(startup, wake);
+    PROFILE_MARK("UI frontend entered");
     Settings settings(core.settings());
     if (capture_reader) settings.toc = settings.preview = false;
     {
@@ -1871,22 +1824,13 @@ int main(int argc, char **argv) {
       // Send configure requests before doing local work. EAGAIN leaves the
       // regular FLTK event loop responsible for the next socket flush.
       const int sent = wl_display_flush(fl_wl_display());
-      const auto configure_not_ready = [] {
-        auto *display = fl_wl_display();
-        if (wl_display_prepare_read(display) != 0) {
-          PHASE("Dispatch queued startup Wayland events");
-          if (wl_display_dispatch_pending(display) < 0 || wl_display_prepare_read(display) != 0)
-            return false;
-        }
-        wl_display_cancel_read(display);
-        pollfd descriptor{wl_display_get_fd(display), POLLIN, 0};
-        return poll(&descriptor, 1, 0) == 0;
-      };
-      // Worker wakeups are independent of compositor readiness. Fl::ready()
-      // would otherwise skip all preparation whenever a worker finishes first.
-      if (sent >= 0 && !settings.maximized && configure_not_ready()) {
+      // A readable display can contain keyboard/output events while the
+      // window is still unconfigured. Let the driver check its own window
+      // state; fd readiness must not suppress useful local preparation.
+      if (sent >= 0 && !settings.maximized) {
         fl_mdf_prepare_window(app.window.get());
-        if (configure_not_ready() && settings.line_wrap && !app.reader->blocks.empty()) {
+        if (settings.line_wrap && !app.reader->blocks.empty()) {
+          app.window->make_current();
           app.measured_window_scale = fl_mdf_window_scale(app.window.get());
           app.reader->prepare_visible();
         }
@@ -1915,4 +1859,9 @@ int main(int argc, char **argv) {
     std::cerr << "mdf: " << e.what() << '\n';
     return 1;
   }
+}
+
+extern "C" const MdfFrontendApi *mdf_frontend_api(uint32_t abi) {
+  static const MdfFrontendApi api{MDF_FRONTEND_ABI, sizeof(MdfFrontendApi), frontend_main};
+  return abi == MDF_FRONTEND_ABI ? &api : nullptr;
 }

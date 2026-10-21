@@ -3,24 +3,22 @@
 mdf_prefix=${1:-build}
 mdf_mode=${OPTIMIZE:-Debug}
 case "$mdf_mode" in
-    ReleaseFast) mdf_cmake_mode=Release;mdf_lto=ON;mdf_rust_profile=release;;
-    Debug) mdf_cmake_mode=Debug;mdf_lto=OFF;mdf_rust_profile=debug;;
+    ReleaseFast) mdf_cmake_mode=Release;mdf_lto=ON;;
+    Debug) mdf_cmake_mode=Debug;mdf_lto=OFF;;
     *) printf '%s\n' 'The GUI supports Debug or ReleaseFast. Core tests also support ReleaseSafe.' >&2;exit 1;;
 esac
-printf 'Building SVG rasterizer (%s, offline)...\n' "$mdf_mode"
-sh scripts/build-svg.sh "$mdf_mode"
 export ZIG_LOCAL_CACHE_DIR="$MDF_ROOT/build/.zig-cache/local"
 export CCACHE_DIR="$MDF_ROOT/build/.ccache"
 mdf_core="$MDF_ROOT/build/fltk-core/$mdf_mode"
 mdf_sdk="$MDF_ROOT/build/fltk/$mdf_mode"
 mdf_ui="$MDF_ROOT/build/fltk-ui/$mdf_mode"
-printf 'Building Zig core and fonts (%s)...\n' "$mdf_mode"
+printf 'Building Zig core, renderers and fonts (%s, offline)...\n' "$mdf_mode"
 "$ZIG" build --system zig-pkg --cache-dir build/.zig-cache "-Dtarget=$MDF_TARGET" -Dcpu=baseline "-Doptimize=$mdf_mode" --prefix "$mdf_core"
 rm -f "$mdf_core/bin/libmdf-extra.so"
 mdf_lib="$mdf_core/lib"
 if [ "$mdf_lto" = ON ];then
     mkdir -p "$mdf_core/native"
-    for mdf_archive in mdf-core mdf-pozeiden;do
+    for mdf_archive in mdf-core mdf-pozeiden mdf-svg;do
         "$ZIG" ld.lld -r -O3 --lto-O3 --whole-archive "$mdf_lib/lib$mdf_archive.a" --no-whole-archive -o "$mdf_core/native/$mdf_archive.o"
         rm -f "$mdf_core/native/lib$mdf_archive.next.a"
         "$ZIG" ar rcs "$mdf_core/native/lib$mdf_archive.next.a" "$mdf_core/native/$mdf_archive.o"
@@ -52,12 +50,22 @@ cmake -S frontend -B "$mdf_ui" -G Ninja \
     -DCMAKE_C_COMPILER="${MDF_CC:-/usr/bin/gcc}" -DCMAKE_CXX_COMPILER="${MDF_CXX:-/usr/bin/g++}" \
     "-DCMAKE_BUILD_TYPE=$mdf_cmake_mode" "-DFLTK_DIR=$mdf_sdk" "-DMDF_CORE_DIR=$mdf_lib" \
     "-DMDF_FLTK_PATCH_ID=$mdf_fltk_patch" \
-    "-DMDF_ASYNC_INPUT=${MDF_ASYNC_INPUT:-ON}" "-DMDF_PREPARE_FRAME=${MDF_PREPARE_FRAME:-OFF}" \
+    "-DMDF_ASYNC_INPUT=${MDF_ASYNC_INPUT:-ON}" "-DMDF_PREPARE_FRAME=${MDF_PREPARE_FRAME:-ON}" \
     "-DMDF_MERMAID_LIBRARY=$mdf_lib/libmdf-pozeiden.a" \
-    "-DMDF_SVG_LIBRARY=$MDF_ROOT/build/svg/$mdf_rust_profile/libmdf_svg.a"
+    "-DMDF_SVG_LIBRARY=$mdf_lib/libmdf-svg.a"
 cmake --build "$mdf_ui" --parallel "${MDF_BUILD_JOBS:-2}"
 mkdir -p "$mdf_prefix/bin"
-cp "$mdf_ui/mdf" "$mdf_prefix/bin/mdf.new"
+cp "$mdf_core/bin/mdf-launcher" "$mdf_prefix/bin/mdf.new"
+if [ "$mdf_lto" = ON ];then
+    objcopy --only-keep-debug "$mdf_prefix/bin/mdf.new" "$mdf_ui/mdf.debug"
+    strip --strip-all "$mdf_prefix/bin/mdf.new"
+    cp "$mdf_ui/mdf.debug" "$mdf_prefix/bin/mdf.debug"
+    cp "$mdf_ui/mdf-ui.debug" "$mdf_prefix/bin/mdf-ui.debug"
+fi
+python3 scripts/pack-frontend.py --binary "$mdf_prefix/bin/mdf.new" --module "$mdf_ui/libmdf-ui.so"
+for mdf_renderer in mermaid svg;do
+    python3 scripts/pack-diagram.py embed --kind "$mdf_renderer" --binary "$mdf_prefix/bin/mdf.new" --payload "$mdf_ui/mdf-$mdf_renderer.payload"
+done
 mv "$mdf_prefix/bin/mdf.new" "$mdf_prefix/bin/mdf"
 rm -f "$mdf_prefix/bin/libmdf-extra.so" "$mdf_prefix/bin/libmdf-extra.so.new"
 printf 'Built %s/bin/mdf\n' "$mdf_prefix"

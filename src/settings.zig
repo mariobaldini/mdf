@@ -95,7 +95,7 @@ pub const Store = struct {
     pub fn save(self: *const Store, values: Values) !void {
         const json = try std.json.Stringify.valueAlloc(self.allocator, values, .{ .whitespace = .indent_2 });
         defer self.allocator.free(json);
-        const directory = try self.allocator.dupeZ(u8, std.fs.path.dirname(self.path).?);
+        const directory = try self.allocator.dupeSentinel(u8, std.fs.path.dirname(self.path).?, 0);
         defer self.allocator.free(directory);
         for (directory, 0..) |ch, i| {
             if (ch != '/' or i == 0) continue;

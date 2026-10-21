@@ -121,9 +121,9 @@ const fmt=(value,digits=2)=>Number.isFinite(Number(value))?Number(value).toFixed
 const ms=(ns,digits=2)=>`${fmt(ns/1e6,digits)} ms`;
 const elapsed=ns=>ns>=1e6?ms(ns,3):ns>=1000?`${fmt(ns/1000,2)} µs`:`${ns} ns`;
 const bytes=value=>value==null?'—':value<1024?`${value} B`:value<1048576?`${fmt(value/1024,1)} KiB`:`${fmt(value/1048576,2)} MiB`;
-const colors={launch:'var(--launch)',gui:'var(--gui)',document:'var(--document)',fonts:'var(--fonts)',navigation:'var(--navigation)',images:'hsl(331 59% 49%)',fallback:'hsl(187 60% 40%)',input:'hsl(12 70% 45%)'};
-const hues={launch:[207,25,40],gui:[217,59,47],document:[157,61,32],fonts:[35,72,38],navigation:[270,44,46],images:[331,59,49],fallback:[187,60,40],input:[12,70,45]};
-const short={launch:'Pre-load',gui:'GUI',document:'Document',fonts:'Monospace',navigation:'Navigation',images:'Images / diagrams',fallback:'Glyph fallback',input:'Keyboard'};
+const colors={launch:'var(--launch)',gui:'var(--gui)',document:'var(--document)',fonts:'var(--fonts)',navigation:'var(--navigation)',images:'hsl(331 59% 49%)',fallback:'hsl(187 60% 40%)',input:'hsl(12 70% 45%)',ui:'hsl(45 70% 48%)',ui_dependencies:'hsl(28 70% 48%)',frame_memory:'hsl(193 70% 42%)'};
+const hues={launch:[207,25,40],gui:[217,59,47],document:[157,61,32],fonts:[35,72,38],navigation:[270,44,46],images:[331,59,49],fallback:[187,60,40],input:[12,70,45],ui:[45,70,48],ui_dependencies:[28,70,48],frame_memory:[193,70,42]};
+const short={launch:'Pre-load',gui:'GUI',document:'Document',fonts:'Monospace',navigation:'Navigation',images:'Images / diagrams',fallback:'Glyph fallback',input:'Keyboard',ui:'UI loader',ui_dependencies:'UI libraries',frame_memory:'Frame memory'};
 Object.keys(archive.tracks).forEach((track,index)=>{if(!(track in colors)){const hue=(index*71)%360;colors[track]=`hsl(${hue} 48% 47%)`;hues[track]=[hue,48,47];short[track]=archive.tracks[track];}});
 let selected=0,range=null,picked=null,zoom=1;
 let dependencyZoom=1,dependencyFit=true;

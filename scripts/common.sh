@@ -2,12 +2,16 @@
 set -eu
 MDF_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$MDF_ROOT"
-ZIG=${ZIG:-zig}
 OPTIMIZE=${OPTIMIZE:-Debug}
 MDF_TARGET=${MDF_TARGET:-x86_64-linux-gnu.2.38}
 ZIG_GLOBAL_CACHE_DIR=${ZIG_GLOBAL_CACHE_DIR:-$MDF_ROOT/build/.zig-cache/global}
 export ZIG_GLOBAL_CACHE_DIR
 MDF_ZIG_VERSION=$(cat .zig-version)
+if [ -z "${ZIG:-}" ] && [ -x "$MDF_ROOT/zig-pkg/zig-$MDF_ZIG_VERSION/zig" ]; then
+    ZIG="$MDF_ROOT/zig-pkg/zig-$MDF_ZIG_VERSION/zig"
+else
+    ZIG=${ZIG:-zig}
+fi
 
 check_tools() {
     mdf_errors=0
@@ -34,9 +38,9 @@ check_tools() {
         printf '%s\n' 'Missing certificates. Fedora 44: sudo dnf install ca-certificates' >&2
         mdf_errors=1
     fi
-    for mdf_tool in cmake ninja gcc g++ pkg-config python3 cargo rustc; do
+    for mdf_tool in cmake ninja gcc g++ pkg-config python3; do
         if ! command -v "$mdf_tool" >/dev/null 2>&1; then
-            printf 'Missing %s. Run make setup (Fedora: cmake ninja-build gcc-c++ pkgconf-pkg-config python3 cargo rust).\n' "$mdf_tool" >&2
+            printf 'Missing %s. Run make setup (Fedora: cmake ninja-build gcc-c++ pkgconf-pkg-config python3).\n' "$mdf_tool" >&2
             mdf_errors=1
         fi
     done
@@ -75,7 +79,7 @@ offline_graph_check() {
 
 check_frontend_cache() {
     test -f "$MDF_ROOT/zig-pkg/fltk/CMakeLists.txt" && test -f "$MDF_ROOT/zig-pkg/nlohmann/json.hpp" && \
-    test -f "$MDF_ROOT/modules/pozeiden/src/root.zig" && test -d "$MDF_ROOT/zig-pkg/svg-deps" || {
+    test -f "$MDF_ROOT/modules/pozeiden/src/root.zig" && test -f "$MDF_ROOT/modules/zig-svg/src/root.zig" || {
         printf '%s\n' 'Missing pinned FLTK/JSON/SVG sources or Pozeiden submodule. Run make setup (or git submodule update --init --recursive).' >&2
         return 1
     }

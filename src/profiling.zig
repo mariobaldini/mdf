@@ -1,7 +1,7 @@
 const std = @import("std");
 const c = @import("native");
 
-pub const Track = enum { gui, document, fonts, navigation, images, fallback, input };
+pub const Track = enum { gui, document, fonts, navigation, images, fallback, input, ui, ui_dependencies };
 pub const Kind = enum { work, wait, signal };
 pub const Event = struct {
     name: []const u8,
@@ -37,7 +37,11 @@ pub fn begin(comptime src: std.builtin.SourceLocation, comptime name: []const u8
 }
 
 pub fn wait(comptime src: std.builtin.SourceLocation, comptime name: []const u8) Span {
-    return if (active) |recorder| recorder.start(src, name, .gui, .wait) else .{};
+    return waitOn(src, name, .gui);
+}
+
+pub fn waitOn(comptime src: std.builtin.SourceLocation, comptime name: []const u8, track: Track) Span {
+    return if (active) |recorder| recorder.start(src, name, track, .wait) else .{};
 }
 
 // Readiness signals establish cross-thread dependencies without inventing
@@ -78,7 +82,7 @@ pub const Span = struct {
         var event = self.event;
         event.duration_ns = nowNs() - self.started;
         // Each track has one writer. Only the completed event buffer is shared.
-        recorder.depths[@intFromEnum(event.track)] -= 1;
+        recorder.depths[@backingInt(event.track)] -= 1;
         _ = c.pthread_mutex_lock(&recorder.mutex);
         defer _ = c.pthread_mutex_unlock(&recorder.mutex);
         if (recorder.count == recorder.events.len) {
@@ -96,7 +100,7 @@ pub const Recorder = struct {
     events: [4096]Event = undefined,
     count: usize = 0,
     dropped: usize = 0,
-    depths: [@typeInfo(Track).@"enum".fields.len]usize = @splat(0),
+    depths: [@typeInfo(Track).@"enum".field_names.len]usize = @splat(0),
 
     pub fn init(self: *Recorder, origin: u64) !void {
         self.* = .{ .origin = origin };
@@ -115,7 +119,7 @@ pub const Recorder = struct {
 
     pub fn start(self: *Recorder, comptime src: std.builtin.SourceLocation, comptime name: []const u8, track: Track, kind: Kind) Span {
         const started = nowNs();
-        const index = @intFromEnum(track);
+        const index = @backingInt(track);
         const depth = self.depths[index];
         self.depths[index] += 1;
         return .{

@@ -2,9 +2,13 @@
     .name = .mdf,
     .fingerprint = 0x1a0eebaf571cb338,
     .version = "0.2.0",
-    .minimum_zig_version = "0.16.0",
+    .minimum_zig_version = "0.17.0",
     .dependencies = .{
-        .pozeiden = .{ .path = "modules/pozeiden" },
+        .zig_svg = .{ .path = "modules/zig-svg" },
+        .mvzr = .{
+            .url = "git+https://github.com/mnemnion/mvzr?ref=v0.3.9#dd0e1bd2d6b10f9650317b30baef7ab7bc9dd9ec",
+            .hash = "mvzr-0.3.9-ZSOky8FzAQBQ9-GkQnaLjOZZHxrioD8NwY-QyZT6oAyR",
+        },
         .md4c = .{
             .url = "https://github.com/mity/md4c/archive/472c417005c2c71b8617de4f7b8d6b30411d78f4.tar.gz",
             .hash = "N-V-__8AAF-DEADsiGuy83YqbGOj9AVrUnWIMka5RE7AHvK7",

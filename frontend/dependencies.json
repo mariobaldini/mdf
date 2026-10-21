@@ -14,6 +14,12 @@
     "url": "https://raw.githubusercontent.com/nlohmann/json/v3.12.0/LICENSE.MIT",
     "sha256": "46a65cffd1ea955132d95a8dd921640714a8d6b537d2e4e482d31145ae95b603"
   },
+  "zig_svg": {
+    "version": "0.2.0",
+    "commit": "6feaa8d4aee609b0945473931fb27fdcdf1ebfef",
+    "url": "https://github.com/jcollie/zig-svg.git",
+    "license": "MIT"
+  },
   "pozeiden": {
     "version": "0.4.1",
     "commit": "071fbbb85fb73a06994c163c6093123bd3ac11f6",

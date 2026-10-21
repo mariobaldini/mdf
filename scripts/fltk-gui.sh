@@ -2,7 +2,7 @@
 set -eu
 mdf_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$mdf_root"
-mdf_binary=${1:-build/fltk-ui/ReleaseFast/mdf}
+mdf_binary=${1:-build/bin/mdf}
 mdf_binary=$(realpath "$mdf_binary")
 mkdir -p build/fltk-tests
 mdf_test=$(mktemp -d "$mdf_root/build/fltk-tests/run.XXXXXX")
@@ -42,6 +42,11 @@ assert not data['metrics']['first_viewport_monospace']
 assert 'monospace_request_ms' not in data['metrics']
 assert data['metrics']['fallback_status']=='not-needed'
 assert 'fallback_request_ms' not in data['metrics']
+if data.get('frame_preparation')=='preconfigure':
+    prep=next(e for e in data['events'] if e['name']=='Prepare first viewport during window configuration')
+    assert any(e['name']=='Measure visible Markdown blocks' and prep['start_ns']<=e['start_ns'] and
+               e['start_ns']+e['duration_ns']<=prep['start_ns']+prep['duration_ns'] for e in data['events'])
+    print('PASS: visible Markdown layout is actually prepared before the normal paint')
 print('PASS: Latin text and inline code never start system font discovery')
 PY
 
@@ -105,7 +110,7 @@ data=json.load(open(sys.argv[1]));m=data['metrics']
 assert m['monospace_status']=='not-needed' and m['fallback_status']=='ready'
 assert m['rendered_diagrams']==1 and m['diagram_errors']==0
 assert any(e['name']=='Map prepared fallback fonts for diagram labels' for e in data['events'])
-print('PASS: Unicode Mermaid labels use prepared fonts without monospace discovery')
+print('PASS: Unicode Mermaid receives prepared font bytes; SVG glyph fallback remains backend-limited')
 PY
 
 # A system with no usable mono font still completes and keeps readable code.
@@ -189,6 +194,26 @@ for name in ('font-access','svg'):
         assert len(calls)==int(kind=='svg' or name=='font-access'),(name,kind)
         assert all(call.start()>marker for call in calls),(name,kind)
 print('PASS: SVG loads only SVG; Mermaid loads layout and SVG once each; ordinary documents skip both modules')
+PY
+
+# The sequence example exercises the repaired separator font attribute and
+# needs italic SVG text, while the Markdown body itself uses no italics.
+{
+    printf '# Sequence diagram\n\n```mermaid\n'
+    cat "$mdf_root/modules/pozeiden/examples/sequence.mmd"
+    printf '\n```\n'
+} > "$mdf_test/sequence.md"
+env -u WAYLAND_SOCKET XDG_RUNTIME_DIR="$mdf_test/runtime" WAYLAND_DISPLAY=mdf-test \
+    "$mdf_binary" --profile --capture "$mdf_test/sequence.png" "$mdf_test/sequence.md" \
+    >"$mdf_test/sequence.log" 2>"$mdf_test/sequence.err"
+python3 - "$mdf_test/sequence.log" <<'PY'
+import json,sys
+data=json.load(open(sys.argv[1]));m=data['metrics']
+assert m['svg_engine']=='zig-svg' and m['rendered_diagrams']==1 and m['diagram_errors']==0
+assert m['bundled_font_styles']==3 and m['bundled_font_data_styles']==7,m
+events=[e for e in data['events'] if e['name']=='Decompress Open Sans italic']
+assert len(events)==1 and events[0]['start_ns']/1e6 > m['first_document_flush_ms']
+print('PASS: sequence renders with zig-svg; its italic face loads only after the first Markdown flush')
 PY
 
 # Parsed emphasis loads exactly the needed face before the first document

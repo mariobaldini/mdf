@@ -20,6 +20,15 @@ print('PASS: executable GLIBC symbol requirements stay within the declared 2.38 
 spec=importlib.util.spec_from_file_location('mdf_profile','scripts/profile.py')
 profile=importlib.util.module_from_spec(spec);spec.loader.exec_module(profile)
 image=profile.elf_file(Path('build/mdf'))
+ui=next(s for s in image['sections'] if s['name']=='.mdf_ui')
+assert not ui['flags'] & 2
+with tempfile.NamedTemporaryFile(suffix='.so') as file:
+    file.write(image['data'][ui['offset']:ui['offset']+ui['bytes']]);file.flush()
+    versions=re.findall(r'GLIBC_([0-9.]+)',subprocess.check_output(['readelf','--version-info',file.name],text=True))
+    assert max(tuple(map(int,v.split('.'))) for v in versions)<=(2,38)
+    symbols=subprocess.check_output(['nm','-D','--defined-only',file.name],text=True)
+    assert [line.split()[-1] for line in symbols.splitlines()]==['mdf_frontend_api']
+print('PASS: private embedded UI engine stays within the declared glibc 2.38 minimum')
 for name in ('.mdf_mermaid','.mdf_svg'):
     section=next(s for s in image['sections'] if s['name']==name)
     assert not section['flags'] & 2

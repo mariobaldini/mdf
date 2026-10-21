@@ -36,6 +36,11 @@ def estimate(values):
     return statistics.mean(values),factor*statistics.stdev(values)/math.sqrt(n) if n>1 else 0
 
 
+def check_conditions(initial, current):
+    if any(current.get(key) != initial.get(key) for key in ('cpu_affinity', 'cpu_governors', 'cpu_power')):
+        raise RuntimeError('CPU affinity or power settings changed during the comparison; no mixed-power result is valid.')
+
+
 def assess(rows, policy='startup'):
     """Apply the agreed selection rule; confidence never excuses a tail regression."""
     failures, uncertain = [], []
@@ -87,9 +92,10 @@ def benchmark(before, after, output, batches, pairs, policy='startup', documents
     with zipfile.ZipFile(directory/'sources.zip','w',zipfile.ZIP_DEFLATED) as bundle:
         for pattern in ('src/*.zig','frontend/*.cpp','frontend/*.hpp','frontend/*.c','frontend/*.h',
                         'frontend/CMakeLists.txt','frontend/core-build.zig','frontend/dependencies.json','frontend/diagram-module.map','frontend/patches/fltk/*',
-                        'frontend/pozeiden.zig','frontend/svg/*.txt','frontend/svg/src/*.rs','frontend/svg/Cargo.*',
+                        'frontend/pozeiden.zig','frontend/svg.zig','frontend/launcher.zig','frontend/frontend.map','assets/licenses/*',
                         'modules/pozeiden/**/*.zig','modules/pozeiden/build.zig.zon','modules/pozeiden/**/*.langium','modules/pozeiden/LICENSE','.gitmodules',
-                        'scripts/build-frontend.sh','scripts/build-svg.sh','scripts/prepare-fltk.py','scripts/pack-diagram.py','scripts/pack-font.py'):
+                        'modules/zig-svg/**/*.zig','modules/zig-svg/build.zig.zon','modules/zig-svg/LICENSES/*',
+                        'scripts/build-frontend.sh','scripts/prepare-mvzr.py','scripts/prepare-fltk.py','scripts/pack-diagram.py','scripts/pack-frontend.py','scripts/pack-font.py'):
             for path in sorted(ROOT.glob(pattern)):
                 if path.is_file():bundle.write(path,path.relative_to(ROOT))
     documents=documents or [ROOT/'SAMPLE.md',ROOT/'SAMPLE-HUGE.md']
@@ -113,8 +119,7 @@ def benchmark(before, after, output, batches, pairs, policy='startup', documents
             row={'batch':batch+1,'pair':pair+1,'document':doc.name,'order':order}
             for variant in order:
                 conditions=profile.runtime_conditions()
-                if conditions['cpu_governors']!=initial['cpu_governors'] or conditions['cpu_affinity']!=initial['cpu_affinity']:
-                    raise RuntimeError('CPU governor/affinity changed during the comparison.')
+                check_conditions(initial, conditions)
                 executable.write_bytes(binaries[variant]);executable.chmod(0o755)
                 with tempfile.TemporaryDirectory(prefix='cache-',dir=directory) as cache:
                     inputs=profile.cold_input_paths(executable,doc)
@@ -125,6 +130,8 @@ def benchmark(before, after, output, batches, pairs, policy='startup', documents
                     process=subprocess.run([str(executable),'--profile',str(doc)],env={**environment,'XDG_CACHE_HOME':cache},
                                            capture_output=True,text=True,timeout=45)
                     finished=time.monotonic_ns()
+                final_conditions=profile.runtime_conditions()
+                check_conditions(initial, final_conditions)
                 if process.returncode:raise RuntimeError(process.stderr)
                 raw=json.loads(process.stdout)
                 if raw.get('mode')!='ReleaseFast' or raw.get('ui_mode')!='Release' or raw.get('dropped_events'):
@@ -134,7 +141,7 @@ def benchmark(before, after, output, batches, pairs, policy='startup', documents
                     rendering=[(e['start_ns']+e['duration_ns'])/1_000_000 for e in measured['events']
                                if e['name'] in ('Render Mermaid diagram','Render SVG image')]
                     if rendering: measured['metrics']['first_diagram_ms']=min(rendering)
-                measured.update({'cache_reset':reset,'runtime_conditions':conditions,'stderr':process.stderr.strip(),
+                measured.update({'cache_reset':reset,'runtime_conditions':conditions,'runtime_conditions_after':final_conditions,'stderr':process.stderr.strip(),
                                  'batch':batch+1,'pair':pair+1})
                 collected[variant][doc].append(measured)
                 row[variant]=measured['metrics']
@@ -192,7 +199,8 @@ def benchmark(before, after, output, batches, pairs, policy='startup', documents
             batch_rows.append('<tr>'+''.join(f'<td>{html.escape(str(value))}</td>' for value in [batch,doc.name,
                 *[f'{statistics.median([r[v][k] for r in selected]):.2f}' for k in ['scaffold_ms','first_document_ms','first_frame_ms'] for v in ['before','after']]])+'</tr>')
     body='''<!doctype html><meta charset=utf-8><title>MDF paired startup comparison</title><style>body{font:15px system-ui;max-width:1300px;margin:36px auto;padding:0 22px;background:#15202d;color:#e2e9f0}table{width:100%;border-collapse:collapse;margin:18px 0}td,th{padding:9px;text-align:left;border-bottom:1px solid #3b4a5b}p{line-height:1.6}a{color:#8cbaff}details{margin:22px 0}pre{white-space:pre-wrap}</style><h1>Paired optimized startup comparison</h1>'''
-    body+=f'<p>{batches} batches × {pairs} pairs per document; {batches*pairs*4} cold launches. Governor: {html.escape(", ".join(initial["cpu_governors"]))}. No tracing; no outliers removed. Positive saving means faster.</p>'
+    body+=f'<p>{batches} batches × {pairs} pairs per document; {batches*pairs*len(documents)*2} cold launches. Governor: {html.escape(", ".join(initial["cpu_governors"]))}. No tracing; no outliers removed. Positive saving means faster.</p>'
+    body+='<p>CPU power settings and affinity were checked before and after every launch: governor, energy preference, frequency limits, turbo/boost, platform profile, and readable power caps. A change aborts the comparison.</p>'
     body+=f'<p><strong>Selection: {decision["status"].upper()}</strong> — '+html.escape(' · '.join(decision['reasons']))+'</p>'
     if any(row['after'].get('rendered_diagrams', 0) > row['before'].get('rendered_diagrams', 0) for row in rows):
         body+='<p>The after build renders Mermaid diagrams; the before build displays their source. Startup totals include this added rendering work.</p>'

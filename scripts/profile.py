@@ -27,7 +27,8 @@ import zlib
 
 TRACKS = {"launch": "Pre-load / startup", "gui": "GUI / main thread", "document": "Document worker", "fonts": "Deferred monospace worker",
           "navigation": "Navigation / assets worker", "images": "Images / diagrams worker", "fallback": "Sans glyph fallback worker",
-          "input": "Keyboard preparation worker"}
+          "input": "Keyboard preparation worker", "ui": "UI module loader", "ui_dependencies": "UI libraries loader",
+          "frame_memory": "First-frame memory worker"}
 
 
 def command_output(arguments, cwd=None):
@@ -165,7 +166,15 @@ def symbol_family(name):
     return None
 
 
-def binary_breakdown(root, binary):
+def embedded_ui(image):
+    section=next((s for s in image['sections'] if s['name']=='.mdf_ui'),None)
+    if not section or section['flags'] & 2 or not 64<=section['bytes']<=256*1024*1024:
+        return None
+    data=image['data'][section['offset']:section['offset']+section['bytes']]
+    return data if data[:6]==b'\x7fELF\x02\x01' and struct.unpack_from('<HH',data,16)==(3,62) else None
+
+
+def binary_breakdown(root, binary, ui_engine=False):
     """Partition actual executable file bytes once, without archive-size estimates."""
     try:
         image = elf_file(binary)
@@ -174,7 +183,8 @@ def binary_breakdown(root, binary):
     symbols = image
     if not any(s["type"] == 2 for s in image["sections"]):
         symbols = None
-        for candidate in (binary.with_name(binary.name + ".debug"), root / "build/fltk-ui/ReleaseFast/mdf.debug"):
+        for candidate in (binary.with_name(binary.name + ".debug"),
+                          root / ('build/fltk-ui/ReleaseFast/mdf-ui.debug' if ui_engine else 'build/fltk-ui/ReleaseFast/mdf.debug')):
             try:
                 debug = elf_file(candidate)
             except (OSError, ValueError, struct.error):
@@ -194,6 +204,10 @@ def binary_breakdown(root, binary):
         if section["type"] in (0, 8):  # SHT_NOBITS consumes RAM, not disk bytes.
             continue
         name = section["name"]
+        if name == ".mdf_ui":
+            add(section["offset"], section["offset"] + section["bytes"],
+                ("Deferred UI engine", "FLTK, UI and image codecs (uncompressed)"), 30)
+            continue
         if name in (".mdf_mermaid", ".mdf_svg"):
             add(section["offset"], section["offset"] + section["bytes"],
                 ("Compressed renderers", "Mermaid layout (zlib)" if name == ".mdf_mermaid" else "SVG rendering (zlib)"), 30)
@@ -303,6 +317,15 @@ def binary_breakdown(root, binary):
                             "codec": "zlib", "abi": abi})
     if modules:
         result["diagram_modules"] = modules
+    payload=embedded_ui(image) if not ui_engine else None
+    if payload:
+        with tempfile.TemporaryDirectory(prefix='mdf-ui-size-') as directory:
+            path=Path(directory)/'mdf-ui';path.write_bytes(payload)
+            detail=binary_breakdown(root,path,ui_engine=True)
+        node=next((node for node in children if node['name']=='Deferred UI engine'),None)
+        if node and detail.get('available'):
+            node['children']=detail['children']
+        result['ui_module']={'bytes':len(payload),'codec':'none','abi':1}
     return result
 
 
@@ -330,7 +353,10 @@ def project_context(root, binary, document, run):
         pozeiden = run["metrics"].get("mermaid_engine") == "pozeiden"
         version = "Pozeiden " + frontend["pozeiden"]["version"] if pozeiden else frontend.get("mermaid", {}).get("version", "0.3.1 (previous Rust renderer)")
         bundled("Mermaid renderer", version, "Zig/Pozeiden Mermaid parsing and layout" if pozeiden else "Native Rust diagram parsing and layout")
-        bundled("SVG rendering", "resvg/usvg 0.47.0", "Diagram rasterization and embedded-font shaping")
+        if run['metrics'].get('svg_engine') == 'zig-svg':
+            bundled("SVG rendering", "zig-svg " + frontend['zig_svg']['version'], "Zig SVG parsing and z2d rasterization")
+        else:
+            bundled("SVG rendering", "resvg/usvg 0.47.0", "Previous SVG rasterization and embedded-font shaping")
     for name, directory, filename, pattern, archive, role in (
         ("libpng", "png", "png.h", r'#define PNG_LIBPNG_VER_STRING\s+"([^"]+)"', "png", "PNG decoding"),
         ("IJG JPEG", "jpeg", "README", r"README for release (\S+)", "jpeg", "JPEG decoding"),
@@ -357,7 +383,16 @@ def project_context(root, binary, document, run):
 
     # Resolve actual runtime files rather than reporting source-tree sizes.
     linked = {}
-    for line in (command_output(["ldd", str(binary)]) or "").splitlines():
+    dependency_output=command_output(["ldd", str(binary)]) or ""
+    try:
+        ui_payload=embedded_ui(elf_file(binary))
+    except (OSError,ValueError,struct.error):
+        ui_payload=None
+    if ui_payload:
+        with tempfile.TemporaryDirectory(prefix='mdf-ui-libraries-') as directory:
+            path=Path(directory)/'ui.so';path.write_bytes(ui_payload)
+            dependency_output+='\n'+(command_output(['ldd',str(path)]) or '')
+    for line in dependency_output.splitlines():
         match = re.match(r"\s*(\S+) => (/\S+)", line)
         if match:
             linked[match.group(1)] = Path(match.group(2)).resolve()
@@ -385,13 +420,22 @@ def project_context(root, binary, document, run):
     indirect = [{"name": name, "bytes": path.stat().st_size} for name, path in sorted(linked.items())
                 if name not in used and path.is_file()]
     binary_size = binary_breakdown(root, binary)
-    groups = {group["name"]: group for group in binary_size.get("children", [])}
+    groups={}
+    def collect(node):
+        if node.get('children'):
+            name=node['name']
+            group=groups.setdefault(name,{'bytes':0,'children':[]})
+            group['bytes']+=node['bytes'];group['children']+=node['children']
+            for child in node['children']:collect(child)
+    collect(binary_size)
     if "diagram_module" in binary_size:
         for library in libraries:
             if library["name"] in ("Mermaid renderer", "SVG rendering"):
                 library["size_basis"] = "inside the shared compressed payload"
         bundled("Compressed diagram module", "ABI 1", "Mermaid, SVG and Rust support; loaded after the first viewport")
     retained = {item["name"]: item["bytes"] for item in groups.get("Bundled libraries", {}).get("children", [])}
+    if 'ui_module' in binary_size:
+        bundled('UI engine','ABI 1','UI code loaded in parallel from an uncompressed embedded ELF',included='uncompressed embedded module')
     aliases = {"libpng": "PNG", "IJG JPEG": "JPEG", "zlib": "ZLIB"}
     for library in libraries:
         library["linked_bytes"] = (groups.get("Compressed diagram module", {}).get("bytes") if library["name"] == "Compressed diagram module"
@@ -401,6 +445,7 @@ def project_context(root, binary, document, run):
         if module:
             library["linked_bytes"] = module["packed_bytes"] + module["header_bytes"]
             library["size_basis"] = "independent compressed module"
+        if library['name']=='UI engine':library['linked_bytes']=binary_size['ui_module']['bytes']
     return {"name": "Markdown FAST", "version": run["version"],
             "build": f'{run["mode"]} / {run.get("ui_mode", "Release")} · x86_64 baseline · LTO',
             "compiler": command_output([os.environ.get("ZIG", "zig"), "version"]),
@@ -565,9 +610,9 @@ def account_thread_time(run, ready):
                     kind, name = "idle", "Before main entry"
                 elif track == "gui" and low == 0:
                     name = "Untraced startup / GUI setup"
-                elif track in ("document", "navigation", "images", "fallback", "input") or (track == "fonts" and "Request system monospace" in signals):
-                    request = signals.get({"document": "Request document", "navigation": "Request navigation", "images": "Request image decoding", "fonts": "Request system monospace", "fallback": "Request system Sans fallback", "input": "Request keyboard preparation"}[track])
-                    finished = signals.get({"document": "Document ready", "navigation": "Navigation ready", "images": "Images ready", "fonts": "System monospace prepared", "fallback": "System Sans fallback prepared", "input": "Keyboard preparation ready"}[track])
+                elif track in ("document", "navigation", "images", "fallback", "input", "ui", "ui_dependencies", "frame_memory") or (track == "fonts" and "Request system monospace" in signals):
+                    request = signals.get({"document": "Request document", "navigation": "Request early document assets" if "Request early document assets" in signals else "Request navigation", "images": "Request image decoding", "fonts": "Request system monospace", "fallback": "Request system Sans fallback", "input": "Request keyboard preparation", "ui":"Request UI engine", "ui_dependencies":"Request UI dependencies", "frame_memory":"Request first-frame shared memory"}[track])
+                    finished = signals.get({"document": "Document ready", "navigation": "Navigation ready", "images": "Images ready", "fonts": "System monospace prepared", "fallback": "System Sans fallback prepared", "input": "Keyboard preparation ready", "ui":"UI engine ready", "ui_dependencies":"UI dependencies ready", "frame_memory":"First-frame shared memory prepared"}[track])
                     if request is not None and high <= request:
                         kind = "idle"
                         name = "Deferred — first viewport" if track in ("navigation", "fonts", "fallback") and request >= viewport and high <= viewport else "Not requested yet"
@@ -631,7 +676,7 @@ def startup_dependencies(run):
     if any(name not in signals for name in required) or any(name not in metrics for name in ("scaffold_ms", "first_document_ms")):
         return {"nodes": [], "edges": [], "gates": []}
     ns = lambda key: round(metrics[key] * 1_000_000)
-    if run.get("startup_policy") == "eager-preparation":
+    if run.get("startup_policy") in ("eager-preparation", "parallel-bootstrap"):
         return eager_startup_dependencies(run, signals, ns)
     nodes = [
         {"id": "start", "label": "Document requested", "track": "gui", "at_ns": signals["Request document"]},
@@ -827,58 +872,80 @@ def call_graph_model(run):
     signals = [e for e in events if e["kind"] == "signal"]
     end = lambda e: e["start_ns"] + e["duration_ns"]
     definitions = (
+        ("ui_dependencies", "Request UI dependencies", "UI dependencies ready", "UI dependencies adopted", "Link and initialize UI engine"),
+        ("ui", "Request UI engine", "UI engine ready", "UI frontend entered", "Initialize FLTK native scheme"),
         ("document", "Request document", "Document ready", "Accept document", "Accept loaded document"),
         ("navigation", "Request navigation", "Navigation ready", "Accept navigation", "Apply table of contents"),
         ("images", "Request image decoding", "Images ready", "Accept images", "Adopt decoded image pixels"),
         ("fonts", "Request system monospace", "System monospace prepared", "System monospace adopted", "Adopt system monospace"),
         ("fallback", "Request system Sans fallback", "System Sans fallback prepared", "System Sans fallback adopted", "Adopt system Sans fallback"),
         ("input", "Request keyboard preparation", "Keyboard preparation ready", "Keyboard resources adopted", "Adopt prepared keyboard resources"),
+        ("frame_memory", "Request first-frame shared memory", "First-frame shared memory prepared", "First-frame shared memory adopted", "Adopt prepared first-frame shared memory"),
     )
     tasks = []
     for track, request_name, ready_name, accept_name, scope in definitions:
+        receiver_track = "ui" if track == "ui_dependencies" else "gui"
+        receiver_roots = [e for e in roots if e["track"] == receiver_track]
         requests = [e["start_ns"] for e in signals if e["name"] == request_name]
         for ready_signal in (e for e in signals if e["name"] == ready_name):
             ready = ready_signal["start_ns"]
             request = max((at for at in requests if at <= ready), default=None)
+            if track == 'navigation' and request is not None:
+                # Preview layout joins two prerequisites: GUI font metrics
+                # and the early file/outline work. Follow whichever finished
+                # last; earlier parallel work must not inflate the red path.
+                assets = [e['start_ns'] for e in signals if e['name']=='Document assets ready' and e['start_ns']<=ready]
+                if assets and max(assets)>request:
+                    request=max((e['start_ns'] for e in signals if e['name']=='Request early document assets' and e['start_ns']<=max(assets)),default=request)
             accepted = min((e["start_ns"] for e in signals if e["name"] == accept_name and e["start_ns"] >= ready), default=None)
             if request is None or accepted is None:
                 continue
-            receiver = next((e for e in gui_roots if e["start_ns"] <= accepted <= end(e)), None)
-            candidates = [e for e in calls if e["track"] == "gui" and e["name"].startswith(scope)
+            receiver = next((e for e in receiver_roots if e["start_ns"] <= accepted <= end(e)), None)
+            candidates = [e for e in calls if e["track"] == receiver_track and e["name"].startswith(scope)
                           and ready <= e["start_ns"] <= accepted and
                           (receiver is None or receiver["start_ns"] <= e["start_ns"] <= end(receiver))]
             consumer = min((e["start_ns"] for e in candidates), default=receiver["start_ns"] if receiver else accepted)
             consumer = max(ready, consumer)
-            waits = [e for e in calls if e["track"] == "gui" and e["kind"] == "wait" and e["start_ns"] <= ready <= end(e)]
+            waits = [e for e in calls if e["track"] == receiver_track and e["kind"] == "wait" and e["start_ns"] <= ready <= end(e)]
             # A compositor-only wake does not establish that this worker
             # blocked the GUI. Older traces need an explicit worker wait name.
             waited = any(e.get("wait", {}).get("reason") == "other descriptor" or
                          (not e.get("wait") and {"document":"document", "navigation":"navigation", "images":"image",
-                          "fonts":"monospace", "fallback":"fallback", "input":"keyboard"}[track] in e["name"].lower()) for e in waits)
+                          "fonts":"monospace", "fallback":"fallback", "input":"keyboard", "ui":"ui engine", "ui_dependencies":"ui dependency", "frame_memory":"first-frame shared memory"}[track] in e["name"].lower()) for e in waits)
             bookkeeping = ("Check Wayland events", "Accept document and prepared workers")
-            independent = [e for e in gui_roots if e["kind"] == "work" and not e["name"].startswith(bookkeeping)]
-            independent += [e for e in calls if e["track"] == "gui" and e.get("parent") is not None and
+            independent = [e for e in receiver_roots if e["kind"] == "work" and not e["name"].startswith(bookkeeping)]
+            independent += [e for e in calls if e["track"] == receiver_track and e.get("parent") is not None and
                             e["name"].startswith(("Adopt ", "Apply table of contents", "Accept loaded document"))]
             busy = any(e["start_ns"] < consumer and end(e) > ready for e in independent)
-            other_wait = any(e["track"] == "gui" and e["kind"] == "wait" and e not in waits and
-                             e["start_ns"] < consumer and end(e) > ready for e in calls)
+            other_wait = any(e["track"] == receiver_track and e["kind"] == "wait" and e not in waits and
+                             e["start_ns"] < consumer and end(e) > ready and
+                             not (track=='ui' and e['name']=='Join bootstrap UI workers') for e in calls)
+            # This direct join can occur inside an inclusive GUI buffer-setup
+            # scope. An explicit worker wait proves the dependency; its outer
+            # work scope must not conceal the measured blocked interval.
+            frame_join = track == "frame_memory" and any(
+                e["name"] == "Wait for first-frame shared memory" for e in waits)
             tasks.append({"track": track, "start_ns": request, "end_ns": ready, "consumer_ns": consumer,
-                          "accepted_ns": accepted, "blocking": waited and not busy and not other_wait})
+                          "accepted_ns": accepted, "receiver_track": receiver_track,
+                          "blocking": waited and (frame_join or (not busy and not other_wait))})
 
-    def route(endpoint):
-        backwards, cursor = [], endpoint
-        while cursor > entry:
-            possible = [task for task in tasks if task["blocking"] and task["accepted_ns"] <= cursor
-                        and entry <= task["start_ns"] < task["end_ns"] <= cursor]
+    def route_thread(track, first, last):
+        backwards, cursor = [], last
+        while cursor > first:
+            possible = [task for task in tasks if task["blocking"] and task['receiver_track'] == track and task["accepted_ns"] <= cursor
+                        and first <= task["start_ns"] < task["end_ns"] <= cursor]
             if not possible:
-                backwards.append({"track":"gui", "start_ns":entry, "end_ns":cursor})
+                backwards.append([{"track":track, "start_ns":first, "end_ns":cursor}])
                 break
             task = max(possible, key=lambda t: (t["end_ns"], t["consumer_ns"]))
             if task["end_ns"] < cursor:
-                backwards.append({"track":"gui", "start_ns":task["end_ns"], "end_ns":cursor})
-            backwards.append({"track":task["track"], "start_ns":task["start_ns"], "end_ns":task["end_ns"]})
+                backwards.append([{"track":track, "start_ns":task["end_ns"], "end_ns":cursor}])
+            backwards.append(route_thread(task['track'], task['start_ns'], task['end_ns']))
             cursor = task["start_ns"]
-        path = ([{"track":"launch", "start_ns":0, "end_ns":entry}] if entry else []) + list(reversed(backwards))
+        return [part for sequence in reversed(backwards) for part in sequence]
+
+    def route(endpoint):
+        path = ([{"track":"launch", "start_ns":0, "end_ns":entry}] if entry else []) + route_thread('gui',entry,endpoint)
         assert sum(part["end_ns"]-part["start_ns"] for part in path) == endpoint
         return path
 
@@ -889,10 +956,10 @@ def call_graph_model(run):
         for part in path["segments"]:
             cuts[part["track"]].update((part["start_ns"], part["end_ns"]))
     for task in tasks:
-        cuts["gui"].update((task["start_ns"], task["consumer_ns"]))
+        cuts[task['receiver_track']].update((task["start_ns"], task["consumer_ns"]))
         cuts[task["track"]].update((task["start_ns"], task["end_ns"]))
     cuts["gui"].update((viewport, full))
-    tracks = list(dict.fromkeys(["launch", "document", "gui", "input", "fonts", "navigation", "images", "fallback"] +
+    tracks = list(dict.fromkeys(["launch", "document", "ui", "gui", "input", "fonts", "navigation", "images", "fallback"] +
                                [e["track"] for e in calls]))
     by_id = {e["id"]: e for e in calls}
     descendants = defaultdict(list)
@@ -959,8 +1026,8 @@ def call_graph_model(run):
     if entry:
         connect(before("launch", entry), after("gui", entry), "handoff")
     for task in tasks:
-        connect(before("gui", task["start_ns"]), after(task["track"], task["start_ns"]), "dispatch")
-        connect(before(task["track"], task["end_ns"]), after("gui", task["consumer_ns"]), "handoff")
+        connect(before(task['receiver_track'], task["start_ns"]), after(task["track"], task["start_ns"]), "dispatch")
+        connect(before(task["track"], task["end_ns"]), after(task['receiver_track'], task["consumer_ns"]), "handoff")
     for name, path in paths.items():
         counted = [node for node in nodes if node["duration_ns"] and any(
             node["track"] == part["track"] and part["start_ns"] <= node["start_ns"] and
@@ -1262,6 +1329,12 @@ def require_wayland_session(environment):
 
 def runtime_conditions():
     """Record power/scheduler context before cache reset, outside timed work."""
+    def read(path):
+        try:
+            return path.read_text().strip()
+        except OSError:
+            return None
+
     affinity = sorted(os.sched_getaffinity(0))
     governors = set()
     for cpu in affinity:
@@ -1271,7 +1344,20 @@ def runtime_conditions():
                 governors.add(value)
         except OSError:
             pass
-    return {"cpu_affinity": affinity, "cpu_governors": sorted(governors),
+    power = {"policies": {}}
+    for policy in sorted(Path('/sys/devices/system/cpu/cpufreq').glob('policy*')):
+        power['policies'][policy.name] = {name: read(policy/name) for name in (
+            'scaling_driver', 'scaling_governor', 'energy_performance_preference',
+            'scaling_min_freq', 'scaling_max_freq', 'bios_limit')}
+    for name, path in {
+        'no_turbo': '/sys/devices/system/cpu/intel_pstate/no_turbo',
+        'boost': '/sys/devices/system/cpu/cpufreq/boost',
+        'platform_profile': '/sys/firmware/acpi/platform_profile',
+    }.items():
+        power[name] = read(Path(path))
+    power['power_limits'] = {str(path): read(path) for path in
+        sorted(Path('/sys/class/powercap').glob('*/constraint_*_power_limit_uw'))}
+    return {"cpu_affinity": affinity, "cpu_governors": sorted(governors), "cpu_power": power,
             "load_average": list(os.getloadavg())}
 
 

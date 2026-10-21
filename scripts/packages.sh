@@ -18,7 +18,7 @@ Name: mdf
 Version: $mdf_version
 Release: 1
 Summary: Markdown FAST native Markdown viewer
-License: LicenseRef-Markdown-FAST AND PolyForm-Noncommercial-1.0.0
+License: LicenseRef-Markdown-FAST AND PolyForm-Noncommercial-1.0.0 AND MPL-2.0
 URL: https://github.com/mariobaldini/mdf
 BuildArch: x86_64
 Requires: glibc >= 2.38

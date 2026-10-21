@@ -1,4 +1,5 @@
 #pragma once
+#include "launch.h"
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -11,11 +12,6 @@
 #include <vector>
 using Json = nlohmann::json;
 extern "C" {
-struct MdfCore;
-struct Buffer {
-  const unsigned char *ptr;
-  size_t len;
-};
 struct MdfBlockView {
   Buffer kind, prefix, language, anchor, alert, image_src;
   size_t spans, cells, columns, bytes, lines, indent, quote;
@@ -37,6 +33,7 @@ const char *mdf_core_mode();
 MdfCore *mdf_core_create(const unsigned char *, size_t, bool, uint64_t,
                          void (*)());
 void mdf_core_destroy(MdfCore *);
+void mdf_core_set_wake(MdfCore *, void (*)());
 Buffer mdf_core_open(MdfCore *, const unsigned char *, size_t);
 Buffer mdf_core_poll(MdfCore *);
 MdfBlockView mdf_core_block(MdfCore *, size_t);
@@ -74,6 +71,7 @@ inline Json take_json(Buffer b) {
 }
 struct Core {
   MdfCore *handle;
+  MdfStartup *startup = nullptr;
   Core(bool profile, uint64_t origin, void (*notify)()) {
     const char *home = std::getenv("HOME");
     if (!home)
@@ -83,13 +81,27 @@ struct Core {
     if (!handle)
       throw std::runtime_error("Could not start document loader");
   }
-  ~Core() { mdf_core_destroy(handle); }
+  Core(MdfStartup *prepared, void (*notify)()) : handle(prepared->core), startup(prepared) {
+    if (!handle) throw std::runtime_error("Missing bootstrap document core");
+    mdf_core_set_wake(handle, notify);
+  }
+  ~Core() {
+    if (startup) mdf_core_set_wake(handle, nullptr);
+    else mdf_core_destroy(handle);
+  }
   Core(const Core &) = delete;
   void open(const std::string &path) {
     take_json(
         mdf_core_open(handle, (const unsigned char *)path.data(), path.size()));
   }
-  Json poll() { return take_json(mdf_core_poll(handle)); }
+  Json poll() {
+    if (startup && startup->document.ptr) {
+      auto result = startup->document;
+      startup->document = {};
+      return take_json(result);
+    }
+    return take_json(mdf_core_poll(handle));
+  }
   Json settings() { return take_json(mdf_core_settings(handle)); }
   void save(const Json &j) {
     auto bytes = j.dump();

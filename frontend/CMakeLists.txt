@@ -3,7 +3,7 @@ project(mdf_fltk VERSION 0.2.0 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 option(MDF_ASYNC_INPUT "Prepare keyboard resources asynchronously and defer startup cursors" ON)
-option(MDF_PREPARE_FRAME "Prepare the first frame during compositor configuration" OFF)
+option(MDF_PREPARE_FRAME "Prepare the first frame during compositor configuration" ON)
 set(MDF_FLTK_PATCH_ID "unknown" CACHE STRING "Identity of the pinned MDF FLTK patches")
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(NATIVE REQUIRED IMPORTED_TARGET pangocairo pangoft2 fontconfig)
@@ -15,7 +15,7 @@ set(CMAKE_SKIP_BUILD_RPATH TRUE)
 # Preserve the assembler symbol-version aliases across GCC's LTO link stage.
 set_source_files_properties(compat.c PROPERTIES COMPILE_OPTIONS "-fno-lto")
 set(MDF_DIAGRAM_PACKER "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/pack-diagram.py")
-# Mermaid uses Zig/Pozeiden; SVG uses Rust/resvg. Each has its own archive,
+# Mermaid uses Zig/Pozeiden; SVG uses Zig/zig-svg. Each has its own archive,
 # compressed stream and non-allocated section. SVG never loads Mermaid.
 foreach(renderer mermaid svg)
   if(renderer STREQUAL "mermaid")
@@ -56,27 +56,31 @@ function(mdf_embed_diagram target)
         --binary "$<TARGET_FILE:${target}>" --payload "${payload}" --objcopy "${CMAKE_OBJCOPY}" VERBATIM)
   endforeach()
 endfunction()
-add_executable(mdf main.cpp view.cpp profile.cpp startup.cpp images.cpp diagrams.cpp bundled-fonts.cpp monospace.cpp image-pixels.c compat.c)
-target_compile_definitions(mdf PRIVATE MDF_ASYNC_INPUT=$<BOOL:${MDF_ASYNC_INPUT}>
+add_library(mdf-ui SHARED main.cpp view.cpp profile.cpp startup.cpp images.cpp diagrams.cpp bundled-fonts.cpp monospace.cpp image-pixels.c compat.c)
+target_compile_definitions(mdf-ui PRIVATE MDF_ASYNC_INPUT=$<BOOL:${MDF_ASYNC_INPUT}>
   MDF_PREPARE_FRAME=$<BOOL:${MDF_PREPARE_FRAME}> MDF_FLTK_PATCH_ID="${MDF_FLTK_PATCH_ID}")
-target_include_directories(mdf PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../zig-pkg" "${FLTK_INCLUDE_DIRS}")
-target_link_libraries(mdf PRIVATE "${MDF_CORE_DIR}/libmdf-core.a" fltk::images fltk::fltk fltk::z PkgConfig::NATIVE m dl pthread)
-target_link_options(mdf PRIVATE -Wl,--gc-sections -Wl,--wrap=select -Wl,--wrap=poll -static-libstdc++ -static-libgcc)
-target_link_options(mdf PRIVATE -Wl,--wrap=wl_display_dispatch -Wl,--wrap=wl_display_roundtrip)
-target_link_options(mdf PRIVATE -Wl,--wrap=acosf -Wl,--wrap=atan2f)
+target_include_directories(mdf-ui PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../zig-pkg" "${FLTK_INCLUDE_DIRS}")
+# Core C symbols resolve from the launcher; keeping one core avoids duplicate
+# workers, allocators and profiling state across the module boundary.
+target_link_libraries(mdf-ui PRIVATE fltk::images fltk::fltk fltk::z PkgConfig::NATIVE m dl pthread)
+target_link_options(mdf-ui PRIVATE -Wl,--gc-sections -Wl,--wrap=select -Wl,--wrap=poll -static-libstdc++ -static-libgcc)
+target_link_options(mdf-ui PRIVATE -Wl,--wrap=wl_display_dispatch -Wl,--wrap=wl_display_roundtrip)
+target_link_options(mdf-ui PRIVATE -Wl,--wrap=acosf -Wl,--wrap=atan2f
+    "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/frontend.map")
+set_property(TARGET mdf-ui APPEND PROPERTY LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/frontend.map")
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
-  set_property(TARGET mdf PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
-  target_compile_options(mdf PRIVATE -O3 -march=x86-64 -fomit-frame-pointer -ffunction-sections -fdata-sections)
-  target_link_options(mdf PRIVATE -O3)
+  set_property(TARGET mdf-ui PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
+  target_compile_options(mdf-ui PRIVATE -O3 -march=x86-64 -fomit-frame-pointer -ffunction-sections -fdata-sections)
+  target_link_options(mdf-ui PRIVATE -O3)
   # Retain matching symbol metadata for the offline size treemap. Only the
   # stripped executable is copied into the single-file distribution.
-  add_custom_command(TARGET mdf POST_BUILD
-    COMMAND "${CMAKE_OBJCOPY}" --only-keep-debug "$<TARGET_FILE:mdf>" "${CMAKE_CURRENT_BINARY_DIR}/mdf.debug"
-    COMMAND "${CMAKE_STRIP}" --strip-all "$<TARGET_FILE:mdf>"
-    BYPRODUCTS "${CMAKE_CURRENT_BINARY_DIR}/mdf.debug"
+  add_custom_command(TARGET mdf-ui POST_BUILD
+    COMMAND "${CMAKE_COMMAND}" -E copy "$<TARGET_FILE:mdf-ui>" "${CMAKE_CURRENT_BINARY_DIR}/mdf-ui.unstripped.so"
+    COMMAND "${CMAKE_OBJCOPY}" --only-keep-debug "$<TARGET_FILE:mdf-ui>" "${CMAKE_CURRENT_BINARY_DIR}/mdf-ui.debug"
+    COMMAND "${CMAKE_STRIP}" --strip-all "$<TARGET_FILE:mdf-ui>"
+    BYPRODUCTS "${CMAKE_CURRENT_BINARY_DIR}/mdf-ui.debug" "${CMAKE_CURRENT_BINARY_DIR}/mdf-ui.unstripped.so"
     VERBATIM)
 endif()
-mdf_embed_diagram(mdf)
 
 add_executable(mdf-image-tests EXCLUDE_FROM_ALL ../tests/image-decode.cpp images.cpp diagrams.cpp bundled-fonts.cpp image-pixels.c compat.c)
 target_include_directories(mdf-image-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../zig-pkg")

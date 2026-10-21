@@ -1,3 +1,6 @@
 [submodule "modules/pozeiden"]
 	path = modules/pozeiden
 	url = https://github.com/sc2in/pozeiden.git
+[submodule "modules/zig-svg"]
+	path = modules/zig-svg
+	url = https://github.com/jcollie/zig-svg.git
