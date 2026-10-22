@@ -1,15 +1,19 @@
-# Independent compressed rendering resources
+# Independent lazy rendering resources
 
-MDF distributes one executable with two independent compressed rendering modules and the static zlib decompressor from FLTK.
+MDF distributes one executable with two independently compressed rendering modules.
+They stay outside the startup mappings and load only for documents that need their renderer.
 The Mermaid module parses diagrams, calculates layout, and produces SVG text. The SVG module parses and rasterizes SVG.
 Pozeiden calculates Mermaid layout in Zig. zig-svg and z2d parse and rasterize SVG in Zig.
 SVG-only documents skip Mermaid entirely.
 The UI engine is a separate uncompressed embedded module loaded during [parallel startup](parallel-bootstrap.md).
 Its mandatory loading precedes the first viewport; the optional rendering modules below keep their post-viewport gate.
+Raster codecs use a third independent `.mdf_image` module, described in [image decoding](image-decoding.md).
+The default `MDF_OPTIONAL_MODULE_COMPRESSION=zlib` compresses each of these three modules independently.
+Set it to `raw` for comparison; this changes storage, without changing compilation or loading conditions.
 
 ## Startup and ownership
 
-The `.mdf_mermaid` and `.mdf_svg` ELF sections contain independent zlib streams. Neither section has `SHF_ALLOC`.
+The `.mdf_mermaid` and `.mdf_svg` ELF sections contain checked zlib payloads. Neither section has `SHF_ALLOC`.
 The application does not map or read them before the first viewport.
 SVG-only documents load `.mdf_svg` only. Mermaid documents load Mermaid layout, then SVG rendering when layout succeeds.
 Documents without Mermaid or local SVG skip both loaders.
@@ -20,8 +24,10 @@ The GUI releases this gate after the actual buffer commit and socket flush.
 Cancellation also releases the gate, so shutdown does not wait for a frame that cannot arrive.
 
 The loader reads the payload from `/proc/self/exe`.
-Bundled zlib decompresses the payload directly into a writable mapping of an anonymous memory file.
-The loader checks the size and CRC32, removes the writable mapping, and seals the memory file.
+The loader inflates each requested payload into a writable mapping of an anonymous memory file.
+It checks the stream, declared length and CRC32 in bounded, cancellation-aware chunks, then removes the writable mapping and seals the memory file.
+Zig's existing standard-library decoder handles inflation; no external extractor is needed.
+Raw comparison builds read and verify the requested ELF directly into that mapping without inflation.
 Then `dlopen` maps the module with `RTLD_NOW | RTLD_LOCAL`.
 The loader never extracts a module to a disk file.
 
@@ -40,7 +46,12 @@ Both modules retain full release optimization and unused-code removal.
 Zig 0.17.0 builds all three archives offline. Rust and Cargo are not required.
 CMake links each archive with `diagram-module.c` and the existing libm compatibility adapter.
 Only `mdf_diagram_api` appears in the exported symbol table.
-The ABI 2 table contains version, size, module kind, reserved flags, font-provider initialization, and the applicable rendering function.
+The ABI 3 table contains version, size, module kind, reserved flags, font-provider initialization, and the applicable rendering function.
+SVG rendering can also return owned UTF-8 containing missing label characters.
+The native viewer uses these characters to request deferred fonts without a second XML parser or a second SVG parse.
+The checked payload container remains at format version 2; its version is separate from the renderer API version.
+Container flag 0 marks the default zlib stream. Flag 1 marks raw ELF and requires equal stored/loaded byte lengths.
+Both formats remain supported. Fonts keep their separate compressed, on-demand resource format.
 The Mermaid function returns C-allocated SVG text. The SVG function returns C-allocated pixels. The host frees both.
 The host checks every table field before it calls initialization.
 
@@ -113,7 +124,8 @@ The isolated evaluation used 12 paired cold runs per engine for each of four wor
 Its latest prototype reduced executable size by 6.18%, while the SVG-heavy workload's full readiness increased by 72.43%.
 First-viewport changes on the standard samples stayed within measurement uncertainty. Those figures describe the frozen prototype, not later builds.
 
-The packer compresses the stripped module with zlib level 9.
+The packer compresses each stripped module independently and embeds its stream with a size/CRC32 header.
+Raw comparison builds embed the stripped module unchanged.
 The module and its debug symbols remain build artifacts. Installers copy only the final executable.
 Payload changes force the host link and packing steps to run again.
 The executable has no build-directory runtime search path. Desktop libraries resolve through the system loader.
@@ -124,12 +136,12 @@ The payload starts with this 40-byte header. All integers use little-endian orde
 | Offset | Field |
 | --- | --- |
 | 0 | Eight-byte magic: `MDFDG01\0` |
-| 8 | 32-bit module ABI version: `2` |
+| 8 | 32-bit payload format version: `2` |
 | 12 | 32-bit header size: `40` |
-| 16 | 64-bit compressed size |
-| 24 | 64-bit expanded size |
-| 32 | 32-bit CRC32 of the expanded module |
-| 36 | 32-bit reserved flags: `0` |
+| 16 | 64-bit stored payload size |
+| 24 | 64-bit loaded ELF size |
+| 32 | 32-bit CRC32 of the loaded module |
+| 36 | 32-bit encoding flags: `0` default zlib, `1` raw comparison |
 
 The loader rejects an expanded module larger than 256 MiB, including Debug builds.
 Damaged payloads, incompatible ABIs, and denied executable memory produce an error for the affected diagram or image.
@@ -146,15 +158,27 @@ The renderer rejects canvases larger than 16384 pixels per dimension and respect
 Embedded images, scripts, foreign objects, external resources, and external font styles are unsupported.
 The image area shows a readable error for unsupported SVG input.
 
-## Optional italic fonts
+## Compressed fonts
 
-Regular and bold Open Sans remain raw embedded resources for startup.
-Each italic face has its own zlib stream, generated during the Zig build by `scripts/pack-font.py`.
+Each Open Sans face has its own zlib stream, generated during the Zig build by `scripts/pack-font.py`.
+The libc-only bootstrap starts a worker before any UI library loading.
+This worker inflates regular and bold with Zig's standard-library decoder, alongside document parsing and UI loading.
+Fontconfig and the UI keep receiving immutable, uncompressed font bytes through the existing font API.
+If a consumer arrives early, it waits only for its requested face. If thread creation fails, the consumer decodes that face itself.
+The worker joins before the document core and profiling recorder are destroyed, including startup error paths.
+The decoded data stays available for the process lifetime.
+Each italic face inflates only on demand through the same Zig cache and decoder.
 The 16-byte header contains `MDFONT1\0`, a 32-bit expanded size, and a 32-bit CRC32, in little-endian order.
 Decompression validates the header, bounded length, complete stream, and checksum.
+The bootstrap decoder also checks the zlib checksum and the font signature.
+Compressed renderer payloads use that same checked decoder through the host C boundary.
+Raw comparison payloads bypass the decoder and retain their length and CRC32 checks.
+Inflation and checksum passes poll cancellation between 64 KiB chunks.
+Expanded modules stay in anonymous memory; only a complete, length- and checksum-validated image is sealed and passed to the loader.
 Thread-safe initialization retains the resulting immutable bytes for the process lifetime.
 Parsing actual styled spans determines the GUI's required faces before layout. Loading one face does not inflate the other.
 SVG uses the same host cache without registering unused faces in the GUI's private Fontconfig configuration.
+The native profile records the startup worker on its own track, so overlapping inflation is not added to wall-clock totals.
 The source TTF files and their licenses stay unchanged. No runtime font files, caches, or external decompressors are required.
 
 ## Verification
@@ -178,18 +202,19 @@ The GUI checks require all module preparation to start after the first committed
 They also check source/error fallback for the six unsupported families without loading the SVG module.
 
 For a cold comparison, preserve both executable files and their matching debug symbols first.
-Then run the benchmark with the compressed-renderer policy:
+Then compare both first Markdown submission and full readiness:
 
 ```sh
 python3 scripts/benchmark-startup.py --before BEFORE/mdf --after AFTER/mdf \
-  --compressed-renderer --batches 2 --pairs-per-batch 10 \
-  --output build/compressed-comparison/report.html
+  --batches 2 --pairs-per-batch 10 \
+  --output build/lazy-renderer-comparison/report.html
 ```
 
-The default workloads are `SAMPLE.md` and `SAMPLE-HUGE.md`.
+The default workloads are the SMALL/MID/HUGE `-TEXT.md` and `-IMAGES.md` pairs.
 Repeated `--document` arguments replace the workload list.
 That list can include both samples and a plain-document control.
 Every launch uses the existing cache reset and zero-resident-page checks.
 The report keeps scaffold and first-viewport guards separate from optional diagram and full-readiness costs.
 Both graphs use timestamps from their selected optimized launch.
-The treemap counts the compressed section once. Expanded module bytes appear as separate information, outside executable totals.
+The treemap counts each stored section once and labels raw modules as uncompressed lazy renderers.
+Reducing file size is not a success if decompression or later rendering increases user-visible latency.

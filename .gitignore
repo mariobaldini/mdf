@@ -7,6 +7,7 @@ __pycache__/
 
 # Temporary browser diagnostics and accessibility snapshots.
 .playwright-mcp/
+.impeccable/hook.cache.json
 
 # Downloaded dependencies survive make clean.
 zig-pkg/

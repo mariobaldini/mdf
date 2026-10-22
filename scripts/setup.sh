@@ -19,7 +19,11 @@ if [ "$ZIG" != zig ] && ! command -v "$ZIG" >/dev/null 2>&1; then
     exit 1
 fi
 rpm -q ca-certificates >/dev/null 2>&1 || set -- "$@" ca-certificates
-for mdf_package in cmake ninja-build gcc gcc-c++ libstdc++-static clang-tools-extra pkgconf-pkg-config pango-devel cairo-devel fontconfig-devel pixman-devel glib2-devel fribidi-devel libthai-devel harfbuzz-devel freetype-devel wayland-devel wayland-protocols-devel libxkbcommon-devel weston weston-devel git git-lfs; do
+mdf_packages='pkgconf-pkg-config binutils pango-devel fontconfig-devel wayland-devel wayland-protocols-devel libxkbcommon-devel weston weston-devel git git-lfs'
+if [ "${MDF_REFERENCE:-0}" = 1 ];then
+    mdf_packages="$mdf_packages cmake ninja-build gcc gcc-c++ libstdc++-static clang-tools-extra cairo-devel pixman-devel glib2-devel fribidi-devel harfbuzz-devel freetype-devel"
+fi
+for mdf_package in $mdf_packages; do
     rpm -q "$mdf_package" >/dev/null 2>&1 || set -- "$@" "$mdf_package"
 done
 command -v rpmbuild >/dev/null 2>&1 || set -- "$@" rpm-build
@@ -44,7 +48,7 @@ if [ "$ZIG" = zig ] && { ! command -v zig >/dev/null 2>&1 || [ "$(zig version)" 
 fi
 export ZIG
 check_tools
-printf '%s\n' 'Fetching pinned dependencies for the application and tests...'
+printf '%s\n' 'Fetching pinned application dependencies...'
 python3 scripts/fetch-frontend.py
 offline_graph_check
 check_frontend_cache

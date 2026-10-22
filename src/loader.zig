@@ -30,7 +30,7 @@ pub fn readDocument(a: Allocator, path: [:0]const u8) ![]u8 {
     var stat: c.struct_stat = undefined;
     if (c.fstat(fd, &stat) != 0) return error.StatFailed;
     if (stat.st_mode & c.S_IFMT != c.S_IFREG) return error.NotARegularFile;
-    if (stat.st_size < 0 or stat.st_size > std.math.maxInt(c.MD_SIZE)) return error.FileTooLarge;
+    if (stat.st_size < 0 or stat.st_size > std.math.maxInt(u32)) return error.FileTooLarge;
     const bytes = try a.alloc(u8, @intCast(stat.st_size));
     errdefer a.free(bytes);
     var offset: usize = 0;

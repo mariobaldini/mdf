@@ -10,6 +10,8 @@ extern fn mdf_core_open(*c.struct_MdfCore, [*]const u8, usize) Buffer;
 extern fn mdf_core_poll(*c.struct_MdfCore) Buffer;
 extern fn mdf_buffer_free(Buffer) void;
 extern fn mdf_notices() Buffer;
+extern fn mdf_startup_fonts_begin() void;
+extern fn mdf_startup_fonts_end() void;
 extern fn mdf_profile_event(u8, [*]const u8, usize, [*]const u8, usize, u32, u64, u64, usize, bool) void;
 extern fn mdf_profile_signal(u8, [*]const u8, usize, [*]const u8, usize, u32, u64) void;
 
@@ -207,31 +209,34 @@ const Ui = struct {
     fn readAhead(self: *Ui) void {
         if (self.dependencies_done.load(.acquire) != 0) return;
         const began = mdf_now_ns();
-        const names = [_][]const u8{
-            "libpango-1.0.so.0", "libpangoft2-1.0.so.0", "libcairo.so.2",
-            "libharfbuzz.so.0",  "libfontconfig.so.1",   "libfreetype.so.6",
-            "libglib-2.0.so.0",  "libgobject-2.0.so.0",  "libgio-2.0.so.0",
-            "libpixman-1.so.0",  "libfribidi.so.0",      "libthai.so.0",
-            "libpcre2-8.so.0",   "libffi.so.8",          "libgraphite2.so.3",
-            "libxml2.so.2",
-        };
-        for (names) |name| {
+        // Follow this UI's DT_NEEDED list, including Wayland/libm. In a
+        // bundled build, reading unused system Pango/Cairo only adds disk I/O.
+        var names = std.mem.splitScalar(u8, self.dependencies[0..self.dependencies_len], 0);
+        while (names.next()) |name| {
             if (self.dependencies_done.load(.acquire) != 0) break;
-            // Bundled Cairo is already in the prepared UI image. Avoid reading
-            // an unused system Cairo and its pages during that build's launch.
-            if (std.mem.eql(u8, name, "libcairo.so.2") and
-                std.mem.indexOf(u8, self.dependencies[0..self.dependencies_len], "libcairo.so.2\x00") == null) continue;
-            for ([_][]const u8{ "/lib64/", "/usr/lib64/", "/lib/x86_64-linux-gnu/", "/usr/lib/x86_64-linux-gnu/" }) |directory| {
-                var buffer: [128]u8 = undefined;
-                const path = std.fmt.bufPrintSentinel(&buffer, "{s}{s}", .{ directory, name }, 0) catch continue;
-                const fd = c.open(path.ptr, c.O_RDONLY | c.O_CLOEXEC | c.O_NONBLOCK);
-                if (fd < 0) continue;
-                _ = c.posix_fadvise(fd, 0, 0, c.POSIX_FADV_WILLNEED);
-                _ = c.close(fd);
-                break;
-            }
+            if (name.len == 0 or std.mem.indexOfScalar(u8, name, '/') != null or
+                std.mem.eql(u8, name, "libc.so.6")) continue; // Already eager.
+            readAheadName(name);
         }
-        event("Read ahead text-library pages", 7, began, false);
+        // Large indirect dependencies of the system text stack. These are
+        // hints only; dlopen still resolves the complete dependency graph.
+        for ([_][]const u8{ "libpcre2-8.so.0", "libffi.so.8", "libgraphite2.so.3", "libxml2.so.2" }) |name| {
+            if (self.dependencies_done.load(.acquire) != 0) break;
+            readAheadName(name);
+        }
+        event("Read ahead UI-library pages", 7, began, false);
+    }
+
+    fn readAheadName(name: []const u8) void {
+        for ([_][]const u8{ "/lib64/", "/usr/lib64/", "/lib/x86_64-linux-gnu/", "/usr/lib/x86_64-linux-gnu/" }) |directory| {
+            var buffer: [128]u8 = undefined;
+            const path = std.fmt.bufPrintSentinel(&buffer, "{s}{s}", .{ directory, name }, 0) catch continue;
+            const fd = c.open(path.ptr, c.O_RDONLY | c.O_CLOEXEC | c.O_NONBLOCK);
+            if (fd < 0) continue;
+            _ = c.posix_fadvise(fd, 0, 0, c.POSIX_FADV_WILLNEED);
+            _ = c.close(fd);
+            break;
+        }
     }
 
     fn bind(self: *Ui, path: [*:0]const u8) !void {
@@ -322,6 +327,10 @@ fn launch(argc: c_int, argv: [*][*:0]u8, origin: u64) !c_int {
         else
             mdf_buffer_free(request);
     }
+    // Byte inflation needs no Fontconfig/Pango or loader calls. Start it before
+    // any dlopen, alongside parsing; join before the core recorder is destroyed.
+    mdf_startup_fonts_begin();
+    defer mdf_startup_fonts_end();
     var ui = Ui{};
     signal("Request UI engine", 0);
     const worker = try std.Thread.spawn(.{}, Ui.run, .{&ui});

@@ -10,6 +10,45 @@ fn text(block: Block) ![]u8 {
     return result.toOwnedSlice(a);
 }
 
+test "document: quote scopes retain paragraph groups and nested boundaries" {
+    var doc = try Document.parse(a, "> First\n>\n> Second\n>\n> > Nested\n> >\n> > More\n>\n> Last\n\n> Separate\n", "");
+    defer doc.deinit();
+    try std.testing.expectEqual(@as(usize, 6), doc.blocks.len);
+    const outer = doc.blocks[0].quote_context.?;
+    const inner = doc.blocks[2].quote_context.?;
+    try std.testing.expectEqual(@as(usize, 0), outer.first);
+    try std.testing.expectEqual(@as(usize, 5), outer.end);
+    try std.testing.expect(doc.blocks[1].quote_context == outer and doc.blocks[4].quote_context == outer);
+    try std.testing.expect(inner.parent == outer and doc.blocks[3].quote_context == inner);
+    try std.testing.expectEqual(@as(usize, 2), inner.first);
+    try std.testing.expectEqual(@as(usize, 4), inner.end);
+    try std.testing.expect(doc.blocks[5].quote_context != outer);
+    try std.testing.expectEqual(@as(usize, 5), doc.blocks[5].quote_context.?.first);
+}
+
+test "document: quote anchors distinguish lists inside quotes from quotes inside lists" {
+    var doc = try Document.parse(a, "> - Quoted list\n>   - Nested list\n\n- Outside item\n\n  > Inside list\n", "");
+    defer doc.deinit();
+    try std.testing.expectEqual(@as(usize, 0), doc.blocks[0].quote_context.?.indent);
+    try std.testing.expectEqual(@as(usize, 1), doc.blocks[0].indent);
+    try std.testing.expectEqual(@as(usize, 2), doc.blocks[1].indent);
+    const quoted = doc.blocks[doc.blocks.len - 1];
+    try std.testing.expectEqual(@as(usize, 1), quoted.quote_context.?.indent);
+    try std.testing.expectEqual(@as(usize, 1), quoted.quote);
+}
+
+test "document: appended footnote quotes use document-wide block ranges" {
+    var doc = try Document.parse(a, "Reference.[^q]\n\n[^q]: > Quoted note\n", "");
+    defer doc.deinit();
+    var found = false;
+    for (doc.blocks, 0..) |block, index| if (block.quote_context) |quote| {
+        try std.testing.expect(quote.first <= index and index < quote.end);
+        try std.testing.expect(quote.first > 0);
+        found = true;
+    };
+    try std.testing.expect(found);
+}
+
 test "document: all six ATX heading levels retain their level" {
     var doc = try Document.parse(a, "# A\n## B\n### C\n#### D\n##### E\n###### F\n\n####### Plain\n", "");
     defer doc.deinit();
@@ -101,4 +140,38 @@ test "document: CRLF paragraphs do not merge across blank lines" {
     defer doc.deinit();
     try std.testing.expectEqual(@as(usize, 2), doc.blocks.len);
     for (doc.blocks) |block| try std.testing.expectEqual(.paragraph, block.kind);
+}
+
+test "document: image labels stay semantic text without a second Markdown parse" {
+    for ([_]struct { source: []const u8, value: []const u8 }{
+        .{ .source = "![`*literal*`](missing.png)", .value = "*literal*" },
+        .{ .source = "![\\*literal\\*](missing.png)", .value = "*literal*" },
+        .{ .source = "![&copy;](missing.png)", .value = "©" },
+        .{ .source = "![\\&copy;](missing.png)", .value = "&copy;" },
+        .{ .source = "![`&copy;`](missing.png)", .value = "&copy;" },
+        .{ .source = "![<https://example.com>](missing.png)", .value = "https://example.com" },
+    }) |case| {
+        var doc = try Document.parseDeferred(a, case.source, "image.md");
+        defer doc.deinit();
+        const label = try text(doc.blocks[0]);
+        defer a.free(label);
+        try std.testing.expectEqualStrings(case.value, label);
+        for (doc.blocks[0].spans) |span| try std.testing.expect(!span.italic and !span.code);
+    }
+}
+
+test "document: deeply nested image labels fail with balanced profiling scopes" {
+    const profile = @import("mdf").profiling;
+    var source: std.ArrayList(u8) = .empty;
+    defer source.deinit(a);
+    for (0..160) |_| try source.appendSlice(a, "![");
+    try source.append(a, 'x');
+    for (0..160) |_| try source.appendSlice(a, "](missing.png)");
+    const recorder = try a.create(profile.Recorder);
+    defer a.destroy(recorder);
+    try recorder.init(profile.nowNs());
+    recorder.enable();
+    defer recorder.deinit();
+    try std.testing.expectError(error.NestingTooDeep, Document.parseDeferred(a, source.items, "nested.md"));
+    for (recorder.depths) |depth| try std.testing.expectEqual(@as(usize, 0), depth);
 }

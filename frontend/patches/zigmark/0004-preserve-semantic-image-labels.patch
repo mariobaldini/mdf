@@ -1,0 +1,40 @@
+--- a/markdown/inline.zig
++++ b/markdown/inline.zig
+@@ -1407,7 +1407,15 @@
+ 
+ fn flattenInline(allocator: Allocator, buf: *std.ArrayList(u8), item: AST.Inline) !void {
+     switch (item) {
+-        .text => |t| try buf.appendSlice(allocator, t.content),
++        .text => |t| {
++            var at: usize = 0;
++            while (at < t.content.len) {
++                if (@import("html_entities").decode(t.content, at)) |decoded| {
++                    try buf.appendSlice(allocator, decoded.bytes[0..decoded.len]);
++                    at += decoded.consumed;
++                } else { try buf.append(allocator, t.content[at]); at += 1; }
++            }
++        },
+         .code_span => |cs| try buf.appendSlice(allocator, cs.content),
+         .emphasis => |e| {
+             for (e.children.items) |child| try flattenInline(allocator, buf, child);
+@@ -1420,11 +1428,18 @@
+         },
+         .image => |img| try buf.appendSlice(allocator, img.alt_text),
+         .math => |m| try buf.appendSlice(allocator, m.content),
+-        .soft_break => try buf.appendSlice(allocator, "\n"),
++        .soft_break => try buf.append(allocator, ' '),
+         .strikethrough => |s| {
+             for (s.children.items) |child| try flattenInline(allocator, buf, child);
+         },
+-        .hard_break, .autolink, .footnote_reference, .html_in_line => {},
++        .hard_break => try buf.append(allocator, ' '),
++        .autolink => |link| try buf.appendSlice(allocator, link.url),
++        .footnote_reference => |note| {
++            try buf.appendSlice(allocator, "[^");
++            try buf.appendSlice(allocator, note.label);
++            try buf.append(allocator, ']');
++        },
++        .html_in_line => {},
+     }
+ }
+ 

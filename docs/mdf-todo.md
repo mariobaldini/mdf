@@ -5,15 +5,15 @@ The current version is 0.2.0.
 
 ## GUI and document processing
 
-- FLTK 1.4.5 provides native menus, buttons, the contents browser, and scrollbars.
-- FLTK uses Cairo for drawing and Pango for text shaping. X11 and OpenGL backends are disabled at build time.
-- The bundled libdecor Cairo plugin provides window decorations. The GTK plugin is disabled.
-- Zig 0.16.0 owns Markdown parsing, loading, settings, file watching, navigation, and the embedded Open Sans resources.
-- MD4C parses GitHub Markdown into blocks and spans.
-- The C++ frontend receives owned document models through a C ABI. Borrowed image and font bytes remain valid until their workers stop.
+- Zig/z2d provides native menus, buttons, window controls, TOC, minimap, and scrollbars over Wayland shared memory.
+- The default renderer contains no FLTK, Cairo, C++ runtime or OpenGL path.
+- Optional PangoFT2 system font support loads after the first viewport.
+- Zig 0.17.0 owns Markdown parsing, loading, settings, file watching, navigation, and the embedded Open Sans resources.
+- Zigmark parses CommonMark/GFM; Zig converts its AST into MDF blocks and spans.
+- The private Zig frontend borrows the launcher's document core through a checked ABI. Worker inputs remain valid until their workers stop.
 - Typed block and span views keep bulk document data out of JSON. Repeated headings reuse their last anchor suffix to keep parsing linear.
-- Zig's `std.json` handles the remaining messages, settings, and profiler JSON through a C++ ownership binding.
-- The document widget measures visible blocks and draws them directly through FLTK. It caches text layouts rather than copying a viewport bitmap.
+- Zig's `std.json` handles messages, settings, and profiler JSON.
+- The document widget measures visible blocks and draws them through z2d, with retained layout and glyph caches.
 - The minimap caches a small image surface and moves its viewport marker during scrolling.
 
 The toolbar contains TOC, light/dark, and one width button that cycles between 80% and 100%.
@@ -163,5 +163,5 @@ Do not use startup measurements alone to judge interaction speed or rendering qu
 
 - [FLTK 1.4 documentation](https://www.fltk.org/doc-1.4/)
 - [FLTK Wayland implementation](https://www.fltk.org/doc-1.4/wayland-devel.html)
-- [MD4C](https://github.com/mity/md4c)
+- [Zigmark](https://github.com/sc2in/zigmark)
 - [Zig](https://ziglang.org/)

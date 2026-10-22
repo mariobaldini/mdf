@@ -1,0 +1,46 @@
+--- a/markdown/parser.zig
++++ b/markdown/parser.zig
+@@ -1478,10 +1478,11 @@
+     return result;
+ }
+ 
+-fn splitTableRow(line: []const u8, col_count: usize) []const []const u8 {
++fn splitTableRow(allocator: Allocator, line: []const u8, col_count: usize) ![]const []const u8 {
+     // Work on trimmed line, but preserve interior spaces for inline parsing
+     const t = trimLine(line);
+     var cells = std.ArrayList([]const u8).empty;
++    errdefer cells.deinit(allocator);
+ 
+     var i: usize = 0;
+ 
+@@ -1501,16 +1502,16 @@
+             }
+         }
+         const cell = mem.trim(u8, t[start..i], " \t");
+-        cells.append(std.heap.page_allocator, cell) catch break; // temp alloc, caller will dupe
++        try cells.append(allocator, cell);
+ 
+         if (i < t.len and t[i] == '|') i += 1 else break;
+     }
+ 
+     // Pad up to col_count with empty cells
+     while (cells.items.len < col_count)
+-        cells.append(std.heap.page_allocator, "") catch break;
+-
+-    return cells.toOwnedSlice(std.heap.page_allocator) catch &[_][]const u8{};
++        try cells.append(allocator, "");
++
++    return cells.toOwnedSlice(allocator);
+ }
+ 
+ const TableParseResult = struct {
+@@ -1545,7 +1546,8 @@
+     opts: Inline.Options,
+ ) !void {
+     const cols = alignments.len;
+-    const raw_cells = splitTableRow(row_line, cols);
++    const raw_cells = try splitTableRow(allocator, row_line, cols);
++    defer allocator.free(raw_cells);
+ 
+     for (raw_cells, 0..) |cell_src, idx| {
+         var cell = AST.TableCell.init(allocator);

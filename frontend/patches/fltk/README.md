@@ -15,6 +15,7 @@ The upstream archive remains unchanged.
 | `0004-cursor-shapes.patch` | Use compositor-provided standard cursor shapes when available. | Protocol version 1, hidden/custom cursors, pointer removal, and theme fallback. |
 | `0005-shared-drawing.patch` | Draw into client-owned shared pixels until a busy buffer requires a private drawing surface. | Pixel ownership, pending frames, resize, scaling, offscreen images, and destruction. |
 | `0006-viewport-pool.patch` | Reserve only the page-rounded first viewport for shared drawing. | Allocation guarantees, signed protocol bounds, pool retirement, resize, and scaling. |
+| `0007-wayland-no-print.patch` | Honor disabled printing for the Wayland-only build. | Debug and release must define `FL_NO_PRINT_SUPPORT` and import no disabled Cairo PDF/PostScript functions. |
 
 `scripts/prepare-fltk.py` applies the series during setup and before every native build.
 It accepts pristine sources and exact intermediate states, including the former inline title-height adjustment.
@@ -25,6 +26,13 @@ Only the managed files have these checks. Preserve other local dependency edits 
 The patch identity includes the manifest and patch contents.
 The build invalidates cached FLTK objects when this identity changes.
 Native profile output records the identity as `fltk_patch_id`.
+
+FLTK 1.4.5 applies `FLTK_OPTION_PRINT_SUPPORT=OFF` only when X11 is found.
+The Wayland-only configuration therefore kept print code, despite the disabled option.
+Our minimal Cairo intentionally omits PDF and PostScript exporters.
+Release optimization removed the unused calls; Debug retained unresolved imports.
+Patch 0007 extends the same option check to the Wayland backend without changing enabled-printing builds.
+On an FLTK upgrade, check the upstream condition before porting this patch.
 
 ## Ownership and readiness
 

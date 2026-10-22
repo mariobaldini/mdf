@@ -1,10 +1,11 @@
 #pragma once
 #include "core.hpp"
+#include "font-worker.h"
+#include "system-text.h"
 #include <atomic>
 #include <fontconfig/fontconfig.h>
 #include <memory>
 #include <pango/pangocairo.h>
-#include <pthread.h>
 #include <unordered_map>
 #include <string_view>
 
@@ -13,6 +14,7 @@ std::vector<FcChar32> missing_characters(std::string_view text, const FcCharSet 
 bool needs_fallback(std::string_view text, const FcCharSet *coverage);
 
 struct PreparedFont {
+  void *owner = nullptr;
   FcConfig *config = nullptr;
   std::vector<int> fds;
   std::vector<std::string> sources;
@@ -26,32 +28,22 @@ struct PreparedFont {
 using PreparedMonospace = PreparedFont;
 
 class MonospaceWorker {
-  pthread_t thread{};
-  bool joinable = false;
-  std::atomic<bool> stop{false}, done{false};
-  std::unique_ptr<PreparedMonospace> result;
-  struct Job;
-  static void *run(void *);
+  void *worker = nullptr;
 public:
   ~MonospaceWorker() { reset(); }
   void start(void (*notify)());
   void reset();
-  bool complete() const { return done.load(std::memory_order_acquire); }
+  bool complete() const { return worker && mdf_font_worker_complete(worker); }
   std::unique_ptr<PreparedMonospace> take();
 };
 
 class FallbackWorker {
-  pthread_t thread{};
-  bool joinable = false;
-  std::atomic<bool> stop{false}, done{false};
-  std::unique_ptr<PreparedFont> result;
-  struct Job;
-  static void *run(void *);
+  void *worker = nullptr;
 public:
   ~FallbackWorker() { reset(); }
   void start(std::vector<FcChar32> characters, const std::vector<int> &bundled_fds, void (*notify)());
   void reset();
-  bool complete() const { return done.load(std::memory_order_acquire); }
+  bool complete() const { return worker && mdf_font_worker_complete(worker); }
   std::unique_ptr<PreparedFont> take();
 };
 
@@ -62,23 +54,14 @@ struct TextMetrics {
 // GUI-owned private Pango map for code or mixed Open Sans/fallback text.
 class CodeFont {
   std::shared_ptr<PreparedFont> data;
-  std::vector<std::shared_ptr<PreparedFont>> fallback_data;
-  FcCharSet *coverage = nullptr;
-  PangoFontMap *map = nullptr;
-  PangoContext *context = nullptr;
-  PangoLayout *layout = nullptr;
-  PangoFontDescription *description = nullptr;
-  int last_size = -1, last_style = -1;
-  std::unordered_map<unsigned, TextMetrics> metric_cache;
-  void configure(int size, int style);
-  TextMetrics extents();
+  void *text = nullptr;
   void clear();
 public:
   ~CodeFont() { clear(); }
   bool ready() const { return bool(data); }
   const PreparedFont *info() const { return data.get(); }
   std::shared_ptr<PreparedFont> resources() const { return data; }
-  bool has_character(FcChar32 ch) const { return coverage && FcCharSetHasChar(coverage, ch); }
+  bool has_character(FcChar32 ch) const { return text && mdf_system_text_has_character(text, ch); }
   void adopt(std::unique_ptr<PreparedFont> prepared);
   void add_fallback(const CodeFont &font);
   int unknown_glyphs(const std::string &text, int style = 0);

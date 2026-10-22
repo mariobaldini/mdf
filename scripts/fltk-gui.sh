@@ -177,10 +177,13 @@ for name in ('no-code','code-only','raster','huge'):
     assert not run['metrics']['diagram_module_loaded'],name
     assert not any(e['name'] in ('Prepare bundled SVG module','Prepare bundled Mermaid module') for e in run['events']),name
     assert all('memfd_create("mdf-'+kind+'"' not in (folder/(name+'.trace')).read_text() for kind in ('svg','mermaid')),name
+    assert bool(run['metrics']['image_module_loaded']) == (name in ('raster','huge')),name
+    assert ('memfd_create("mdf-image"' in (folder/(name+'.trace')).read_text()) == (name in ('raster','huge')),name
 run=json.loads((folder/'svg.log').read_text());m=run['metrics']
 assert m['rendered_svgs']==1 and m['rendered_diagrams']==0 and m['diagram_errors']==0
 assert m['monospace_status']=='not-needed' and m['fallback_status']=='not-needed'
 assert m['svg_module_loaded'] and not m['mermaid_module_loaded']
+assert not m['image_module_loaded'], 'PNG capture after readiness is not a document codec requirement'
 assert m['bundled_font_styles']==m['bundled_font_data_styles']==3
 assert m['first_document_ms'] < m['diagram_module_ready_ms'] <= m['first_diagram_ms'] <= m['first_frame_ms']
 error=json.loads((folder/'svg-error.log').read_text())['metrics']
@@ -215,7 +218,7 @@ import json,sys
 data=json.load(open(sys.argv[1]));m=data['metrics']
 assert m['svg_engine']=='zig-svg' and m['rendered_diagrams']==1 and m['diagram_errors']==0
 assert m['bundled_font_styles']==3 and m['bundled_font_data_styles']==7,m
-events=[e for e in data['events'] if e['name']=='Decompress Open Sans italic']
+events=[e for e in data['events'] if e['name']=='Get required Open Sans italic data']
 assert len(events)==1 and events[0]['start_ns']/1e6 > m['first_document_flush_ms']
 print('PASS: sequence renders with zig-svg; its italic face loads only after the first Markdown flush')
 PY
@@ -244,7 +247,7 @@ for name,mask in [('small',3),('italic',7),('bold-italic',11),('italic-html',15)
     assert not m['diagram_module_loaded'] and m['monospace_status']==m['fallback_status']=='not-needed',name
     audit.audit((folder/(name+'.trace')).read_text(),False,mask.bit_count())
     for style,label in [(2,'italic'),(3,'bold italic')]:
-        events=[e for e in data['events'] if e['name']=='Decompress Open Sans '+label]
+        events=[e for e in data['events'] if e['name']=='Get required Open Sans '+label+' data']
         assert len(events)==int(bool(mask & (1<<style))),(name,label)
         for e in events: assert (e['start_ns']+e['duration_ns'])/1e6 < m['first_document_commit_ms'],name
 print('PASS: small text skips italics; Markdown, bold emphasis, HTML and table headers load only actual styles before first pixels')
@@ -270,4 +273,25 @@ for path in Path(sys.argv[1]).glob('unsupported-*.log'):
 print('PASS: all six unsupported families use source/error view without SVG or a legacy renderer')
 PY
 python3 "$mdf_root/tests/frame-submission.py" "$mdf_test"
+python3 - "$mdf_test" <<'PY'
+import json,sys,os
+from pathlib import Path
+checked=0
+expected=os.environ.get('MDF_OPTIONAL_MODULE_COMPRESSION','zlib')
+for path in Path(sys.argv[1]).glob('*.log'):
+    try: data=json.loads(path.read_text())
+    except (ValueError,UnicodeError): continue
+    if 'metrics' not in data: continue
+    if expected=='raw':
+        assert not any(e['name'] in ('Decompress diagram renderer','Decompress image codec module') for e in data['events']),path
+    for kind in ('mermaid','svg','image'):
+        m=data['metrics'];prefix=kind+'_module_'
+        if m.get(prefix+'loaded'):
+            assert m[prefix+'codec']==expected,path
+            assert 0<m[prefix+'stored_bytes']<=m[prefix+'expanded_bytes'],path
+            if expected=='raw':assert m[prefix+'stored_bytes']==m[prefix+'expanded_bytes'],path
+            checked+=1
+assert checked>0
+print('PASS: all required renderer/codec modules use '+expected+' payloads; unused modules stay unloaded')
+PY
 printf 'GUI artifacts: %s\n' "$mdf_test"

@@ -1,0 +1,26 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "low-contrast",
+        "value": "*",
+        "files": [
+          "scripts/profile.html"
+        ],
+        "createdAt": "2026-10-22T18:48:40.386Z",
+        "reason": "Codex review: detector mixes dark-muted #9eafc2 with light white and misses inherited dark foreground, inventing black on dark paper. Actual dark muted/paper contrast is 6.90:1 and ink/paper 12.78:1; light muted/paper 5.06:1. Native minimap white-label contrast independently fixed to 5.37:1."
+      },
+      {
+        "rule": "side-tab",
+        "value": "*",
+        "files": [
+          "scripts/profile.html"
+        ],
+        "createdAt": "2026-10-22T18:48:40.426Z",
+        "reason": "Codex review: existing profiler gate borders encode thread ownership using the same thread colors as the graph legend. Preserve this data encoding; no unrelated restyling."
+      }
+    ]
+  }
+}

@@ -39,8 +39,8 @@ test "settings: invalid dimensions reset independently" {
     try std.testing.expectEqual(@as(i32, 900), short.window.width);
     try std.testing.expectEqual(@as(i32, 780), short.window.height);
 }
-test "settings: all three themes survive the stored preference format" {
-    for ([_]settings.Preset{ .classic, .paper, .terminal }) |theme| {
+test "settings: every built-in theme survives the stored preference format" {
+    for (std.meta.tags(settings.Preset)) |theme| {
         const values = settings.Values{ .save_settings_across_sessions = true, .theme = theme };
         const text = try std.json.Stringify.valueAlloc(a, values, .{});
         defer a.free(text);

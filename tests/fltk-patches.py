@@ -6,6 +6,7 @@ import importlib.util
 import json
 from pathlib import Path
 import tempfile
+import subprocess
 import unittest
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -14,6 +15,23 @@ prepare = importlib.util.module_from_spec(spec); spec.loader.exec_module(prepare
 
 
 class Patches(unittest.TestCase):
+    def test_disabled_printing_applies_to_wayland_and_x11(self):
+        source=ROOT/'zig-pkg/fltk'
+        prepare.prepare(source)
+        text=(source/'CMake/options.cmake').read_text()
+        start=text.index('set(FL_NO_PRINT_SUPPORT FALSE)')
+        end=text.index('\n',text.index('endif',start))
+        block=text[start:end]
+        with tempfile.TemporaryDirectory(prefix='mdf-print-option-') as directory:
+            program=Path(directory)/'check.cmake'
+            for x11,wayland,printing,disabled in [('OFF','ON','OFF','TRUE'),('OFF','ON','ON','FALSE'),
+                                                ('ON','OFF','OFF','TRUE'),('OFF','OFF','OFF','FALSE')]:
+                program.write_text(f'set(X11_FOUND {x11})\nset(FLTK_BACKEND_WAYLAND {wayland})\n'
+                    f'set(FLTK_OPTION_PRINT_SUPPORT {printing})\n'+block+
+                    f'\nif(NOT FL_NO_PRINT_SUPPORT STREQUAL "{disabled}")\nmessage(FATAL_ERROR "Print option ignored")\nendif()\n')
+                checked=subprocess.run(['cmake','-P',str(program)],capture_output=True,text=True)
+                self.assertEqual(checked.returncode,0,checked.stderr)
+
     def fixture(self, directory):
         directory = Path(directory)
         source = directory / 'source'; source.mkdir()

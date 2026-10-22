@@ -115,6 +115,15 @@
           "after": "0692d86973fab32ae21555ec687f859ee3a962b73f0c26af5319114891675207"
         }
       }
+    },
+    {
+      "patch": "0007-wayland-no-print.patch",
+      "files": {
+        "CMake/options.cmake": {
+          "before": "dba73ac9c4be9f17751d201c697794eb76882867c67692b9572a2ed5a37ba260",
+          "after": "c385e935cee5a166facd9d08b99227116693e3fa4bf8a16a705b705d1f2f6304"
+        }
+      }
     }
   ]
 }

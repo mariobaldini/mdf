@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 """Performance selection must reject tail regressions and timer-only gains."""
 import importlib.util
+import errno
 from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
 import unittest
 
 root = Path(__file__).resolve().parent.parent
@@ -19,6 +24,37 @@ def fixture():
 
 
 class Selection(unittest.TestCase):
+    @unittest.skipUnless(sys.platform.startswith('linux'),'Linux executable inode locking')
+    def test_staging_preserves_a_running_executable_and_replaces_the_next_launch(self):
+        with tempfile.TemporaryDirectory(prefix='mdf-stage-') as temporary:
+            path=Path(temporary)/'mdf'
+            benchmark.stage_executable(path,Path(shutil.which('sleep')).read_bytes())
+            running=subprocess.Popen([str(path),'30'])
+            try:
+                with self.assertRaises(OSError) as failure:
+                    path.write_bytes(b'cannot overwrite a running ELF')
+                self.assertEqual(failure.exception.errno,errno.ETXTBSY)
+                benchmark.stage_executable(path,Path(shutil.which('true')).read_bytes())
+                self.assertIsNone(running.poll())
+                self.assertEqual(subprocess.run([str(path)],timeout=5).returncode,0)
+                self.assertFalse(path.with_name('mdf.next').exists())
+            finally:
+                running.terminate();running.wait(timeout=5)
+
+    def test_optimized_native_and_reference_profiles_are_accepted(self):
+        benchmark.optimized_profile({'mode':'ReleaseFast','ui_mode':'ReleaseFast','gui':'native Zig / Wayland','dropped_events':0})
+        benchmark.optimized_profile({'mode':'ReleaseFast','ui_mode':'Release','gui':'FLTK 1.4.5','dropped_events':0})
+        for bad in ({'mode':'Debug','ui_mode':'Debug'},{'mode':'ReleaseFast','ui_mode':'Debug'},
+                    {'mode':'ReleaseFast','ui_mode':'ReleaseFast','gui':'FLTK 1.4.5'},
+                    {'mode':'ReleaseFast','ui_mode':'ReleaseFast','dropped_events':1}):
+            with self.assertRaises(RuntimeError):benchmark.optimized_profile(bad)
+
+    def test_estimate_uses_the_shared_student_t_margin(self):
+        samples=[1,3,8,9]
+        mean,margin=benchmark.estimate(samples)
+        expected=benchmark.profile.timing_stats(samples)
+        self.assertEqual(mean,expected['mean_ms'])
+        self.assertEqual(margin,expected['margin_95_ms'])
     def test_power_preference_and_limits_must_stay_constant(self):
         initial={'cpu_affinity':[0,1], 'cpu_governors':['performance'],
                  'cpu_power':{'energy_preference':'performance','max_freq':5200000},

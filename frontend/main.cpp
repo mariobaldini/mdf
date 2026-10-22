@@ -4,16 +4,13 @@
 #include "diagrams.hpp"
 #include "../tests/text-layout.hpp"
 #include <FL/Fl.H>
-#include <FL/Fl_BMP_Image.H>
 #include <FL/Fl_Box.H>
 #include <FL/Fl_Button.H>
 #include <FL/Fl_Double_Window.H>
-#include <FL/Fl_GIF_Image.H>
 #include <FL/Fl_Hold_Browser.H>
-#include <FL/Fl_JPEG_Image.H>
 #include <FL/Fl_Menu_Bar.H>
 #include <FL/Fl_Native_File_Chooser.H>
-#include <FL/Fl_PNG_Image.H>
+#include <FL/Fl_RGB_Image.H>
 #include <FL/Fl_Scrollbar.H>
 #include <FL/filename.H>
 #include <FL/fl_ask.H>
@@ -128,6 +125,7 @@ static const MdfStartup *launch_context = nullptr;
 struct App {
   static constexpr int scrollbar_width = 20;
   Core &core;
+  MdfDiagramStats startup_image_module{};
   FontStore &fonts;
   Settings settings;
   std::unique_ptr<MainWindow> window;
@@ -178,7 +176,6 @@ struct App {
   bool images_started = false, images_ready = false;
   bool refresh_diagram_fonts = false;
   bool svg_present = false;
-  bool gui_image_formats = false;
   float navigation_width = 0, navigation_zoom = 0;
   std::string capture, capture_anchor, initial_path, error;
   std::vector<double> scroll_draw_ms;
@@ -300,9 +297,11 @@ struct App {
     add_menu("Font/Larger", FL_CTRL + '=', "larger");
     add_menu("Font/Smaller", FL_CTRL + '-', "smaller");
     add_menu("Font/Default size", FL_CTRL + '0', "font-reset");
-    add_menu("Theme/Classic", 0, "theme:classic", FL_MENU_RADIO);
-    add_menu("Theme/Paper", 0, "theme:paper", FL_MENU_RADIO);
-    add_menu("Theme/Terminal", 0, "theme:terminal", FL_MENU_RADIO);
+    for (size_t i = 0; i < mdf_theme_count(); ++i) {
+      const auto theme = mdf_theme_info(i);
+      add_menu(("Theme/" + view_text(theme.name)).c_str(), 0,
+               ("theme:" + view_text(theme.id)).c_str(), FL_MENU_RADIO);
+    }
     add_menu("Settings/Automatic reload", 0, "auto-reload", FL_MENU_TOGGLE);
     add_menu("Settings/Save settings across sessions", 0, "save-settings",
              FL_MENU_TOGGLE);
@@ -397,10 +396,11 @@ struct App {
       toc->hide();
       toc_title->hide();
     }
+    const bool horizontal = !settings.line_wrap || reader->max_horizontal_scroll() > 0;
     reader->resize(left, Y, std::max(1, W - left - right - scrollbar_width),
-                   std::max(1, view_h - (settings.line_wrap ? 0 : scrollbar_width)));
+                   std::max(1, view_h - (horizontal ? scrollbar_width : 0)));
     horizontal_scrollbar->resize(reader->x(), reader->y() + reader->h(), reader->w(), scrollbar_width);
-    if (settings.line_wrap) horizontal_scrollbar->hide();
+    if (!horizontal) horizontal_scrollbar->hide();
     else horizontal_scrollbar->show();
     scrollbar->resize(W - right - scrollbar_width, Y, scrollbar_width, view_h);
     // The scrollbar's arrow buttons sit outside its document track.
@@ -447,8 +447,8 @@ struct App {
           font_decrease_button, font_reset_button, font_increase_button,
           static_cast<Fl_Button *>(wrap_button)}) {
       w->labelsize(14);
-      w->color(buttons.panel);
-      w->labelcolor(buttons.fg);
+      w->color(p.panel);
+      w->labelcolor(p.fg);
       w->selection_color(buttons.link);
     }
     for (auto *w :
@@ -518,6 +518,8 @@ struct App {
     window->redraw();
   }
   void scroll_changed() {
+    const bool horizontal = !settings.line_wrap || reader->max_horizontal_scroll() > 0;
+    if (bool(horizontal_scrollbar->visible()) != horizontal) layout();
     const int position = reader->scroll;
     const int total =
         std::max({reader->h(), int(reader->total()), position + reader->h()});
@@ -525,7 +527,7 @@ struct App {
     scrollbar->value(position);
     // A fixed 10% handle keeps preview navigation usable on large documents.
     scrollbar->slider_size(.1);
-    if (!settings.line_wrap) {
+    if (horizontal_scrollbar->visible()) {
       const int total_width = std::max(reader->w(), int(reader->horizontal_total()));
       horizontal_scrollbar->value(int(std::round(reader->horizontal_scroll)), reader->w(), 0, total_width);
       horizontal_scrollbar->linesize(std::max(1, int(reader->body_size() * 3)));
@@ -573,7 +575,6 @@ struct App {
       refresh_diagram_fonts = false;
       svg_present = false;
       images_started = images_ready = false;
-      gui_image_formats = false;
       image_worker.reset();
     }
     navigation_started = false;
@@ -680,12 +681,10 @@ struct App {
           if (reader->images.count(i) && !(refresh_diagram_fonts && reader->diagram_sizes.count(i))) continue;
           auto bytes = core.image(i);
           if (bytes.ptr && bytes.len >= 4 &&
-              ((bytes.ptr[0] == 'G' && bytes.ptr[1] == 'I') ||
-               (bytes.ptr[0] == 'B' && bytes.ptr[1] == 'M')))
-            gui_image_formats = true;
-          if (bytes.ptr && bytes.len >= 4 &&
               ((bytes.ptr[0] == 137 && bytes.ptr[1] == 'P') ||
-               (bytes.ptr[0] == 255 && bytes.ptr[1] == 216)))
+               (bytes.ptr[0] == 255 && bytes.ptr[1] == 216) ||
+               (bytes.ptr[0] == 'G' && bytes.ptr[1] == 'I') ||
+               (bytes.ptr[0] == 'B' && bytes.ptr[1] == 'M')))
             inputs.push_back({int(i), std::vector<unsigned char>(bytes.ptr, bytes.ptr + bytes.len)});
           else if (svg_image(bytes.ptr, bytes.len)) {
             svg_present = true;
@@ -702,8 +701,8 @@ struct App {
       }
       // Do not manufacture a second frame if all optional work is already
       // prepared before the first paint. Otherwise keep Markdown responsive.
-      if (!first_document && (gui_image_formats ||
-          !(images_ready || (images_started && image_worker.complete()))))
+      if (!first_document &&
+          !(images_ready || (images_started && image_worker.complete())))
         return;
       if (navigation_started && (std::abs(navigation_width - reader->content_width) >= 1 ||
                                   navigation_zoom != reader->zoom()))
@@ -735,31 +734,8 @@ struct App {
             trace("navigation applied");
             minimap->redraw();
           }
-          {
-            PHASE("Decode remaining local image formats");
-            for (auto idx : nav.get("images")) {
-              int i = idx.as<int>();
-              auto bytes = core.image(i);
-              if (!bytes.ptr || bytes.len < 4)
-                continue;
-              std::unique_ptr<Fl_RGB_Image> img;
-              if (bytes.ptr[0] == 'G' && bytes.ptr[1] == 'I') {
-                auto gif = std::make_unique<Fl_GIF_Image>("mdf-local",
-                                                          bytes.ptr, bytes.len);
-                img = std::make_unique<Fl_RGB_Image>(gif.get(),
-                                                     reader->palette.bg);
-              } else if (bytes.ptr[0] == 'B' && bytes.ptr[1] == 'M')
-                img = std::make_unique<Fl_BMP_Image>("mdf-local", bytes.ptr,
-                                                     bytes.len);
-              if (img && img->data_w() > 0 && img->data_h() > 0) {
-                reader->images[i] = std::move(img);
-                reader->cache.erase(i);
-                reader->horizontal_dirty = true;
-              }
-            }
-            reader->redraw();
-            minimap->redraw();
-          }
+          reader->redraw();
+          minimap->redraw();
           scroll_changed();
         } else if (state == "failed") {
           navigation_ready = images_ready = true;
@@ -931,6 +907,9 @@ struct App {
         full_ready = submitted_at;
       if (profiling || benchmark || self_test) {
         startup_frames = frames;
+        // Explicit screenshot encoding may load codecs after readiness.
+        // Snapshot the document's requirements before capture or self-tests.
+        startup_image_module = mdf_diagram_stats(MDF_MODULE_IMAGE);
         startup_usage = core.profile().get("usage");
         std::ifstream proc("/proc/self/status");
         std::string line;
@@ -1128,10 +1107,16 @@ struct App {
     auto *data = fl_read_image(nullptr, x, y, w, h, 0);
     if (!data)
       throw std::runtime_error("Cannot capture window");
-    Fl_RGB_Image image(data, w, h, 3);
-    image.alloc_array = 1;
-    if (fl_write_png(file.c_str(), &image))
+    std::unique_ptr<unsigned char, decltype(&std::free)> pixels(data, std::free);
+    const MdfPixels image{data, w, h, 3};
+    MdfEncodedImage bytes{};
+    if (!mdf_lazy_encode_png(&image, size_t(w) * size_t(h) * 3, &bytes))
       throw std::runtime_error("Cannot save screenshot");
+    std::unique_ptr<unsigned char, decltype(&std::free)> encoded(bytes.data, std::free);
+    std::ofstream output(file, std::ios::binary | std::ios::trunc);
+    output.write(reinterpret_cast<const char *>(bytes.data), std::streamsize(bytes.length));
+    output.close();
+    if (!output) throw std::runtime_error("Cannot save screenshot");
   }
   void measure_scroll() {
     PHASE("Measure interactive document scrolling");
@@ -1192,6 +1177,10 @@ struct App {
     metrics.set("mermaid_engine", "pozeiden");
     metrics.set("svg_engine", "zig-svg");
     metrics.set("image_decoder", "zignal");
+    metrics.set("png_encoder", "zignal");
+    metrics.set("compression_engine", "std.compress.flate");
+    metrics.set("markdown_parser", "zigmark");
+    metrics.set("markdown_parser_version", "0.11.1");
     metrics.set("image_decoder_version", "0.11.0");
     metrics.set("json_engine", "std.json");
     if (launch_context) {
@@ -1200,19 +1189,27 @@ struct App {
     }
     metrics.set("bundled_font_styles", fonts.styles);
     metrics.set("bundled_font_data_styles", bundled_font_data_styles());
+    metrics.set("image_module_loaded", startup_image_module.ready_ns != 0);
+    if (startup_image_module.ready_ns) {
+      metrics.set("image_module_ready_ms", ms(startup_image_module.ready_ns));
+      metrics.set("image_module_stored_bytes", startup_image_module.packed);
+      metrics.set("image_module_expanded_bytes", startup_image_module.expanded);
+      metrics.set("image_module_codec", startup_image_module.flags & MDF_MODULE_PAYLOAD_RAW ? "raw" : "zlib");
+    }
     for (auto kind : {DiagramModule::mermaid, DiagramModule::svg}) {
       const std::string prefix = kind == DiagramModule::svg ? "svg_module_" : "mermaid_module_";
       metrics.set(prefix + "loaded", diagram_renderer_loaded(kind));
       if (diagram_renderer_loaded(kind)) {
         metrics.set(prefix + "ready_ms", ms(diagram_renderer_ready_ns(kind)));
-        metrics.set(prefix + "compressed_bytes", diagram_renderer_packed_bytes(kind));
+        metrics.set(prefix + "stored_bytes", diagram_renderer_packed_bytes(kind));
+        metrics.set(prefix + "codec", mdf_diagram_stats(uint32_t(kind)).flags & MDF_MODULE_PAYLOAD_RAW ? "raw" : "zlib");
         metrics.set(prefix + "expanded_bytes", diagram_renderer_expanded_bytes(kind));
       }
     }
     if (first_diagram_ns) metrics.set("first_diagram_ms", ms(first_diagram_ns));
     if (diagram_renderer_loaded()) {
       metrics.set("diagram_module_ready_ms", ms(diagram_renderer_ready_ns()));
-      metrics.set("diagram_module_compressed_bytes", diagram_renderer_packed_bytes());
+      metrics.set("diagram_module_stored_bytes", diagram_renderer_packed_bytes());
       metrics.set("diagram_module_expanded_bytes", diagram_renderer_expanded_bytes());
     }
     metrics.set("first_viewport_monospace", first_viewport_monospace);
@@ -1314,6 +1311,59 @@ struct App {
     for (const auto &[index, size] : reader->diagram_sizes)
       ensure(reader->measure(index).image && reader->measure(index).runs.empty(),
              "Mermaid draws a diagram instead of its fenced source");
+    for (const auto &[index, size] : reader->diagram_sizes) {
+      if (!reader->blocks[index].mermaid()) continue;
+      const auto *pixels = reader->image_pixels.at(index)->image.data;
+      reader->jump(index);
+      reader->prepare_visible();
+      const auto natural = reader->measure(index);
+      ensure(std::abs(natural.iw - size.first * reader->zoom()) < .01f,
+             "FLTK keeps natural Mermaid label size");
+      auto controls = reader->diagram_controls(index, natural.iy - reader->diagram_controls(index, 0).height);
+      const auto plus = controls.boxes[2];
+      float py = reader->offsets[index] - reader->scroll + plus.y + 14;
+      reader->pointer(0, plus.x + plus.w / 2, py);
+      reader->pointer(2, plus.x + plus.w / 2, py);
+      ensure(reader->diagram_scale(index) > 1, "FLTK diagram zoom button responds");
+      const auto enlarged = reader->measure(index);
+      py = reader->offsets[index] - reader->scroll + enlarged.iy + 40;
+      reader->pointer(0, reader->margin + 80, py);
+      reader->pointer(1, reader->margin + 40, py);
+      reader->pointer(2, reader->margin + 40, py);
+      ensure(reader->horizontal_scroll > 0, "FLTK diagrams support drag panning");
+      const auto fit = controls.boxes[3];
+      py = reader->offsets[index] - reader->scroll + fit.y + 14;
+      reader->pointer(0, fit.x + fit.w / 2, py);
+      reader->pointer(2, fit.x + fit.w / 2, py);
+      ensure(reader->diagram_states.at(index).fit && reader->measure(index).iw <= reader->content_width + .01f,
+             "FLTK Fit control stays reachable after panning");
+      reader->zoom_diagram(index, 1);
+      ensure(std::abs(reader->diagram_scale(index) - 1) < .001f, "FLTK resets diagram zoom to 100%");
+      for (int i = 0; i < 12; ++i) reader->zoom_diagram(index, 2);
+      ensure(reader->diagram_scale(index) == 2, "FLTK diagram enlargement is bounded");
+      for (int i = 0; i < 24; ++i) reader->zoom_diagram(index, 0);
+      ensure(reader->diagram_scale(index) == .25f && reader->image_pixels.at(index)->image.data == pixels,
+             "FLTK diagram zoom reuses the decoded pixels");
+      reader->diagram_states.erase(index);
+      reader->diagram_focus.reset();
+      reader->invalidate();
+    }
+    size_t wide_tables = 0;
+    for (int i = 0; i < int(reader->blocks.size()); ++i) {
+      if (!reader->blocks[i].table_header || reader->blocks[i].cells.size() < 8) continue;
+      reader->jump(i);
+      reader->prepare_visible();
+      scroll_changed();
+      ensure(settings.line_wrap && reader->max_horizontal_scroll() > 0 && horizontal_scrollbar->visible(),
+             "FLTK preserves readable wide-table columns with wrapping enabled");
+      reader->move_horizontal(reader->max_horizontal_scroll());
+      ensure(reader->horizontal_scroll > 0, "FLTK wide tables expose their last columns");
+      ++wide_tables;
+    }
+    ensure(wide_tables >= 3, "FLTK checks the 8-, 16- and 24-column fixtures");
+    reader->move_horizontal(0);
+    reader->move_scroll(0);
+    std::cout << "PASS: FLTK readable tables and Mermaid zoom, Fit, reset, panning and pixel reuse\n";
     ensure(fonts.fds.size() == 4, "Exactly four embedded font memory files");
     auto *map = pango_cairo_font_map_get_default();
     ensure(pango_fc_font_map_get_config(PANGO_FC_FONT_MAP(map)) ==
@@ -1438,8 +1488,9 @@ struct App {
         const auto &columns = table.table_columns(0, table.content_width);
         float used = 0;
         for (float value : columns) used += value;
-        ensure(std::abs(used - table.content_width) < .1f,
-               "Measured table columns fit the viewport");
+        ensure(used >= table.content_width - .1f &&
+                   std::all_of(columns.begin(), columns.end(), [](float width) { return width > 0; }),
+               "Measured table columns fill the viewport or overflow to keep words readable");
         ensure(&columns == &table.table_columns(1, table.content_width),
                "Header and body share the same column boundaries");
       }
@@ -1478,16 +1529,18 @@ struct App {
            "Width menu updates button");
     action("width80");
     ensure(settings.line_wrap && !wrap_button->value() &&
-               wrap_button->color() == Palette::get(Settings{}).panel && !horizontal_scrollbar->visible() &&
+               wrap_button->color() == Palette::get(Settings{}).panel &&
+               bool(horizontal_scrollbar->visible()) == (reader->max_horizontal_scroll() > 0) &&
                core.settings().value("line_wrap", false),
-           "Line wrap defaults on with an unselected button and no horizontal scrollbar");
+           "Line wrap defaults on; only overflowing tables/diagrams need a body scrollbar");
     const int wrapped_height = reader->h(), toc_height = toc->h(), preview_height = minimap->h();
+    const bool wrapped_bar = horizontal_scrollbar->visible();
     wrap_button->do_callback();
     reader->prepare_visible();
     scroll_changed();
     ensure(!settings.line_wrap && wrap_button->value() &&
                wrap_button->color() == Palette::get(Settings{}).link && horizontal_scrollbar->visible() &&
-               !core.settings().value("line_wrap", true) && reader->h() == wrapped_height - scrollbar_width &&
+               !core.settings().value("line_wrap", true) && reader->h() == wrapped_height - (wrapped_bar ? 0 : scrollbar_width) &&
                toc->h() == toc_height && minimap->h() == preview_height,
            "Disabling wrap reserves only document space and updates saved preferences");
     ensure(horizontal_scrollbar->x() == reader->x() && horizontal_scrollbar->w() == reader->w() &&
@@ -1513,8 +1566,8 @@ struct App {
     action("line-wrap");
     ensure(settings.line_wrap && !wrap_button->value() &&
                wrap_button->color() == Palette::get(Settings{}).panel &&
-               !horizontal_scrollbar->visible() && reader->horizontal_scroll == 0 &&
-               reader->h() == wrapped_height,
+               bool(horizontal_scrollbar->visible()) == (reader->max_horizontal_scroll() > 0) && reader->horizontal_scroll == 0 &&
+               reader->h() == window->h() - 98 - (horizontal_scrollbar->visible() ? scrollbar_width : 0),
            "Enabling wrap restores body height and resets horizontal position");
     {
       Settings prefs;
@@ -1530,7 +1583,8 @@ struct App {
       paragraph.spans = {long_link, tail};
       text_view.blocks = {paragraph};
       text_view.starts = {0};
-      text_view.plain = long_link.text + tail.text;
+      const std::string fixture_plain = long_link.text + tail.text;
+      text_view.plain = fixture_plain;
       text_view.invalidate();
       const auto wrapped = text_view.measure(0);
       prefs.line_wrap = false;
@@ -1554,6 +1608,8 @@ struct App {
       auto target = text_view.hit(caret(25), y);
       ensure(target && target->pos == 25 && target->link == "#target",
              "Link hit testing accounts for horizontal scrolling");
+      ensure(text_view.hover_cursor(caret(25), y) == FL_CURSOR_HAND,
+             "Links retain a hand cursor after horizontal scrolling");
       text_view.pointer(0, caret(25), y);
       text_view.pointer(1, caret(30), y);
       text_view.pointer(2, caret(30), y);
@@ -1568,6 +1624,11 @@ struct App {
       text_view.configure(prefs);
       ensure(text_view.max_horizontal_scroll() == 0,
              "An unwrapped short line has no spurious horizontal overflow");
+      text_view.prepare_visible();
+      const auto &plain_run = text_view.cache.at(0).runs.front();
+      ensure(text_view.hover_cursor(plain_run.x + 2, plain_run.y - plain_run.style.size * .4f) == FL_CURSOR_ARROW &&
+                 text_view.hover_cursor(0, 0) == FL_CURSOR_ARROW,
+             "Document text and empty space use the normal arrow cursor");
     }
     const int preview_width = minimap->w(), reader_width = reader->w();
     preview_button->do_callback();
@@ -1583,13 +1644,23 @@ struct App {
     ensure(!settings.toc, "TOC hides");
     action("toc");
     ensure(settings.toc, "TOC shows");
+    const auto quote_heading = std::find_if(reader->blocks.begin(), reader->blocks.end(),
+        [](const Block &block) { return block.anchor == "block-quotes"; });
+    auto capture_quotes = [&](const char *mode) {
+      if (capture.empty() || quote_heading == reader->blocks.end()) return;
+      reader->jump(int(quote_heading - reader->blocks.begin()));
+      capture_frame(capture + ".quotes-" + mode + ".png");
+    };
+    capture_quotes("light");
     action("dark");
     ensure(settings.dark, "Dark mode");
     reader->jump(0);
     reader->prepare_visible();
     ensure(reader->cache.at(0).runs.front().style.color == reader->palette.fg,
            "Dark text cache recolored");
+    capture_quotes("dark");
     action("dark");
+    reader->jump(0);
     font_increase_button->do_callback();
     ensure(settings.size == 13, "Font step");
     font_decrease_button->do_callback();
@@ -1684,19 +1755,37 @@ struct App {
                  theme_button->icon ==
                      (dark ? IconButton::sun : IconButton::moon),
              "Toolbar independently switches mode and its native icon");
-      for (const char *theme : {"classic", "paper", "terminal"}) {
-        action(std::string("theme:") + theme);
+      for (size_t i = 0; i < mdf_theme_count(); ++i) {
+        const auto theme = mdf_theme_info(i);
+        const auto id = view_text(theme.id);
+        ensure(menu->find_item(("Theme/" + view_text(theme.name)).c_str()), "Every built-in theme appears in the native menu");
+        action("theme:" + id);
         ensure(settings.dark == dark &&
                    settings.size == settings.default_font_size(),
                "Every palette preserves the current mode and sets its default "
                "size");
+        ensure(reader->palette.bg == Palette::get(settings).bg && menu->color() == reader->palette.panel &&
+                   theme_button->color() == reader->palette.panel,
+               "Theme colors update the document, menus, and toolbar together");
+        if (!capture.empty()) {
+          reader->selection.reset();
+          const auto heading = std::find_if(reader->blocks.begin(), reader->blocks.end(),
+              [](const Block &block) { return block.anchor == "text-styles"; });
+          if (heading != reader->blocks.end()) reader->jump(int(heading - reader->blocks.begin()));
+          capture_frame(capture + ".theme-" + id + (dark ? "-dark.png" : "-light.png"));
+          const auto alert_heading = std::find_if(reader->blocks.begin(), reader->blocks.end(),
+              [](const Block &block) { return block.anchor == "github-alerts"; });
+          if (alert_heading != reader->blocks.end()) reader->jump(int(alert_heading - reader->blocks.begin()));
+          capture_frame(capture + ".theme-" + id + (dark ? "-dark.alerts.png" : "-light.alerts.png"));
+        }
       }
     }
     action("reset");
     ensure(settings.size == 12 && !settings.save &&
                settings.width == "percent_80",
            "Reset defaults");
-    ensure(settings.line_wrap && !wrap_button->value() && !horizontal_scrollbar->visible(),
+    ensure(settings.line_wrap && !wrap_button->value() &&
+               bool(horizontal_scrollbar->visible()) == (reader->max_horizontal_scroll() > 0),
            "Reset restores line wrapping and an unselected button");
     measure_scroll();
     if (!capture.empty())

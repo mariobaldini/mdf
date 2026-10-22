@@ -2,29 +2,91 @@
 const std = @import("std");
 const svg = @import("svg");
 const z2d = @import("z2d");
+const coverage = @import("native/font-coverage.zig");
 const Font = extern struct { data: ?[*]const u8, length: usize };
 const Pixels = extern struct { data: ?[*]u8, width: c_int, height: c_int, channels: c_int };
+const Glyphs = extern struct { data: ?[*]const u8 = null, length: usize = 0 };
 extern fn mdf_builtin_font(family: u32, style: u32) Font;
 const Fonts = struct {
     extra: []const Font,
-    fn resolve(ctx: ?*anyopaque, req: svg.raster.FontRequest) ?[]const u8 {
-        const self: *const Fonts = @ptrCast(@alignCast(ctx.?));
-        // The upstream callback has no text/character-coverage argument.
-        // Explicit non-Open-Sans families can use an already prepared face.
-        // Per-character fallback and complex-script shaping remain limitations
-        // of this backend; body text retains its separate Pango font maps.
-        if (self.extra.len > 0 and req.family.len > 0 and !std.ascii.eqlIgnoreCase(req.family, "Open Sans")) {
-            const face = self.extra[0];
-            if (face.data) |bytes| return bytes[0..face.length];
+    loaded: [256]bool = @splat(false),
+    faces: [256]?z2d.font.Font = @splat(null),
+    builtin: [4]?z2d.font.Font = @splat(null),
+    capture: bool = false,
+    missing: std.AutoHashMapUnmanaged(u21, void) = .empty,
+    failure: ?anyerror = null,
+    fn note(self: *Fonts, font: ?*const z2d.font.Font, text: []const u8) void {
+        if (!self.capture) return;
+        var iterator = (std.unicode.Utf8View.init(text) catch return).iterator();
+        while (iterator.nextCodepoint()) |ch| {
+            if (coverage.ignorable(ch) or (if (font) |face| coverage.has(face, ch) else false)) continue;
+            if (self.missing.contains(ch)) continue;
+            if (self.missing.count() >= 65536) { self.failure = error.TooManyMissingGlyphs; return; }
+            self.missing.put(std.heap.smp_allocator, ch, {}) catch |err| { self.failure = err; return; };
         }
+    }
+    fn glyphs(self: *Fonts) !Glyphs {
+        if (self.failure) |err| return err;
+        if (self.missing.count() == 0) return .{};
+        const allocator = std.heap.c_allocator;
+        const characters = try allocator.alloc(u21, self.missing.count());
+        defer allocator.free(characters);
+        var keys = self.missing.keyIterator();
+        var index: usize = 0;
+        while (keys.next()) |ch| : (index += 1) characters[index] = ch.*;
+        std.mem.sort(u21, characters, {}, std.sort.asc(u21));
+        var text: std.ArrayList(u8) = .empty;
+        errdefer text.deinit(allocator);
+        for (characters) |ch| {
+            var encoded: [4]u8 = undefined;
+            const length = try std.unicode.utf8Encode(ch, &encoded);
+            try text.appendSlice(allocator, encoded[0..length]);
+        }
+        const owned = try text.toOwnedSlice(allocator);
+        return .{ .data = owned.ptr, .length = owned.len };
+    }
+    fn load(face: Font) ?z2d.font.Font {
+        const data = face.data orelse return null;
+        const file = z2d.font.File.loadBuffer(data[0..face.length]) catch return null;
+        return file.loadFontIndex(0) catch null;
+    }
+    fn stylePenalty(face: *const z2d.font.Font, style: u32) u32 {
+        const at: usize = @as(usize, face.dir.head) + 44;
+        if (at > face.file.buffer.len or face.file.buffer.len - at < 2) return 2;
+        const flags = std.mem.readInt(u16, face.file.buffer[at..][0..2], .big);
+        return @intFromBool((flags & 1 != 0) != (style & 1 != 0)) + @as(u32, @intFromBool((flags & 2 != 0) != (style & 2 != 0)));
+    }
+    fn resolve(ctx: ?*anyopaque, req: svg.raster.FontRequest) ?[]const u8 {
+        const self: *Fonts = @ptrCast(@alignCast(ctx.?));
         const style: u32 = (if (req.italic) @as(u32, 2) else 0) + (if (req.weight > 550) @as(u32, 1) else 0);
         const face = mdf_builtin_font(0, style);
-        if (face.data) |bytes| return bytes[0..face.length];
-        return null;
+        var selected: ?[]const u8 = if (face.data) |bytes| bytes[0..face.length] else null;
+        if ((self.extra.len == 0 and !self.capture) or req.text.len == 0) return selected;
+        if (self.builtin[style] == null) self.builtin[style] = load(face);
+        var missing = if (self.builtin[style]) |*font| coverage.missingCount(font, req.text) else std.math.maxInt(usize);
+        var selected_font: ?*const z2d.font.Font = if (self.builtin[style]) |*font| font else null;
+        if (missing == 0) return selected;
+        var penalty: u32 = 0;
+        for (self.extra, 0..) |candidate, index| {
+            if (!self.loaded[index]) { self.loaded[index] = true; self.faces[index] = load(candidate); }
+            if (self.faces[index]) |*font| {
+                const absent = coverage.missingCount(font, req.text);
+                const mismatch = stylePenalty(font, style);
+                if (absent < missing or (absent == missing and mismatch < penalty)) {
+                    selected = candidate.data.?[0..candidate.length]; missing = absent; penalty = mismatch; selected_font = font;
+                    if (missing == 0 and penalty == 0) break;
+                }
+            }
+        }
+        if (missing > 0) self.note(selected_font, req.text);
+        return selected;
     }
 };
 
 fn render(source: []const u8, extra: []const Font, limit: usize, out: *Pixels, lw: *f32, lh: *f32) !void {
+    return renderDetailed(source, extra, limit, out, lw, lh, null);
+}
+fn renderDetailed(source: []const u8, extra: []const Font, limit: usize, out: *Pixels, lw: *f32, lh: *f32, missing_glyphs: ?*Glyphs) !void {
     if (source.len == 0) return error.EmptySvg;
     if (source.len > 16 * 1024 * 1024) return error.InputTooLarge;
     if (!std.unicode.utf8ValidateSlice(source)) return error.InvalidUtf8;
@@ -41,7 +103,8 @@ fn render(source: []const u8, extra: []const Font, limit: usize, out: *Pixels, l
     if (scale < 1) return error.ImageMemoryLimit;
     const width: u32 = @intFromFloat(@max(1, @floor(logical_width * scale)));
     const height: u32 = @intFromFloat(@max(1, @floor(logical_height * scale)));
-    var fonts = Fonts{ .extra = extra };
+    var fonts = Fonts{ .extra = extra, .capture = missing_glyphs != null };
+    defer fonts.missing.deinit(allocator);
     const options: svg.Options = .{
         .width = width, .height = height,
         .fonts = .{ .ctx = &fonts, .resolve = Fonts.resolve },
@@ -71,6 +134,7 @@ fn render(source: []const u8, extra: []const Font, limit: usize, out: *Pixels, l
         for (channels, 0..) |value, ch| bytes[at + ch] = if (alpha > 0 and alpha < 255)
             @intCast(@min(255, (@as(u32, value) * 255 + alpha / 2) / alpha)) else value;
     }
+    if (missing_glyphs) |output| output.* = try fonts.glyphs();
     out.* = .{ .data = bytes.ptr, .width = @intCast(width), .height = @intCast(height), .channels = 4 };
     lw.* = logical_width;
     lh.* = logical_height;
@@ -112,8 +176,9 @@ fn failure(buffer: ?[*]u8, length: usize, message: []const u8) c_int {
 
 export fn mdf_render_svg(source: ?[*]const u8, length: usize, dark: c_int,
     extra: ?[*]const Font, count: usize, limit: usize, output: ?*Pixels,
-    lw: ?*f32, lh: ?*f32, error_buffer: ?[*]u8, error_length: usize) c_int {
+    lw: ?*f32, lh: ?*f32, error_buffer: ?[*]u8, error_length: usize, missing_glyphs: ?*Glyphs) c_int {
     _ = dark;
+    if (missing_glyphs) |glyph_output| glyph_output.* = .{};
     const out = output orelse return 0;
     const width = lw orelse return 0;
     const height = lh orelse return 0;
@@ -126,7 +191,7 @@ export fn mdf_render_svg(source: ?[*]const u8, length: usize, dark: c_int,
         if (face.data == null or face.length == 0 or face.length > 128 * 1024 * 1024)
             return failure(error_buffer, error_length, "Invalid prepared SVG font");
     };
-    render(input[0..length], if (extra) |faces| faces[0..count] else &.{}, limit, out, width, height) catch |err|
+    renderDetailed(input[0..length], if (extra) |faces| faces[0..count] else &.{}, limit, out, width, height, missing_glyphs) catch |err|
         return failure(error_buffer, error_length, switch (err) {
             error.UnsupportedTextDirection => "SVG right-to-left and vertical text are not supported by zig-svg yet",
             error.UnsupportedSvgResource => "SVG embedded images, scripts and foreign objects are unsupported",
@@ -185,6 +250,50 @@ test "SVG inherited text styles request only the actual italic face" {
     }
 }
 
+test "SVG font callbacks receive decoded Unicode from nested text runs" {
+    const Check = struct {
+        seen: u8 = 0,
+        fn resolve(ctx: ?*anyopaque, req: svg.raster.FontRequest) ?[]const u8 {
+            const self: *@This() = @ptrCast(@alignCast(ctx.?));
+            if (std.mem.indexOf(u8, req.text, "Ж") != null) self.seen |= 1;
+            if (std.mem.indexOf(u8, req.text, "中") != null) self.seen |= 2;
+            if (std.mem.indexOf(u8, req.text, "&#") != null) self.seen |= 4;
+            const face = TestFonts.provide(0, 0);
+            return face.data.?[0..face.length];
+        }
+    };
+    var check: Check = .{};
+    const source = "<svg xmlns='http://www.w3.org/2000/svg' width='200' height='80'><text x='5' y='40'>A&#x416;<tspan>中</tspan> B</text></svg>";
+    var surface = try svg.render(std.testing.allocator, source, .{ .fonts = .{ .ctx = &check, .resolve = Check.resolve } });
+    defer surface.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(u8, 3), check.seen);
+}
+
+test "SVG missing glyphs transfer unique decoded label characters and exclude metadata" {
+    const source = "<svg xmlns='http://www.w3.org/2000/svg' width='200' height='80'><metadata>Привет ignored</metadata><text x='5' y='40'>&#x416;Ж<tspan>中</tspan></text></svg>";
+    var out: Pixels = undefined;
+    var width: f32 = 0; var height: f32 = 0;
+    var missing: Glyphs = .{};
+    var message: [256]u8 = @splat(0);
+    try std.testing.expectEqual(@as(c_int, 1), mdf_render_svg(source.ptr, source.len, 0, null, 0, 1024*1024, &out,
+        &width, &height, &message, message.len, &missing));
+    defer std.heap.c_allocator.free(out.data.?[0..@as(usize, @intCast(out.width * out.height * 4))]);
+    defer std.heap.c_allocator.free(missing.data.?[0..missing.length]);
+    try std.testing.expectEqualStrings("Ж中", missing.data.?[0..missing.length]);
+    var failed: Glyphs = .{ .data = "stale", .length = 5 };
+    try std.testing.expectEqual(@as(c_int, 0), mdf_render_svg(null, 0, 0, null, 0, 4096, null,
+        &width, &height, &message, message.len, &failed));
+    try std.testing.expect(failed.data == null and failed.length == 0);
+}
+
+test "SVG fallback metadata keeps supported Latin in its requested bundled style" {
+    const extra = [_]Font{TestFonts.provide(0, 0)};
+    var fonts: Fonts = .{ .extra = &extra };
+    const selected = Fonts.resolve(&fonts, .{ .family = "Open Sans", .weight = 700, .italic = true, .text = "Latin café" }).?;
+    const expected = TestFonts.provide(0, 3);
+    try std.testing.expect(selected.ptr == expected.data.? and selected.len == expected.length);
+}
+
 test "SVG resource policy rejects unused definitions and external styles" {
     for ([_][]const u8{
         "<defs><image href='data:image/png;base64,AA=='/></defs>",
@@ -207,9 +316,9 @@ test "SVG FFI errors clear outputs and return a readable error" {
     var out: Pixels = .{ .data = null, .width = 1, .height = 1, .channels = 4 };
     var width: f32 = 1; var height: f32 = 1;
     var message: [128]u8 = @splat(0);
-    try std.testing.expectEqual(@as(c_int, 0), mdf_render_svg(null, 0, 0, null, 0, 4096, &out, &width, &height, &message, message.len));
+    try std.testing.expectEqual(@as(c_int, 0), mdf_render_svg(null, 0, 0, null, 0, 4096, &out, &width, &height, &message, message.len, null));
     try std.testing.expect(out.data == null and out.width == 0 and width == 0 and height == 0 and message[0] != 0);
     const rtl = "<svg xmlns='http://www.w3.org/2000/svg' width='120' height='60'><text x='100' y='30' direction='rtl'>RTL</text></svg>";
-    try std.testing.expectEqual(@as(c_int, 0), mdf_render_svg(rtl.ptr, rtl.len, 0, null, 0, 4096*16, &out, &width, &height, &message, message.len));
+    try std.testing.expectEqual(@as(c_int, 0), mdf_render_svg(rtl.ptr, rtl.len, 0, null, 0, 4096*16, &out, &width, &height, &message, message.len, null));
     try std.testing.expect(std.mem.indexOf(u8, std.mem.sliceTo(&message, 0), "right-to-left") != null);
 }

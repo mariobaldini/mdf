@@ -2,6 +2,9 @@ const std = @import("std");
 const c = @import("native");
 const Allocator = std.mem.Allocator;
 const footnotes = @import("footnotes.zig");
+const zigmark = @import("zigmark");
+const entities = @import("html_entities");
+const text_projection = @import("text.zig");
 
 pub const Span = struct {
     text: []const u8,
@@ -39,11 +42,23 @@ pub const Alert = enum {
     }
 };
 
+// Shared by every flattened block in one quote. The parser completes the
+// range before publishing the document; nested quotes borrow their parent.
+pub const QuoteContext = struct {
+    parent: ?*QuoteContext = null,
+    first: usize,
+    end: usize = 0,
+    indent: usize,
+    depth: usize,
+    alert: ?Alert = null,
+};
+
 pub const Block = struct {
     kind: enum { paragraph, heading, code, rule, table_row, details, image } = .paragraph,
     heading: u8 = 0,
     indent: usize = 0,
     quote: usize = 0,
+    quote_context: ?*const QuoteContext = null,
     prefix: []const u8 = "",
     spans: []const Span = &.{},
     bytes: usize = 0,
@@ -70,6 +85,7 @@ pub const Document = struct {
     path: [:0]const u8,
     source: []const u8,
     blocks: []Block,
+    rendered: text_projection.Projection = .{},
 
     pub fn deinit(self: *Document) void {
         self.arena.deinit();
@@ -89,43 +105,41 @@ pub const Document = struct {
         const profile_span = profiling.begin(@src(), "Parse Markdown", .document);
         defer profile_span.end();
         if (!std.unicode.utf8ValidateSlice(input)) return error.InvalidUtf8;
-        if (input.len > std.math.maxInt(c.MD_SIZE)) return error.FileTooLarge;
+        if (input.len > std.math.maxInt(u32)) return error.FileTooLarge;
         var arena = std.heap.ArenaAllocator.init(allocator);
         errdefer arena.deinit();
         const a = arena.allocator();
         const source = try a.dupe(u8, input);
-        const prepare_span = profiling.begin(@src(), "Prepare footnotes", .document);
-        const prepared = try footnotes.prepare(a, source);
-        prepare_span.end();
-        var ctx = Parser{ .a = a, .source = prepared.markdown, .notes = prepared.notes };
-        const parser: c.MD_PARSER = .{
-            .abi_version = 0,
-            .flags = c.MD_DIALECT_GITHUB | c.MD_FLAG_NOHTMLBLOCKS,
-            .enter_block = Parser.enterBlock,
-            .leave_block = Parser.leaveBlock,
-            .enter_span = Parser.enterSpan,
-            .leave_span = Parser.leaveSpan,
-            .text = Parser.text,
-            .debug_log = null,
-            .syntax = null,
+        const prepared = prepare: {
+            const prepare_span = profiling.begin(@src(), "Prepare footnotes", .document);
+            defer prepare_span.end();
+            break :prepare try footnotes.prepare(a, source);
         };
-        const parse_span = profiling.begin(@src(), "MD4C parse and callbacks", .document);
-        const result = c.md_parse(prepared.markdown.ptr, @intCast(prepared.markdown.len), &parser, &ctx);
-        parse_span.end();
-        if (ctx.failure) |err| return err;
-        if (result != 0) return error.ParseFailed;
+        var ctx = Parser{ .a = a, .source = prepared.markdown, .notes = prepared.notes };
+        {
+            const parse_span = profiling.begin(@src(), "Zigmark parse and block conversion", .document);
+            defer parse_span.end();
+            try ctx.parseAst(prepared.markdown);
+        }
         const finish_span = profiling.begin(@src(), "Finish blocks, links, images and footnotes", .document);
         defer finish_span.end();
         try ctx.flush();
-        try ctx.appendFootnotes(parser);
+        try ctx.appendFootnotes();
         try ctx.finish(path, load_images);
         const owned_path = try a.dupeSentinel(u8, path, 0);
         const blocks = try ctx.blocks.toOwnedSlice(a);
+        const projection_span = @import("profiling.zig").begin(@src(), "Prepare rendered document text and positions", .document);
+        const rendered = text_projection.Projection.init(a, blocks) catch |err| {
+            projection_span.end();
+            return err;
+        };
+        projection_span.end();
         return .{
             .arena = arena,
             .path = owned_path,
             .source = source,
             .blocks = blocks,
+            .rendered = rendered,
         };
     }
 };
@@ -149,6 +163,8 @@ const Parser = struct {
     pending_prefix: []const u8 = "",
     pending_task: ?bool = null,
     quote: usize = 0,
+    quote_context: ?*QuoteContext = null,
+    block_offset: usize = 0,
     bold: usize = 0,
     italic: usize = 0,
     code: usize = 0,
@@ -166,16 +182,6 @@ const Parser = struct {
     notes: []footnotes.Note = &.{},
     note_count: usize = 0,
     adding_note: bool = false,
-    failure: ?anyerror = null,
-
-    fn get(ptr: ?*anyopaque) *Parser {
-        return @ptrCast(@alignCast(ptr.?));
-    }
-
-    fn failed(self: *Parser, err: anyerror) c_int {
-        self.failure = err;
-        return 1;
-    }
 
     fn start(self: *Parser, kind: @FieldType(Block, "kind"), heading: u8) !void {
         try self.flush();
@@ -184,6 +190,7 @@ const Parser = struct {
             .heading = heading,
             .indent = self.lists.items.len,
             .quote = self.quote,
+            .quote_context = self.quote_context,
             .prefix = self.pending_prefix,
             .task = self.pending_task,
             .alert = if (self.alerts.items.len > 0) self.alerts.items[self.alerts.items.len - 1] else null,
@@ -206,40 +213,47 @@ const Parser = struct {
         }
     }
 
-    fn enterBlock(kind: c.MD_BLOCKTYPE, detail: ?*anyopaque, userdata: ?*anyopaque) callconv(.c) c_int {
-        const self = get(userdata);
-        self.blockEnter(kind, detail) catch |err| return self.failed(err);
-        return 0;
-    }
+    const EnterBlock = union(enum) {
+        heading: u8,
+        code: []const u8,
+        paragraph,
+        rule,
+        quote,
+        list: ?u32,
+        item: ?bool,
+        table: usize,
+        row,
+        cell: Alignment,
+    };
+    const BlockTag = std.meta.Tag(EnterBlock);
+    const EnterSpan = union(enum) { strong, emphasis, code, strike, image: []const u8, link: []const u8 };
+    const SpanTag = std.meta.Tag(EnterSpan);
+    const TextKind = enum { normal, html, soft_break, hard_break, null_char, entity, code };
 
-    fn blockEnter(self: *Parser, kind: c.MD_BLOCKTYPE, detail: ?*anyopaque) !void {
-        switch (kind) {
-            c.MD_BLOCK_H => {
-                const h: *c.MD_BLOCK_H_DETAIL = @ptrCast(@alignCast(detail.?));
-                try self.start(.heading, @intCast(h.level));
-            },
-            c.MD_BLOCK_CODE => {
+    fn blockEnter(self: *Parser, event: EnterBlock) !void {
+        switch (event) {
+            .heading => |level| try self.start(.heading, level),
+            .code => |language| {
                 try self.start(.code, 0);
-                const code: *c.MD_BLOCK_CODE_DETAIL = @ptrCast(@alignCast(detail.?));
-                self.current.?.language = try self.attribute(code.lang);
+                self.current.?.language = language;
             },
-            c.MD_BLOCK_P => try self.start(.paragraph, 0),
-            c.MD_BLOCK_HR => try self.start(.rule, 0),
-            c.MD_BLOCK_QUOTE => {
+            .paragraph => try self.start(.paragraph, 0),
+            .rule => try self.start(.rule, 0),
+            .quote => {
                 try self.flush();
                 self.quote += 1;
+                const context = try self.a.create(QuoteContext);
+                context.* = .{ .parent = self.quote_context, .first = self.blocks.items.len + self.block_offset,
+                    .indent = self.lists.items.len, .depth = self.quote };
+                self.quote_context = context;
                 try self.alerts.append(self.a, null);
                 try self.quote_start.append(self.a, true);
             },
-            c.MD_BLOCK_UL, c.MD_BLOCK_OL => {
+            .list => |first| {
                 try self.flush();
-                const first_number: ?u32 = if (kind == c.MD_BLOCK_OL)
-                    @as(*c.MD_BLOCK_OL_DETAIL, @ptrCast(@alignCast(detail.?))).start
-                else
-                    null;
-                try self.lists.append(self.a, first_number);
+                try self.lists.append(self.a, first);
             },
-            c.MD_BLOCK_LI => {
+            .item => |task| {
                 try self.flush();
                 if (self.lists.items.len > 0) {
                     const index = self.lists.items.len - 1;
@@ -248,47 +262,32 @@ const Parser = struct {
                         self.lists.items[index] = n +| 1;
                     } else self.pending_prefix = "• ";
                 }
-                const li: *c.MD_BLOCK_LI_DETAIL = @ptrCast(@alignCast(detail.?));
-                if (li.is_task != 0) {
-                    self.pending_task = li.task_mark != ' ';
+                if (task) |checked| {
+                    self.pending_task = checked;
                     if (self.lists.items.len == 0 or self.lists.items[self.lists.items.len - 1] == null) self.pending_prefix = "";
                 }
             },
-            c.MD_BLOCK_TABLE => {
+            .table => |columns| {
                 try self.flush();
-                const table: *c.MD_BLOCK_TABLE_DETAIL = @ptrCast(@alignCast(detail.?));
-                self.columns = try self.a.alloc(TableColumn, table.col_count);
+                self.columns = try self.a.alloc(TableColumn, columns);
                 @memset(self.columns, .{});
                 self.table_row = 0;
             },
-            c.MD_BLOCK_TR => {
+            .row => {
                 try self.start(.table_row, 0);
                 self.current.?.columns = self.columns;
                 self.current.?.table_header = self.table_row == 0;
                 self.current.?.table_stripe = self.table_row % 2 == 0;
                 self.table_row += 1;
             },
-            c.MD_BLOCK_TH, c.MD_BLOCK_TD => {
+            .cell => |alignment| {
                 self.in_cell = true;
-                const cell: *c.MD_BLOCK_TD_DETAIL = @ptrCast(@alignCast(detail.?));
-                self.cell_alignment = switch (cell.@"align") {
-                    c.MD_ALIGN_CENTER => .center,
-                    c.MD_ALIGN_RIGHT => .right,
-                    else => .left,
-                };
+                self.cell_alignment = alignment;
             },
-            else => {},
         }
     }
-
-    fn leaveBlock(kind: c.MD_BLOCKTYPE, _: ?*anyopaque, userdata: ?*anyopaque) callconv(.c) c_int {
-        const self = get(userdata);
-        self.blockLeave(kind) catch |err| return self.failed(err);
-        return 0;
-    }
-
-    fn blockLeave(self: *Parser, kind: c.MD_BLOCKTYPE) !void {
-        if (kind == c.MD_BLOCK_TH or kind == c.MD_BLOCK_TD) {
+    fn blockLeave(self: *Parser, kind: BlockTag) !void {
+        if (kind == .cell) {
             self.in_cell = false;
             const spans = try self.spans.toOwnedSlice(self.a);
             var characters: usize = 0;
@@ -297,93 +296,252 @@ const Parser = struct {
             try self.cells.append(self.a, .{ .spans = spans, .alignment = self.cell_alignment });
             return;
         }
-        if (kind == c.MD_BLOCK_TR) self.current.?.cells = try self.cells.toOwnedSlice(self.a);
+        if (kind == .row) self.current.?.cells = try self.cells.toOwnedSlice(self.a);
         try self.flush();
         switch (kind) {
-            c.MD_BLOCK_QUOTE => {
+            .quote => {
+                self.quote_context.?.end = self.blocks.items.len + self.block_offset;
+                self.quote_context = self.quote_context.?.parent;
                 self.quote -= 1;
                 _ = self.alerts.pop();
                 _ = self.quote_start.pop();
             },
-            c.MD_BLOCK_UL, c.MD_BLOCK_OL => _ = self.lists.pop(),
-            c.MD_BLOCK_LI => {
+            .list => _ = self.lists.pop(),
+            .item => {
                 self.pending_prefix = "";
                 self.pending_task = null;
             },
-            c.MD_BLOCK_TABLE => {
+            .table => {
                 if (self.blocks.items.len > 0) self.blocks.items[self.blocks.items.len - 1].table_last = true;
                 self.columns = &.{};
             },
             else => {},
         }
     }
-
-    fn enterSpan(kind: c.MD_SPANTYPE, detail: ?*anyopaque, userdata: ?*anyopaque) callconv(.c) c_int {
-        const self = get(userdata);
-        switch (kind) {
-            c.MD_SPAN_STRONG => self.bold += 1,
-            c.MD_SPAN_EM => self.italic += 1,
-            c.MD_SPAN_CODE => self.code += 1,
-            c.MD_SPAN_DEL => self.strike += 1,
-            c.MD_SPAN_IMG => {
+    fn spanEnter(self: *Parser, event: EnterSpan) !void {
+        switch (event) {
+            .strong => self.bold += 1,
+            .emphasis => self.italic += 1,
+            .code => self.code += 1,
+            .strike => self.strike += 1,
+            .image => |src| {
                 self.image += 1;
                 if (self.image == 1 and self.current != null and self.current.?.kind == .image) {
                     self.current.?.kind = .paragraph;
                     self.current.?.image_src = null;
                 }
                 if (self.image == 1 and self.current != null and self.current.?.bytes == 0 and self.current.?.kind == .paragraph) {
-                    const img: *c.MD_SPAN_IMG_DETAIL = @ptrCast(@alignCast(detail.?));
                     self.current.?.kind = .image;
-                    self.current.?.image_src = self.attribute(img.src) catch |err| return self.failed(err);
+                    self.current.?.image_src = src;
                 }
             },
-            c.MD_SPAN_A => {
-                const a: *c.MD_SPAN_A_DETAIL = @ptrCast(@alignCast(detail.?));
-                const href = self.attribute(a.href) catch |err| return self.failed(err);
-                self.links.append(self.a, href) catch |err| return self.failed(err);
-            },
-            else => {},
+            .link => |href| try self.links.append(self.a, href),
         }
-        return 0;
     }
-
-    fn leaveSpan(kind: c.MD_SPANTYPE, _: ?*anyopaque, userdata: ?*anyopaque) callconv(.c) c_int {
-        const self = get(userdata);
-        switch (kind) {
-            c.MD_SPAN_STRONG => self.bold -= 1,
-            c.MD_SPAN_EM => self.italic -= 1,
-            c.MD_SPAN_CODE => self.code -= 1,
-            c.MD_SPAN_DEL => self.strike -= 1,
-            c.MD_SPAN_IMG => self.image -= 1,
-            c.MD_SPAN_A => _ = self.links.pop(),
-            else => {},
+    fn spanLeave(self: *Parser, event: SpanTag) void {
+        switch (event) {
+            .strong => self.bold -= 1,
+            .emphasis => self.italic -= 1,
+            .code => self.code -= 1,
+            .strike => self.strike -= 1,
+            .image => self.image -= 1,
+            .link => _ = self.links.pop(),
         }
-        return 0;
     }
-
-    fn attribute(self: *Parser, attr: c.MD_ATTRIBUTE) ![]const u8 {
-        if (attr.size == 0) return "";
+    fn attribute(self: *Parser, raw: []const u8) ![]const u8 {
         var result: std.ArrayList(u8) = .empty;
-        var i: usize = 0;
-        while (attr.substr_offsets[i] < attr.size) : (i += 1) {
-            const part = attr.text[attr.substr_offsets[i]..attr.substr_offsets[i + 1]];
-            const value = if (attr.substr_types[i] == c.MD_TEXT_ENTITY) try self.entity(part) else part;
-            try result.appendSlice(self.a, value);
+        var at: usize = 0;
+        while (at < raw.len) {
+            if (raw[at] == '\\' and at + 1 < raw.len and std.ascii.isPunctuation(raw[at + 1])) {
+                try result.append(self.a, raw[at + 1]);
+                at += 2;
+            } else if (entities.decode(raw, at)) |decoded| {
+                try result.appendSlice(self.a, decoded.bytes[0..decoded.len]);
+                at += decoded.consumed;
+            } else {
+                try result.append(self.a, raw[at]);
+                at += 1;
+            }
         }
         return result.toOwnedSlice(self.a);
     }
-
-    fn text(kind: c.MD_TEXTTYPE, ptr: [*c]const u8, len: c.MD_SIZE, userdata: ?*anyopaque) callconv(.c) c_int {
-        const self = get(userdata);
-        self.addText(kind, ptr[0..len]) catch |err| return self.failed(err);
-        return 0;
+    fn parseAst(self: *Parser, input: []const u8) !void {
+        // The AST and final block views share this document's arena. Do not
+        // deinit borrowed AST text before the rendered document is released.
+        const ast = parse: {
+            const phase = @import("profiling.zig").begin(@src(), "Parse Zigmark AST", .document);
+            defer phase.end();
+            break :parse try (zigmark.Parser{ .max_input_bytes = 0 }).parseMarkdown(self.a, input);
+        };
+        const convert = @import("profiling.zig").begin(@src(), "Convert Markdown AST into viewer blocks", .document);
+        defer convert.end();
+        try self.walkBlocks(ast.children.items);
+    }
+    fn walkBlocks(self: *Parser, blocks: []const zigmark.AST.Block) anyerror!void {
+        for (blocks) |block| switch (block) {
+            .paragraph => |p| {
+                try self.blockEnter(.paragraph);
+                try self.walkInlines(p.children.items, p.inline_source);
+                try self.blockLeave(.paragraph);
+            },
+            .heading => |h| {
+                try self.blockEnter(.{ .heading = h.level });
+                try self.walkInlines(h.children.items, h.inline_source);
+                try self.blockLeave(.heading);
+            },
+            .code_block => |code| {
+                try self.blockEnter(.{ .code = "" });
+                try self.addText(.code, code.content);
+                try self.blockLeave(.code);
+            },
+            .fenced_code_block => |code| {
+                const info = std.mem.trim(u8, code.language orelse "", " \t\r\n");
+                const end = std.mem.indexOfAny(u8, info, " \t\r\n") orelse info.len;
+                try self.blockEnter(.{ .code = try self.attribute(info[0..end]) });
+                try self.addText(.code, code.content);
+                try self.blockLeave(.code);
+            },
+            .blockquote => |quote| {
+                try self.blockEnter(.quote);
+                try self.walkBlocks(quote.children.items);
+                try self.blockLeave(.quote);
+            },
+            .list => |list| {
+                try self.blockEnter(.{ .list = if (list.type == .ordered) @as(u32, @intCast(list.start orelse 1)) else null });
+                for (list.items.items) |item| {
+                    try self.blockEnter(.{ .item = item.task_list_checked });
+                    try self.walkBlocks(item.children.items);
+                    try self.blockLeave(.item);
+                }
+                try self.blockLeave(.list);
+            },
+            .thematic_break => {
+                try self.blockEnter(.rule);
+                try self.blockLeave(.rule);
+            },
+            .html_block => |markup| try self.addText(.html, markup.content),
+            .footnote_definition => {}, // MDF's footnote preparation owns these.
+            .table => |table| {
+                try self.blockEnter(.{ .table = table.alignments.items.len });
+                try self.walkRow(table.header, table.alignments.items);
+                for (table.body.items) |row| try self.walkRow(row, table.alignments.items);
+                try self.blockLeave(.table);
+            },
+        };
+    }
+    fn walkRow(self: *Parser, row: zigmark.AST.TableRow, alignments: []const zigmark.AST.TableAlignment) !void {
+        try self.blockEnter(.row);
+        for (row.cells.items, alignments) |cell, alignment| {
+            try self.blockEnter(.{ .cell = switch (alignment) {
+                .center => .center,
+                .right => .right,
+                else => .left,
+            } });
+            try self.walkInlines(cell.children.items, cell.inline_source);
+            try self.blockLeave(.cell);
+        }
+        try self.blockLeave(.row);
+    }
+    fn escapedText(text: []const u8, source: ?[]const u8) bool {
+        const original = source orelse return false;
+        if (text.len != 1 or @intFromPtr(text.ptr) <= @intFromPtr(original.ptr) or
+            @intFromPtr(text.ptr) >= @intFromPtr(original.ptr) + original.len) return false;
+        var at = @intFromPtr(text.ptr) - @intFromPtr(original.ptr);
+        var count: usize = 0;
+        while (at > 0 and original[at - 1] == '\\') {
+            at -= 1;
+            count += 1;
+        }
+        return count % 2 == 1;
+    }
+    fn plainText(self: *Parser, raw: []const u8) !void {
+        var at: usize = 0;
+        var first: usize = 0;
+        while (std.mem.indexOfScalarPos(u8, raw, at, '&')) |entity_at| {
+            if (entities.decode(raw, entity_at)) |decoded| {
+                if (entity_at > first) try self.addText(.normal, raw[first..entity_at]);
+                try self.addText(.entity, raw[entity_at..][0..decoded.consumed]);
+                at = entity_at + decoded.consumed;
+                first = at;
+            } else {
+                at = entity_at + 1;
+            }
+        }
+        if (first < raw.len) try self.addText(.normal, raw[first..]);
+    }
+    fn walkInlines(self: *Parser, inlines: []const zigmark.AST.Inline, source: ?[]const u8) anyerror!void {
+        var index: usize = 0;
+        while (index < inlines.len) {
+            const item = inlines[index];
+            index += 1;
+            switch (item) {
+                .text => |text| {
+                    if (escapedText(text.content, source)) {
+                        try self.addText(.normal, text.content);
+                        continue;
+                    }
+                    var joined: std.ArrayList(u8) = .empty;
+                    var value = text.content;
+                    while (index < inlines.len and inlines[index] == .text and !escapedText(inlines[index].text.content, source)) : (index += 1) {
+                        if (joined.items.len == 0) try joined.appendSlice(self.a, value);
+                        try joined.appendSlice(self.a, inlines[index].text.content);
+                    }
+                    if (joined.items.len > 0) value = try joined.toOwnedSlice(self.a);
+                    try self.plainText(value);
+                },
+                .emphasis => |e| {
+                    try self.spanEnter(.emphasis);
+                    try self.walkInlines(e.children.items, source);
+                    self.spanLeave(.emphasis);
+                },
+                .strong => |e| {
+                    try self.spanEnter(.strong);
+                    try self.walkInlines(e.children.items, source);
+                    self.spanLeave(.strong);
+                },
+                .strikethrough => |e| {
+                    try self.spanEnter(.strike);
+                    try self.walkInlines(e.children.items, source);
+                    self.spanLeave(.strike);
+                },
+                .code_span => |code| {
+                    try self.spanEnter(.code);
+                    try self.addText(.code, code.content);
+                    self.spanLeave(.code);
+                },
+                .link => |link| {
+                    try self.spanEnter(.{ .link = try self.attribute(link.destination.url) });
+                    try self.walkInlines(link.children.items, source);
+                    self.spanLeave(.link);
+                },
+                .image => |image| {
+                    try self.spanEnter(.{ .image = try self.attribute(image.destination.url) });
+                    // Zigmark already flattened the inline label. Parsing it
+                    // again would turn literal code/escaped punctuation into markup.
+                    try self.addText(.normal, image.alt_text);
+                    self.spanLeave(.image);
+                },
+                .autolink => |link| {
+                    const href = if (link.is_email) try std.fmt.allocPrint(self.a, "mailto:{s}", .{link.url}) else if (link.is_gfm_www) try std.fmt.allocPrint(self.a, "http://{s}", .{link.url}) else link.url;
+                    try self.spanEnter(.{ .link = href });
+                    try self.addText(.normal, link.url);
+                    self.spanLeave(.link);
+                },
+                .footnote_reference => |reference| try self.addText(.normal, try std.fmt.allocPrint(self.a, "[^{s}]", .{reference.label})),
+                .hard_break => try self.addText(.hard_break, "\n"),
+                .soft_break => try self.addText(.soft_break, "\n"),
+                .html_in_line => |markup| try self.addText(.html, markup.content),
+                .math => return error.UnexpectedMathNode,
+            }
+        }
     }
 
-    fn addText(self: *Parser, kind: c.MD_TEXTTYPE, raw: []const u8) anyerror!void {
-        if (kind == c.MD_TEXT_HTML) return self.html(raw);
+    fn addText(self: *Parser, kind: TextKind, raw: []const u8) anyerror!void {
+        if (raw.len == 0) return;
+        if (kind == .html) return self.html(raw);
         if (self.comment or self.suppressed_html != null) return;
         if (self.current == null) try self.start(.paragraph, 0);
-        if (kind == c.MD_TEXT_NORMAL and !self.adding_note and self.code == 0 and self.html_code == 0 and self.image == 0 and self.links.items.len == 0 and self.current.?.kind != .code) {
+        if (kind == .normal and !self.adding_note and self.code == 0 and self.html_code == 0 and self.image == 0 and self.links.items.len == 0 and self.current.?.kind != .code) {
             var search: usize = 0;
             while (std.mem.indexOfPos(u8, raw, search, "[^")) |ref| {
                 const end = std.mem.indexOfScalarPos(u8, raw, ref + 2, ']') orelse break;
@@ -409,25 +567,26 @@ const Parser = struct {
                 search = end + 1;
             }
         }
-        if (kind == c.MD_TEXT_SOFTBR and self.current.?.bytes == 0) return;
-        if (kind == c.MD_TEXT_NORMAL and self.current.?.kind == .paragraph and self.current.?.bytes == 0 and self.quote > 0 and self.quote_start.items[self.quote_start.items.len - 1] and self.image == 0 and self.code == 0 and self.bold == 0 and self.italic == 0 and self.links.items.len == 0) {
+        if (kind == .soft_break and self.current.?.bytes == 0) return;
+        if (kind == .normal and self.current.?.kind == .paragraph and self.current.?.bytes == 0 and self.quote > 0 and self.quote_start.items[self.quote_start.items.len - 1] and self.image == 0 and self.code == 0 and self.bold == 0 and self.italic == 0 and self.links.items.len == 0) {
             inline for (std.meta.tags(Alert)) |alert| {
                 const name = @tagName(alert);
                 if (raw.len == name.len + 3 and std.mem.startsWith(u8, raw, "[!") and raw[raw.len - 1] == ']' and std.ascii.eqlIgnoreCase(raw[2 .. raw.len - 1], name)) {
                     self.alerts.items[self.alerts.items.len - 1] = alert;
                     self.current.?.alert = alert;
+                    self.quote_context.?.alert = alert;
                     self.current.?.alert_start = true;
                     self.quote_start.items[self.quote_start.items.len - 1] = false;
                     return;
                 }
             }
         }
-        if (self.quote > 0 and kind != c.MD_TEXT_SOFTBR) self.quote_start.items[self.quote_start.items.len - 1] = false;
+        if (self.quote > 0 and kind != .soft_break) self.quote_start.items[self.quote_start.items.len - 1] = false;
         const value = switch (kind) {
-            c.MD_TEXT_SOFTBR => " ",
-            c.MD_TEXT_BR => "\n",
-            c.MD_TEXT_NULLCHAR => "�",
-            c.MD_TEXT_ENTITY => try self.entity(raw),
+            .soft_break => " ",
+            .hard_break => "\n",
+            .null_char => "�",
+            .entity => try self.entity(raw),
             else => raw,
         };
         const block = &self.current.?;
@@ -458,7 +617,7 @@ const Parser = struct {
             self.comment = std.mem.indexOf(u8, raw, "-->") == null;
             return;
         }
-        if (raw.len < 3 or raw[0] != '<') return self.addText(c.MD_TEXT_NORMAL, raw);
+        if (raw.len < 3 or raw[0] != '<') return self.addText(.normal, raw);
         const closing = raw[1] == '/';
         const tag_start: usize = if (closing) 2 else 1;
         const end = tag_start + (std.mem.indexOfAny(u8, raw[tag_start..], " \t\r\n/>") orelse return);
@@ -488,7 +647,7 @@ const Parser = struct {
             if (closing) try self.flush();
             return;
         }
-        if (std.ascii.eqlIgnoreCase(tag, "br")) return self.addText(c.MD_TEXT_BR, "\n");
+        if (std.ascii.eqlIgnoreCase(tag, "br")) return self.addText(.hard_break, "\n");
         if (std.ascii.eqlIgnoreCase(tag, "hr")) {
             if (self.in_cell) return;
             try self.start(.rule, 0);
@@ -556,20 +715,18 @@ const Parser = struct {
         }
     }
 
-    fn appendFootnotes(self: *Parser, parser: c.MD_PARSER) !void {
+    fn appendFootnotes(self: *Parser) !void {
         if (self.note_count == 0) return;
         self.details.clearRetainingCapacity();
         try self.start(.rule, 0);
         try self.start(.heading, 2);
-        try self.addText(c.MD_TEXT_NORMAL, "Footnotes");
+        try self.addText(.normal, "Footnotes");
         try self.flush();
         for (1..self.note_count + 1) |number| {
             for (self.notes) |note| {
                 if (note.number != number) continue;
-                var body = Parser{ .a = self.a, .source = note.body };
-                const result = c.md_parse(note.body.ptr, @intCast(note.body.len), &parser, &body);
-                if (body.failure) |err| return err;
-                if (result != 0) return error.ParseFailed;
+                var body = Parser{ .a = self.a, .source = note.body, .block_offset = self.blocks.items.len };
+                try body.parseAst(note.body);
                 try body.flush();
                 if (body.blocks.items.len == 0) continue;
                 body.blocks.items[0].anchor = try std.fmt.allocPrint(self.a, "mdf-footnote-{d}", .{number});
@@ -596,26 +753,8 @@ const Parser = struct {
     }
 
     fn entity(self: *Parser, raw: []const u8) ![]const u8 {
-        if (raw.len < 3) return raw;
-        var codepoints = [_]u32{ 0, 0 };
-        if (raw[1] == '#') {
-            const hex = raw.len > 3 and (raw[2] == 'x' or raw[2] == 'X');
-            codepoints[0] = std.fmt.parseInt(u32, raw[if (hex) 3 else 2 .. raw.len - 1], if (hex) 16 else 10) catch 0xfffd;
-            if (codepoints[0] >= 0x80 and codepoints[0] <= 0x9f) {
-                const windows = [_]u32{ 0x20ac, 0x81, 0x201a, 0x192, 0x201e, 0x2026, 0x2020, 0x2021, 0x2c6, 0x2030, 0x160, 0x2039, 0x152, 0x8d, 0x17d, 0x8f, 0x90, 0x2018, 0x2019, 0x201c, 0x201d, 0x2022, 0x2013, 0x2014, 0x2dc, 0x2122, 0x161, 0x203a, 0x153, 0x9d, 0x17e, 0x178 };
-                codepoints[0] = windows[codepoints[0] - 0x80];
-            }
-        } else if (c.entity_lookup(raw.ptr, raw.len)) |found| {
-            codepoints = found.*.codepoints;
-        } else return raw;
-        var buffer: [8]u8 = undefined;
-        var count: usize = 0;
-        for (codepoints, 0..) |cp, i| {
-            if (i == 1 and cp == 0) break;
-            const valid = if (cp == 0 or cp > 0x10ffff or (cp >= 0xd800 and cp <= 0xdfff)) 0xfffd else cp;
-            count += try std.unicode.utf8Encode(@intCast(valid), buffer[count..][0..4]);
-        }
-        return self.a.dupe(u8, buffer[0..count]);
+        const decoded = entities.decode(raw, 0) orelse return raw;
+        return self.a.dupe(u8, decoded.bytes[0..decoded.len]);
     }
 };
 

@@ -90,3 +90,18 @@ for document, data in [(small, normal), (huge, large)]:
     print(f'PASS: {document.name}: {document.stat().st_size:,} text bytes; '
           f'{data["unique_images"]} distinct images ({data["png_images"]} PNG, {data["jpeg_images"]} JPEG); '
           f'{data["asset_bytes"]:,} asset bytes')
+
+spec = importlib.util.spec_from_file_location('samples', ROOT/'scripts/generate-profile-samples.py')
+samples = importlib.util.module_from_spec(spec); spec.loader.exec_module(samples)
+for size, count in [('SMALL',2),('MID',5),('HUGE',100)]:
+    text = ROOT/f'SAMPLE-{size}-TEXT.md'; images = ROOT/f'SAMPLE-{size}-IMAGES.md'
+    a = profile.document_workload(text); b = profile.document_workload(images)
+    assert a['image_references'] == 0 and '```mermaid' not in text.read_text(), text
+    assert b['local_images'] == b['unique_images'] == count+1 and b['missing_images']==0, b
+    assert b['png_images']>0 and b['jpeg_images']>0 and images.read_text().count('```mermaid')==1, images
+    assert samples.text_only(images.read_text()) == text.read_text(), 'The editions must share the same prose'
+    for document in (text,images):
+        source=document.read_text()
+        unsupported={ord(char) for char in source+html.unescape(source)}-coverage-{9,10,13}
+        assert not unsupported,(document,[f'U+{char:04X}' for char in sorted(unsupported)])
+    print(f'PASS: {size} TEXT/IMAGES share prose; text skips visuals, images include {count} rasters, SVG and Mermaid')

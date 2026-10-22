@@ -6,6 +6,79 @@ pub const default_font_size: u16 = 12;
 pub const min_font_size: u16 = 8;
 pub const max_font_size: u16 = 72;
 pub const document_margin: f32 = 24;
+pub const NativeStyle = extern struct { face: u32, size: i32 };
+pub const StyleKind = enum(u32) { paragraph, heading, code };
+
+pub fn faceOffset(bold: bool, italic: bool, emphasized_block: bool) u32 {
+    return @as(u32, @intFromBool(bold or emphasized_block)) + 2 * @as(u32, @intFromBool(italic));
+}
+
+pub fn nativeStyle(kind: StyleKind, heading: u32, span_flags: u32, table_header: bool, zoom: f32) NativeStyle {
+    const sizes = [_]f32{ 12, 26, 20, 16, 14, 12, 12 };
+    const points = switch (kind) {
+        .heading => sizes[@min(6, heading)],
+        .code => @as(f32, 11),
+        .paragraph => @as(f32, 12),
+    };
+    const scale: f32 = if (span_flags & 64 != 0) 0.8 else 1;
+    return .{
+        .face = faceOffset(span_flags & 1 != 0, span_flags & 2 != 0, kind == .heading or table_header),
+        .size = @max(1, @as(i32, @intFromFloat(@round(points * 1.4 * zoom * scale)))),
+    };
+}
+
+/// Fit intrinsic columns while protecting readable words. A table may overflow
+/// when several ordinary columns cannot fit; only oversized tokens may shrink.
+/// The caller supplies output storage; no allocation or font calls occur here.
+pub fn intrinsicColumns(minimum: []const f32, preferred: []const f32, width: f32, padding: f32, wrap: bool, output: []f32) !void {
+    if (minimum.len != preferred.len or minimum.len != output.len) return error.InvalidColumns;
+    var min_sum: f32 = 0;
+    var preferred_sum: f32 = 0;
+    for (minimum, preferred, output) |min, pref, *out| {
+        if (!std.math.isFinite(min) or !std.math.isFinite(pref) or min < 0 or pref < 0) return error.InvalidColumns;
+        min_sum += min;
+        preferred_sum += @max(min, pref);
+        out.* = min;
+    }
+    if (!std.math.isFinite(width) or !std.math.isFinite(padding) or width < 0 or padding < 0) return error.InvalidColumns;
+    if (!wrap and preferred_sum > width) {
+        for (minimum, preferred, output) |min, pref, *out| out.* = @max(min, pref);
+    } else if (min_sum > width) {
+        if (minimum.len > 1) {
+            const word_cap = @max(padding + 1, width * 0.5);
+            var readable_sum: f32 = 0;
+            for (minimum) |min| readable_sum += @min(min, word_cap);
+            if (readable_sum > width) {
+                for (minimum, output) |min, *out| out.* = @min(min, word_cap);
+                return;
+            }
+        }
+        var compact: f32 = 0;
+        var flexible: usize = 0;
+        for (minimum, preferred) |min, pref| {
+            if (@max(min, pref) <= min + 0.01 and min <= width * 0.5) compact += min else flexible += 1;
+        }
+        const protect = flexible != 0 and compact + @as(f32, @floatFromInt(flexible)) * (padding + 1) <= width;
+        var low: f32 = 0;
+        var high = min_sum;
+        for (0..24) |_| {
+            const cap = (low + high) / 2;
+            var used: f32 = 0;
+            for (minimum, preferred) |min, pref|
+                used += if (protect and @max(min, pref) <= min + 0.01 and min <= width * 0.5) min else @min(min, cap);
+            if (used > width) high = cap else low = cap;
+        }
+        for (minimum, preferred, output) |min, pref, *out|
+            if (!protect or !(@max(min, pref) <= min + 0.01 and min <= width * 0.5)) {
+                out.* = @min(min, low);
+            };
+    } else {
+        for (minimum, preferred, output) |min, raw_pref, *out| {
+            const pref = @max(min, raw_pref);
+            if (preferred_sum > width) out.* += (width - min_sum) * (pref - min) / (preferred_sum - min_sum) else out.* = pref + (width - preferred_sum) * pref / @max(1, preferred_sum);
+        }
+    }
+}
 
 pub const MaxWidth = enum {
     characters_100,

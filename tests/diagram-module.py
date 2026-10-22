@@ -24,18 +24,19 @@ packer = module('mdf_packer', ROOT/'scripts/pack-diagram.py')
 def inspect(binary, kind):
     image = profile.elf_file(binary)
     section = next(s for s in image['sections'] if s['name'] == packer.SECTIONS[kind])
-    assert not section['flags'] & 2, 'Compressed payload must not have SHF_ALLOC'
+    assert not section['flags'] & 2, 'Lazy payload must not have SHF_ALLOC'
     payload = image['data'][section['offset']:section['offset']+section['bytes']]
     magic, abi, header, packed, expanded, checksum, flags = packer.HEADER.unpack_from(payload)
-    assert magic == packer.MAGIC and abi == packer.ABI and header == 40 and flags == 0
+    assert magic == packer.MAGIC and abi == packer.ABI and header == 40 and flags in (0,packer.RAW)
     assert packed == len(payload)-header
-    decoded = zlib.decompress(payload[header:])
+    decoded = payload[header:] if flags==packer.RAW else zlib.decompress(payload[header:])
     assert len(decoded) == expanded and zlib.crc32(decoded) == checksum
     return image, section, decoded
 
 
 def check_module(binary, kind):
     image, section, expanded = inspect(binary, kind)
+    raw=packer.HEADER.unpack_from(image['data'],section['offset'])[-1]==packer.RAW
     with tempfile.TemporaryDirectory(prefix='mdf-module-') as directory:
         temp = Path(directory)
         pristine = temp/'mdf-image-tests'
@@ -53,7 +54,9 @@ def check_module(binary, kind):
         cases = [('bad-version', 8, struct.pack('<I', 999), 'version'),
                  ('bad-size', 24, struct.pack('<Q', 2**63), 'size'),
                  ('bad-checksum', 32, struct.pack('<I', 0), 'checksum'),
-                 ('bad-stream', 40, b'\x00\x00', 'compressed')]
+                 ('bad-stream', 40, b'\x00\x00', 'checksum' if raw else 'compressed'),
+                 ('bad-flags',36,struct.pack('<I',2),'version')]
+        if raw: cases.append(('bad-raw-length',24,struct.pack('<Q',len(expanded)+1),'size'))
         for name, relative, change, error in cases:
             data = bytearray(image['data']);at=section['offset']+relative
             data[at:at+len(change)] = change
@@ -67,22 +70,33 @@ def check_module(binary, kind):
         assert independent.returncode == 0, independent.stderr
         (temp/'module.so').write_bytes(expanded)
         symbols = subprocess.check_output(['nm','-D','--defined-only',str(temp/'module.so')], text=True)
-        assert [line.split()[-1] for line in symbols.splitlines()] == ['mdf_diagram_api'], symbols
+        entry='mdf_image_api' if kind=='image' else 'mdf_diagram_api'
+        api_type='MdfImageApi' if kind=='image' else 'MdfDiagramApi'
+        assert [line.split()[-1] for line in symbols.splitlines()] == [entry], symbols
         # A valid ELF and payload can still expose an incompatible function
         # table. The loader must reject it before calling initialization.
         (temp/'bad-api.c').write_text('#include "frontend/mermaid.h"\n'
-            'const struct MdfDiagramApi *mdf_diagram_api(uint32_t abi) {\n'
-            ' static const struct MdfDiagramApi api={.abi=999,.size=sizeof(struct MdfDiagramApi)}; return &api; }\n')
+            f'const struct {api_type} *{entry}(uint32_t abi) {{\n'
+            f' static const struct {api_type} api={{.abi=999,.size=sizeof(struct {api_type})}}; return &api; }}\n')
         env = {**os.environ,'CCACHE_DISABLE':'1','CCACHE_DIR':str(temp/'ccache')}
         subprocess.run(['/usr/bin/gcc','-shared','-fPIC','-I',str(ROOT),str(temp/'bad-api.c'),'-o',str(temp/'bad-api.so')], check=True,env=env)
-        packer.compress(temp/'bad-api.so',temp/'bad-api.payload')
+        packer.pack_module(temp/'bad-api.so',temp/'bad-api.payload')
         wrong = temp/'bad-api';shutil.copy2(pristine,wrong)
         packer.embed(wrong,temp/'bad-api.payload','objcopy',kind);probe(wrong,'ABI mismatch')
         # Repacking is deterministic and does not add a second payload.
-        packer.compress(temp/'module.so',temp/'module.payload')
+        packer.pack_module(temp/'module.so',temp/'module.payload')
         packer.embed(pristine,temp/'module.payload','objcopy',kind);first=pristine.read_bytes()
         packer.embed(pristine,temp/'module.payload','objcopy',kind);assert pristine.read_bytes()==first
         inspect(pristine,kind);probe(pristine)
+        # Older compressed resources remain readable, but are not emitted by
+        # the production renderer packer. Exercise their checksum/error path.
+        packer.compress(temp/'module.so',temp/'legacy.payload')
+        legacy=temp/'legacy';shutil.copy2(pristine,legacy)
+        packer.embed(legacy,temp/'legacy.payload','objcopy',kind);probe(legacy)
+        old,old_section,_=inspect(legacy,kind)
+        damaged=bytearray(old['data']);damaged[old_section['offset']+40]=0
+        bad_legacy=temp/'legacy-bad';bad_legacy.write_bytes(damaged);bad_legacy.chmod(0o755)
+        probe(bad_legacy,'compressed')
     print(f'PASS: independent {kind} module, private ABI, exact sizes/checksum, memory-only loading, corruption errors and deterministic repacking')
 
 

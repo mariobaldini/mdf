@@ -40,7 +40,7 @@
   <div class="summary">
     <div class="metric"><strong id="viewport"></strong><span id="viewport-label">Launch → viewport · median</span></div>
     <div class="metric"><strong id="p95"></strong><span id="p95-label">Launch → viewport · p95</span></div>
-    <div class="metric"><strong id="scaffold"></strong><span>Scaffold · median</span></div>
+    <div class="metric"><strong id="scaffold"></strong><span id="scaffold-label">Scaffold · median</span></div>
     <div class="metric"><strong id="ready"></strong><span>Fully ready · median</span></div>
   </div>
   <p id="launch-breakdown"></p>
@@ -99,7 +99,7 @@
     <div class="heading"><h2>Libraries &amp; size</h2><small id="library-count"></small></div>
     <div class="files" id="binaries"></div>
     <div class="table-wrap"><table><thead><tr><th>Library</th><th>Version</th><th>Use</th><th class="number">Attributed in mdf</th><th class="number">External .so file</th><th>Linkage</th></tr></thead><tbody id="libraries"></tbody></table></div>
-    <p class="caption">Attributed bytes are retained symbols, embedded fonts, and compressed payloads, matching the treemap. Expanded module sizes are separate. Inlined code stays with its surviving caller; shared/unattributed bytes remain separate. External .so files are outside mdf.</p>
+    <p class="caption">Attributed bytes are retained symbols, embedded fonts, and compressed payloads, matching the treemap. Expanded module sizes are separate. Inlined code stays with its surviving caller; shared/unattributed bytes remain separate. External .so files are outside mdf. Runtime dependencies include optional modules observed across profiled documents.</p>
     <details id="build-inputs"><summary>Build inputs — archives, headers, and font sources</summary><p class="caption">These are files fed to the build, not bytes copied wholesale into mdf. Archives contain unused objects and compiler/LTO metadata; optimization and dead-section removal reduce the final executable.</p><div class="table-wrap"><table><thead><tr><th>Library</th><th class="number">Build input size</th><th>Input type</th></tr></thead><tbody id="input-libraries"></tbody></table></div></details>
     <details id="indirect"><summary id="indirect-label">Other shared libraries</summary><div class="table-wrap"><table><thead><tr><th>Runtime dependency</th><th class="number">File size</th></tr></thead><tbody id="indirect-libraries"></tbody></table></div></details>
   </section>
@@ -121,9 +121,9 @@ const fmt=(value,digits=2)=>Number.isFinite(Number(value))?Number(value).toFixed
 const ms=(ns,digits=2)=>`${fmt(ns/1e6,digits)} ms`;
 const elapsed=ns=>ns>=1e6?ms(ns,3):ns>=1000?`${fmt(ns/1000,2)} µs`:`${ns} ns`;
 const bytes=value=>value==null?'—':value<1024?`${value} B`:value<1048576?`${fmt(value/1024,1)} KiB`:`${fmt(value/1048576,2)} MiB`;
-const colors={launch:'var(--launch)',gui:'var(--gui)',document:'var(--document)',fonts:'var(--fonts)',navigation:'var(--navigation)',images:'hsl(331 59% 49%)',fallback:'hsl(187 60% 40%)',input:'hsl(12 70% 45%)',ui:'hsl(45 70% 48%)',ui_dependencies:'hsl(28 70% 48%)',frame_memory:'hsl(193 70% 42%)'};
-const hues={launch:[207,25,40],gui:[217,59,47],document:[157,61,32],fonts:[35,72,38],navigation:[270,44,46],images:[331,59,49],fallback:[187,60,40],input:[12,70,45],ui:[45,70,48],ui_dependencies:[28,70,48],frame_memory:[193,70,42]};
-const short={launch:'Pre-load',gui:'GUI',document:'Document',fonts:'Monospace',navigation:'Navigation',images:'Images / diagrams',fallback:'Glyph fallback',input:'Keyboard',ui:'UI loader',ui_dependencies:'UI libraries',frame_memory:'Frame memory'};
+const colors={launch:'var(--launch)',gui:'var(--gui)',document:'var(--document)',fonts:'var(--fonts)',navigation:'var(--navigation)',images:'hsl(331 59% 49%)',fallback:'hsl(187 60% 40%)',input:'hsl(12 70% 45%)',ui:'hsl(45 70% 48%)',ui_dependencies:'hsl(28 70% 48%)',frame_memory:'hsl(193 70% 42%)',minimap:'hsl(173 55% 30%)'};
+const hues={launch:[207,25,40],gui:[217,59,47],document:[157,61,32],fonts:[35,72,38],navigation:[270,44,46],images:[331,59,49],fallback:[187,60,40],input:[12,70,45],ui:[45,70,48],ui_dependencies:[28,70,48],frame_memory:[193,70,42],minimap:[173,55,30]};
+const short={launch:'Pre-load',gui:'GUI',document:'Document',fonts:'Monospace',navigation:'Navigation',images:'Images / diagrams',fallback:'Glyph fallback',input:'Keyboard',ui:'UI loader',ui_dependencies:'UI libraries',frame_memory:'Frame memory',minimap:'Minimap'};
 Object.keys(archive.tracks).forEach((track,index)=>{if(!(track in colors)){const hue=(index*71)%360;colors[track]=`hsl(${hue} 48% 47%)`;hues[track]=[hue,48,47];short[track]=archive.tracks[track];}});
 let selected=0,range=null,picked=null,zoom=1;
 let dependencyZoom=1,dependencyFit=true;
@@ -548,8 +548,9 @@ function selectDocument(index){
     const row=document.createElement('tr');cell(row,`#${i+1}`);cell(row,sample.launch_sequence?`${sample.launch_sequence.round} / ${sample.launch_sequence.position} (launch #${sample.launch_sequence.launch})`:'—');const m=sample.metrics;
     for(const value of [m.pre_main_ms,m.scaffold_ms,m.first_document_ms,m.first_frame_ms,m.profiler_exit_ms,m.cpu_user_ms+m.cpu_system_ms,m.rss_kib/1024])cell(row,fmt(value),true);$('runs').append(row);});
   text('timing-boundary',external?
-    'CLOCK_MONOTONIC starts in the parent immediately before process creation. Pre-load includes spawn, exec, executable/shared-library page faults, ELF loading, linking and static initialization; it is not an isolated disk-I/O timer. Later demand paging stays inside application timings. A larger ELF does not mean every byte is read before main. The viewport timer runs in the deferred callback after FLTK flushes. The separate first-buffer-commit timestamp records the actual content submission request. Profiler finish/exit is separate. Physical Enter, shell parsing, and compositor scanout are outside this boundary. p95 uses nearest rank.':
-    'This older capture starts in main and ends after FLTK flushes the frame. It excludes process loading and compositor scanout. p95 uses nearest rank.');
+    `CLOCK_MONOTONIC starts in the parent immediately before process creation. Pre-load includes spawn, exec, executable/shared-library page faults, ELF loading, linking and static initialization; it is not an isolated disk-I/O timer. Later demand paging stays inside application timings. A larger ELF does not mean every byte is read before main. ${report.runs[0]?.renderer==='z2d'?'The native viewport timer ends after the first Markdown socket flush. Full readiness also waits for the final compositor frame callback and required deferred resources.':'The viewport timer runs in the deferred callback after FLTK flushes.'} The separate first-buffer-commit timestamp records the actual content submission request. Profiler finish/exit is separate. Physical Enter, shell parsing, and compositor scanout are outside this boundary. p95 uses nearest rank.`:
+    'This capture starts in main and excludes process loading and compositor scanout. p95 uses nearest rank.');
+  text('scaffold-label',report.runs[0]?.renderer==='z2d'?'Window frame · median':'Scaffold · median');
   render();
 }
 if(!archive.diagnostic&&documents.every(dataset=>dataset.statistics.mean_ms!=null)){
@@ -585,10 +586,12 @@ if(project?.binary_size?.available){
     'ELF sections and embedded fonts are measured directly. Rebuild with make profile for application and bundled-library symbol attribution. Shared libraries are listed below.');
   if(project.binary_size.diagram_module){
     const module=project.binary_size.diagram_module;
-    text('size-method',$('size-method').textContent+` Diagram module: ${bytes(module.packed_bytes)} compressed; ${bytes(module.expanded_bytes)} when loaded into memory. Expanded bytes are excluded from executable totals. Bundled static zlib handles decompression.`);
+    text('size-method',$('size-method').textContent+` Diagram module: ${bytes(module.packed_bytes)} compressed; ${bytes(module.expanded_bytes)} when loaded into memory. Expanded bytes are excluded from executable totals.`);
   }
   for(const module of project.binary_size.diagram_modules??[]){
-    text('size-method',$('size-method').textContent+` ${module.name}: ${bytes(module.packed_bytes)} compressed; ${bytes(module.expanded_bytes)} expanded only when needed.`);
+    text('size-method',$('size-method').textContent+(module.codec==='raw'?
+      ` ${module.name}: ${bytes(module.packed_bytes)} uncompressed, loaded only when needed; no decompression.`:
+      ` ${module.name}: ${bytes(module.packed_bytes)} compressed; ${bytes(module.expanded_bytes)} expanded only when needed.`));
   }
   sizeMap();
 }

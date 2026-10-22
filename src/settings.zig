@@ -3,27 +3,7 @@ const c = @import("native");
 const layout = @import("layout.zig");
 const Allocator = std.mem.Allocator;
 
-pub const Preset = enum {
-    classic,
-    paper,
-    terminal,
-
-    pub fn name(self: Preset) []const u8 {
-        return switch (self) {
-            .classic => "Classic",
-            .paper => "Paper",
-            .terminal => "Terminal",
-        };
-    }
-
-    pub fn fontSize(self: Preset) u16 {
-        return switch (self) {
-            .classic => layout.default_font_size,
-            .paper => 14,
-            .terminal => 11,
-        };
-    }
-};
+pub const Preset = @import("themes.zig").Preset;
 
 // Dimensions use logical window units, independent of framebuffer pixels.
 // Keep the normal rectangle when the window is maximized or minimized.

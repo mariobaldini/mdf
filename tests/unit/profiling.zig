@@ -58,6 +58,23 @@ test "profiling: nesting on one track does not indent another track" {
     for (snapshot.events) |event| try std.testing.expectEqual(@as(usize, 0), event.depth);
     for (recorder.depths) |depth| try std.testing.expectEqual(@as(usize, 0), depth);
 }
+test "profiling: Zig calls preserve frontend nesting without changing native counters" {
+    const recorder = try a.create(profile.Recorder);
+    defer a.destroy(recorder);
+    try recorder.init(profile.nowNs());
+    defer recorder.deinit();
+    recorder.enable();
+    const outer = profile.beginExternal(@src(), "frontend child", .images, 2);
+    const inner = profile.beginExternal(@src(), "nested Zig work", .images, 3);
+    inner.end();
+    outer.end();
+    const snapshot = try recorder.snapshot(a);
+    defer a.free(snapshot.events);
+    try std.testing.expectEqual(@as(usize, 2), snapshot.events.len);
+    try std.testing.expectEqual(@as(usize, 3), snapshot.events[0].depth);
+    try std.testing.expectEqual(@as(usize, 2), snapshot.events[1].depth);
+    for (recorder.depths) |depth| try std.testing.expectEqual(@as(usize, 0), depth);
+}
 test "profiling: allocation failure while taking a snapshot releases its lock" {
     const recorder = try a.create(profile.Recorder);
     defer a.destroy(recorder);

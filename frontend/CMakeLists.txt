@@ -29,7 +29,7 @@ else()
 endif()
 add_library(mdf-text INTERFACE)
 if(MDF_BUNDLED_PANGO)
-  pkg_check_modules(TEXT_DEPS REQUIRED IMPORTED_TARGET fontconfig freetype2 harfbuzz glib-2.0 gobject-2.0 gio-2.0 fribidi libthai)
+  pkg_check_modules(TEXT_DEPS REQUIRED IMPORTED_TARGET fontconfig freetype2 harfbuzz glib-2.0 gobject-2.0 gio-2.0 fribidi)
   target_include_directories(mdf-text INTERFACE
     "${CMAKE_CURRENT_SOURCE_DIR}/../zig-pkg/pango" "${MDF_PANGO_BUILD}")
   target_link_libraries(mdf-text INTERFACE -Wl,--start-group
@@ -51,23 +51,34 @@ set(CMAKE_SKIP_BUILD_RPATH TRUE)
 # Preserve the assembler symbol-version aliases across GCC's LTO link stage.
 set_source_files_properties(compat.c PROPERTIES COMPILE_OPTIONS "-fno-lto")
 set(MDF_DIAGRAM_PACKER "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/pack-diagram.py")
+set(MDF_OPTIONAL_MODULE_COMPRESSION "zlib" CACHE STRING "Optional module storage: raw or zlib")
+if(NOT MDF_OPTIONAL_MODULE_COMPRESSION MATCHES "^(raw|zlib)$")
+  message(FATAL_ERROR "MDF_OPTIONAL_MODULE_COMPRESSION must be raw or zlib")
+endif()
 # Mermaid uses Zig/Pozeiden; SVG uses Zig/zig-svg. Each has its own archive,
-# compressed stream and non-allocated section. SVG never loads Mermaid.
-foreach(renderer mermaid svg)
+# independent payload and non-allocated section. SVG never loads Mermaid.
+foreach(renderer mermaid svg image)
+  set(renderer_source diagram-module.c)
+  set(renderer_map diagram-module.map)
   if(renderer STREQUAL "mermaid")
     set(renderer_library "${MDF_MERMAID_LIBRARY}")
     set(renderer_kind 1)
-  else()
+  elseif(renderer STREQUAL "svg")
     set(renderer_library "${MDF_SVG_LIBRARY}")
     set(renderer_kind 2)
+  else()
+    set(renderer_library "${MDF_IMAGE_LIBRARY}")
+    set(renderer_kind 4)
+    set(renderer_source image-module.c)
+    set(renderer_map image-module.map)
   endif()
-  add_library(mdf-${renderer} MODULE diagram-module.c compat.c)
+  add_library(mdf-${renderer} MODULE "${renderer_source}" compat.c)
   target_compile_definitions(mdf-${renderer} PRIVATE MDF_MODULE_KIND=${renderer_kind})
   target_link_libraries(mdf-${renderer} PRIVATE "${renderer_library}" m dl pthread)
   target_link_options(mdf-${renderer} PRIVATE -Wl,--gc-sections -Wl,--wrap=acosf -Wl,--wrap=atan2f
-    "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/diagram-module.map" -Wl,-z,defs)
+    "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/${renderer_map}" -Wl,-z,defs)
   set_property(TARGET mdf-${renderer} APPEND PROPERTY LINK_DEPENDS
-    "${renderer_library}" "${CMAKE_CURRENT_SOURCE_DIR}/diagram-module.map")
+    "${renderer_library}" "${CMAKE_CURRENT_SOURCE_DIR}/${renderer_map}")
   if(CMAKE_BUILD_TYPE STREQUAL "Release")
     set_property(TARGET mdf-${renderer} PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
     target_compile_options(mdf-${renderer} PRIVATE -O3 -march=x86-64 -fomit-frame-pointer -ffunction-sections -fdata-sections)
@@ -77,13 +88,14 @@ foreach(renderer mermaid svg)
     COMMAND "${CMAKE_STRIP}" --strip-all "$<TARGET_FILE:mdf-${renderer}>" VERBATIM)
   set(payload "${CMAKE_CURRENT_BINARY_DIR}/mdf-${renderer}.payload")
   add_custom_command(OUTPUT "${payload}"
-    COMMAND "${Python3_EXECUTABLE}" "${MDF_DIAGRAM_PACKER}" compress
+    COMMAND "${Python3_EXECUTABLE}" "${MDF_DIAGRAM_PACKER}" pack
       --module "$<TARGET_FILE:mdf-${renderer}>" --output "${payload}"
+      --compression "${MDF_OPTIONAL_MODULE_COMPRESSION}"
     DEPENDS mdf-${renderer} "${MDF_DIAGRAM_PACKER}" VERBATIM)
   add_custom_target(mdf-${renderer}-payload DEPENDS "${payload}")
 endforeach()
 function(mdf_embed_diagram target)
-  foreach(renderer mermaid svg)
+  foreach(renderer mermaid svg image)
     set(payload "${CMAKE_CURRENT_BINARY_DIR}/mdf-${renderer}.payload")
     add_dependencies(${target} mdf-${renderer}-payload)
     set_property(TARGET ${target} APPEND PROPERTY LINK_DEPENDS "${payload}" "${MDF_DIAGRAM_PACKER}")
@@ -93,7 +105,7 @@ function(mdf_embed_diagram target)
   endforeach()
 endfunction()
 add_library(mdf-ui SHARED main.cpp view.cpp profile.cpp startup.cpp images.cpp diagrams.cpp bundled-fonts.cpp monospace.cpp compat.c)
-add_dependencies(mdf-ui mdf-mermaid-payload mdf-svg-payload)
+add_dependencies(mdf-ui mdf-mermaid-payload mdf-svg-payload mdf-image-payload)
 target_compile_definitions(mdf-ui PRIVATE MDF_ASYNC_INPUT=$<BOOL:${MDF_ASYNC_INPUT}>
   MDF_PREPARE_FRAME=$<BOOL:${MDF_PREPARE_FRAME}> MDF_SHARED_DRAWING=$<BOOL:${MDF_SHARED_DRAWING}>
   MDF_BUNDLED_PANGO=$<BOOL:${MDF_BUNDLED_PANGO}>
@@ -102,8 +114,8 @@ target_compile_definitions(mdf-ui PRIVATE MDF_ASYNC_INPUT=$<BOOL:${MDF_ASYNC_INP
 target_include_directories(mdf-ui PRIVATE "${FLTK_INCLUDE_DIRS}")
 # Core C symbols resolve from the launcher; keeping one core avoids duplicate
 # workers, allocators and profiling state across the module boundary.
-target_link_libraries(mdf-ui PRIVATE "${MDF_IMAGE_LIBRARY}" fltk::images fltk::fltk fltk::z mdf-text m dl pthread)
-set_property(TARGET mdf-ui APPEND PROPERTY LINK_DEPENDS "${MDF_IMAGE_LIBRARY}")
+target_link_libraries(mdf-ui PRIVATE "${MDF_UI_WORKERS_LIBRARY}" fltk::fltk mdf-text m dl pthread)
+set_property(TARGET mdf-ui APPEND PROPERTY LINK_DEPENDS "${MDF_UI_WORKERS_LIBRARY}")
 target_link_options(mdf-ui PRIVATE -Wl,--gc-sections -Wl,--wrap=select -Wl,--wrap=poll -static-libstdc++ -static-libgcc)
 target_link_options(mdf-ui PRIVATE -Wl,--wrap=wl_display_dispatch -Wl,--wrap=wl_display_roundtrip)
 target_link_options(mdf-ui PRIVATE -Wl,--wrap=acosf -Wl,--wrap=atan2f
@@ -130,22 +142,26 @@ target_compile_options(mdf-json-tests PRIVATE -UNDEBUG)
 
 add_executable(mdf-image-tests EXCLUDE_FROM_ALL ../tests/image-decode.cpp images.cpp diagrams.cpp bundled-fonts.cpp compat.c)
 target_include_directories(mdf-image-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../zig-pkg")
-target_link_libraries(mdf-image-tests PRIVATE "${MDF_CORE_DIR}/libmdf-core.a" "${MDF_IMAGE_LIBRARY}" fltk::images fltk::fltk fltk::z PkgConfig::NATIVE m dl pthread)
-set_property(TARGET mdf-image-tests APPEND PROPERTY LINK_DEPENDS "${MDF_IMAGE_LIBRARY}")
+target_link_libraries(mdf-image-tests PRIVATE "${MDF_CORE_DIR}/libmdf-core.a" "${MDF_UI_WORKERS_LIBRARY}" "${MDF_IMAGE_LIBRARY}" fltk::images fltk::fltk fltk::z PkgConfig::NATIVE m dl pthread)
+set_property(TARGET mdf-image-tests APPEND PROPERTY LINK_DEPENDS "${MDF_IMAGE_LIBRARY}" "${MDF_UI_WORKERS_LIBRARY}")
 target_compile_options(mdf-image-tests PRIVATE -UNDEBUG)
 target_link_options(mdf-image-tests PRIVATE -Wl,--wrap=acosf -Wl,--wrap=atan2f)
 mdf_embed_diagram(mdf-image-tests)
 
 add_executable(mdf-monospace-tests EXCLUDE_FROM_ALL ../tests/monospace.cpp monospace.cpp bundled-fonts.cpp)
 target_include_directories(mdf-monospace-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../zig-pkg")
-target_link_libraries(mdf-monospace-tests PRIVATE "${MDF_CORE_DIR}/libmdf-core.a" fltk::fltk fltk::z PkgConfig::NATIVE m dl pthread)
+target_link_libraries(mdf-monospace-tests PRIVATE "${MDF_CORE_DIR}/libmdf-core.a" "${MDF_UI_WORKERS_LIBRARY}" fltk::fltk fltk::z PkgConfig::NATIVE m dl pthread)
+set_property(TARGET mdf-monospace-tests APPEND PROPERTY LINK_DEPENDS "${MDF_UI_WORKERS_LIBRARY}")
 target_compile_options(mdf-monospace-tests PRIVATE -UNDEBUG)
+target_link_options(mdf-monospace-tests PRIVATE -Wl,--gc-sections)
 
 add_executable(mdf-startup-tests EXCLUDE_FROM_ALL ../tests/startup.cpp startup.cpp)
 target_include_directories(mdf-startup-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../zig-pkg")
-target_link_libraries(mdf-startup-tests PRIVATE "${MDF_CORE_DIR}/libmdf-core.a" fltk::fltk PkgConfig::NATIVE m dl pthread)
+target_link_libraries(mdf-startup-tests PRIVATE "${MDF_CORE_DIR}/libmdf-core.a" "${MDF_UI_WORKERS_LIBRARY}" fltk::fltk PkgConfig::NATIVE m dl pthread)
+set_property(TARGET mdf-startup-tests APPEND PROPERTY LINK_DEPENDS "${MDF_UI_WORKERS_LIBRARY}")
 target_compile_definitions(mdf-startup-tests PRIVATE MDF_ASYNC_INPUT=1)
 target_compile_options(mdf-startup-tests PRIVATE -UNDEBUG)
+target_link_options(mdf-startup-tests PRIVATE -Wl,--gc-sections)
 
 add_executable(mdf-buffer-tests EXCLUDE_FROM_ALL ../tests/shared-buffer.cpp)
 target_link_libraries(mdf-buffer-tests PRIVATE fltk::fltk PkgConfig::NATIVE m dl pthread)

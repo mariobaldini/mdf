@@ -7,3 +7,9 @@
 [submodule "modules/zignal"]
 	path = modules/zignal
 	url = https://github.com/bfactory-ai/zignal.git
+[submodule "modules/zigmark"]
+	path = modules/zigmark
+	url = https://github.com/sc2in/zigmark.git
+[submodule "modules/mecha"]
+	path = modules/mecha
+	url = https://github.com/Hejsil/mecha.git

@@ -19,6 +19,8 @@ packer=module('pack_ui',ROOT/'scripts/pack-frontend.py')
 
 def main():
     binary=Path(sys.argv[1]).resolve()
+    native='--native' in sys.argv[2:]
+    debug='--debug' in sys.argv[2:]
     image=profile.elf_file(binary)
     sections={s['name']:s for s in image['sections']}
     ui=sections['.mdf_ui'];deps=sections['.mdf_ui_deps']
@@ -28,7 +30,9 @@ def main():
     assert leaves(sizes)==binary.stat().st_size
     assert sizes['ui_module']['bytes']==ui['bytes']
     dynamic=subprocess.check_output(['readelf','-W','-d',str(binary)],text=True)
-    assert [line.split('[')[1].split(']')[0] for line in dynamic.splitlines() if '(NEEDED)' in line]==['libc.so.6']
+    eager=[line.split('[')[1].split(']')[0] for line in dynamic.splitlines() if '(NEEDED)' in line]
+    if debug:assert 'libc.so.6' in eager and set(eager)<={'libc.so.6','libm.so.6','ld-linux-x86-64.so.2'},eager
+    else:assert eager==['libc.so.6'],eager
     with tempfile.TemporaryDirectory(prefix='mdf-bootstrap-') as directory:
         temp=Path(directory)
         app=temp/'mdf';shutil.copy2(binary,app)
@@ -42,15 +46,46 @@ def main():
         assert {name for name in imports if name.startswith('mdf_')} <= host_symbols
         dependencies=subprocess.check_output(['readelf','-Wd',str(engine)],text=True)
         pango_dependencies=[line for line in dependencies.splitlines() if '(NEEDED)' in line and 'libpango' in line]
-        if not pango_dependencies:
+        if native:
+            closure=subprocess.check_output(['ldd',str(engine)],text=True)
+            assert not any(name in closure for name in ('fltk','cairo','pango','libstdc++','libfontconfig','libfreetype','libharfbuzz')),closure
+            assert 'libwayland-client.so.' in closure and 'libxkbcommon.so.' in closure,closure
+            assert {'mdf_core_poll','mdf_font_resource','mdf_core_document_text'} <= imports,imports
+            print('PASS: native UI borrows the host core; no FLTK, Cairo, C++ or eager system text dependency')
+            prefix=binary.parent.parent
+            original_host=prefix/'bin/mdf-launcher'
+            original_ui=prefix/'lib/libmdf-native-ui.so'
+            if original_host.is_file() and original_ui.is_file():
+                for original,runtime,debug_path in (
+                    (original_host,binary,binary.with_name(binary.name+'.debug')),
+                    (original_ui,engine,binary.with_name(binary.name+'-ui.debug'))):
+                    full,packed,symbols=map(profile.elf_file,(original,runtime,debug_path))
+                    assert full['build_id'] and full['build_id']==packed['build_id']==symbols['build_id'],debug_path
+                    assert any(section['type']==2 for section in symbols['sections']),debug_path
+                    assert not any(section['type']==2 or section['name'].startswith('.debug') for section in packed['sections']),runtime
+                    originals={section['name']:section for section in full['sections']}
+                    for section in packed['sections']:
+                        if not section['flags']&2 or section['type']==8 or not section['bytes']:continue
+                        source=originals[section['name']]
+                        assert (section['address'],section['bytes'])==(source['address'],source['bytes']),section['name']
+                        assert packed['data'][section['offset']:section['offset']+section['bytes']]==full['data'][source['offset']:source['offset']+source['bytes']],section['name']
+                assert sizes['symbols_available'],sizes
+                def nodes(node):
+                    yield node
+                    for child in node.get('children',[]):yield from nodes(child)
+                assert any(node['name']=='z2d' and node['bytes']>0 for node in nodes(sizes)),sizes
+                print('PASS: matching host/UI build symbols; stripping preserves allocated code/data and embeds no debug sections')
+        elif not pango_dependencies:
             assert not any(name.startswith(('pango_','_pango_')) for name in imports)
             assert 'libgio-2.0.so.0' in dependencies  # Real upstream GListModel support.
             print('PASS: one private bundled Pango implementation; no system Pango dependency or leaked exports')
-        if 'libcairo.so.' not in dependencies:
+        if not native and 'libcairo.so.' not in dependencies:
             assert not any(name.startswith('cairo_') for name in imports)
             closure=subprocess.check_output(['ldd',str(engine)],text=True)
             assert not any(name in closure for name in ('libcairo.so.', 'libX11.so.', 'libXext.so.', 'libXrender.so.', 'libxcb', 'libXau.so.'))
             assert 'libpixman-1.so.0' in closure
+            assert not any(name in closure for name in ('libthai.so.', 'libdatrie.so.')),closure
+            assert not any(name.startswith('th_') for name in imports),imports
             print('PASS: private minimal Cairo; no external Cairo or X11/XCB dependency')
         for flag,expected in [('--version','mdf 0.2.0'),('--help','Usage: mdf'),('--licenses','Pozeiden')]:
             run=subprocess.run([str(app),flag],cwd=temp,capture_output=True,text=True,timeout=10)
@@ -75,6 +110,6 @@ def main():
         packer.embed(app,engine);first=app.read_bytes();packer.embed(app,engine)
         assert app.read_bytes()==first
         assert len([s for s in profile.elf_file(app)['sections'] if s['name']=='.mdf_ui'])==1
-    print('PASS: libc-only bootstrap, private UI ABI, fast CLI, missing/corrupt engine errors and deterministic single-file packing')
+    print('PASS: '+('minimal Debug' if debug else 'libc-only')+' bootstrap, private UI ABI, fast CLI, missing/corrupt engine errors and deterministic single-file packing')
 
 if __name__=='__main__':main()

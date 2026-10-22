@@ -1,9 +1,10 @@
 // glibc's fortified vararg wrappers cannot be translated to Zig.
 // These declarations are bindings; Zig's Debug/ReleaseSafe checks stay enabled.
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE 1
+#endif
 #undef _FORTIFY_SOURCE
 #define _FORTIFY_SOURCE 0
-#include <md4c.h>
-#include <entity.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <errno.h>
@@ -15,7 +16,15 @@
 #include <sys/inotify.h>
 #include <sys/eventfd.h>
 #include <sys/resource.h>
+#include <sys/wait.h>
+#include <spawn.h>
 #include <time.h>
+#include <elf.h>
+#include <dlfcn.h>
+#include <sys/mman.h>
+#include "../frontend/mermaid.h"
+#include "../frontend/core-api.h"
+#include "../frontend/text-api.h"
 
 static inline long mdf_peak_rss(void) {
     struct rusage usage;

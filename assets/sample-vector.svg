@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="480" height="160" viewBox="0 0 480 160">
+  <rect width="480" height="160" rx="12" fill="#eef4fa"/>
+  <text x="24" y="34" font-family="Open Sans" font-size="18" fill="#213b52">Observation pipeline</text>
+  <rect x="24" y="62" width="116" height="58" rx="8" fill="#2979ad"/>
+  <rect x="182" y="62" width="116" height="58" rx="8" fill="#3c927b"/>
+  <rect x="340" y="62" width="116" height="58" rx="8" fill="#8a62a8"/>
+  <path d="M140 91h42m116 0h42" fill="none" stroke="#213b52" stroke-width="3"/>
+  <g font-family="Open Sans" font-size="15" fill="white" text-anchor="middle">
+    <text x="82" y="97">Collect</text><text x="240" y="97">Review</text><text x="398" y="97">Publish</text>
+  </g>
+</svg>

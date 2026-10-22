@@ -1,5 +1,5 @@
 #pragma once
-#include "launch.h"
+#include "core-api.h"
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -10,52 +10,16 @@
 #include <string>
 #include <utility>
 #include <vector>
-extern "C" {
-struct MdfBlockView {
-  Buffer kind, prefix, language, anchor, alert, image_src;
-  size_t spans, cells, columns, bytes, lines, indent, quote;
-  ptrdiff_t parent;
-  uint32_t heading, flags;
-  int32_t task;
+template<class T> struct BorrowedArray {
+  T *data = nullptr;
+  size_t count = 0;
+  bool empty() const { return count == 0; }
+  size_t size() const { return count; }
+  T &operator[](size_t index) const { return data[index]; }
+  T &back() const { return data[count - 1]; }
+  T *begin() const { return data; }
+  T *end() const { return count ? data + count : data; }
 };
-struct MdfSpanView {
-  Buffer text, link;
-  uint32_t flags;
-};
-struct MdfCellView {
-  size_t spans;
-  uint32_t alignment;
-};
-void mdf_buffer_free(Buffer);
-uint64_t mdf_now_ns();
-const char *mdf_core_mode();
-MdfCore *mdf_core_create(const unsigned char *, size_t, bool, uint64_t,
-                         void (*)());
-void mdf_core_destroy(MdfCore *);
-void mdf_core_set_wake(MdfCore *, void (*)());
-Buffer mdf_core_open(MdfCore *, const unsigned char *, size_t);
-Buffer mdf_core_poll(MdfCore *);
-MdfBlockView mdf_core_block(MdfCore *, size_t);
-MdfSpanView mdf_core_span(MdfCore *, size_t, ptrdiff_t, size_t);
-MdfCellView mdf_core_cell(MdfCore *, size_t, size_t);
-size_t mdf_core_column(MdfCore *, size_t, size_t);
-Buffer mdf_core_settings(MdfCore *);
-Buffer mdf_core_settings_update(MdfCore *, const unsigned char *, size_t);
-bool mdf_core_navigation_start(MdfCore *, float, float, float);
-bool mdf_core_navigation_ready(MdfCore *);
-Buffer mdf_core_navigation(MdfCore *);
-Buffer mdf_core_image(MdfCore *, size_t);
-Buffer mdf_builtin_font(uint32_t, uint32_t);
-Buffer mdf_font_resource(uint32_t, uint32_t);
-Buffer mdf_notices();
-Buffer mdf_core_link(MdfCore *, const unsigned char *, size_t);
-Buffer mdf_core_profile(MdfCore *);
-void mdf_profile_event(uint8_t, const unsigned char *, size_t,
-                       const unsigned char *, size_t, uint32_t, uint64_t,
-                       uint64_t, size_t, bool);
-void mdf_profile_signal(uint8_t, const unsigned char *, size_t,
-                       const unsigned char *, size_t, uint32_t, uint64_t);
-}
 inline Json take_json(Buffer b) {
   if (!b.ptr)
     return Json();
@@ -241,7 +205,7 @@ struct Settings {
   int size = 12, window_w = 1040, window_h = 780;
   Settings() = default;
   int default_font_size() const {
-    return theme == "paper" ? 14 : theme == "terminal" ? 11 : 12;
+    return int(mdf_theme_info(mdf_theme_index(reinterpret_cast<const unsigned char *>(theme.data()), theme.size())).font_size);
   }
   explicit Settings(const Json &j) {
     save = j.value("save_settings_across_sessions", false);

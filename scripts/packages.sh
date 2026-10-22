@@ -36,7 +36,6 @@ Requires: libgio-2.0.so.0()(64bit)
 Requires: libglib-2.0.so.0()(64bit)
 Requires: libgobject-2.0.so.0()(64bit)
 Requires: libfribidi.so.0()(64bit)
-Requires: libthai.so.0()(64bit)
 Requires: libharfbuzz.so.0()(64bit)
 Requires: libfreetype.so.6()(64bit)
 Requires: libpixman-1.so.0()(64bit)
@@ -75,7 +74,7 @@ Package: mdf
 Version: $mdf_version
 Architecture: amd64
 Maintainer: Markdown FAST maintainers <mariobaldini@users.noreply.github.com>
-Depends: libc6 (>= 2.38), libwayland-client0, libwayland-cursor0, libxkbcommon0, libglib2.0-0 (>= 2.82), libfribidi0, libthai0, libharfbuzz0b (>= 8.4), libfreetype6, libpixman-1-0 (>= 0.40), libfontconfig1 (>= 2.17)$mdf_cairo_deb_depends
+Depends: libc6 (>= 2.38), libwayland-client0, libwayland-cursor0, libxkbcommon0, libglib2.0-0 (>= 2.82), libfribidi0, libharfbuzz0b (>= 8.4), libfreetype6, libpixman-1-0 (>= 0.40), libfontconfig1 (>= 2.17)$mdf_cairo_deb_depends
 Section: text
 Priority: optional
 Homepage: https://github.com/mariobaldini/mdf

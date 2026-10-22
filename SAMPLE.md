@@ -402,8 +402,8 @@ Open Sans Bold | ~~Unavailable~~ Available | 1
 ### Wide table with long cells
 
 Compare wrapping on and off with the toolbar button. Try 80% and 100% width,
-resize the window, and increase the font size. With wrapping off, scroll right
-to inspect the last columns; the TOC and minimap should stay in place.
+resize the window, and increase the font size. Wide tables scroll horizontally
+even with wrapping on; ordinary prose wraps, and the TOC and minimap stay in place.
 
 | Service | Owner | Target region | Description | Configuration key | State | Latency (ms) | Next review |
 | :--- | :--- | :--- | :--- | :--- | :---: | ---: | ---: |
@@ -440,7 +440,7 @@ with wrapping enabled and disabled.
 
 The **Dataset** label plus 23 numbered runs deliberately exceeds a typical
 document viewport. Check that the final **Run 23** column remains reachable
-with wrapping off. Re-enable wrapping and compare the short numbers, large
+with wrapping on or off. Compare the short numbers, large
 values, empty cells, and inline formatting at a narrow window width.
 
 | Dataset | Run 01 | Run 02 | Run 03 | Run 04 | Run 05 | Run 06 | Run 07 | Run 08 | Run 09 | Run 10 | Run 11 | Run 12 | Run 13 | Run 14 | Run 15 | Run 16 | Run 17 | Run 18 | Run 19 | Run 20 | Run 21 | Run 22 | Run 23 |

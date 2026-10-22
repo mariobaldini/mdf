@@ -16,6 +16,7 @@
 #include <thread>
 #include <cairo.h>
 #include "jpeg-fixtures.hpp"
+#include "legacy-image-fixtures.hpp"
 
 static void save_diagram(const MdfPixels &image, const std::filesystem::path &path) {
   std::vector<unsigned char> argb(size_t(image.width) * image.height * 4);
@@ -55,11 +56,56 @@ int main(int argc, char **argv) {
       return 0;
     } catch (const std::exception &error) { std::cerr << error.what() << '\n'; return 22; }
   }
+  if (option == "--module-probe-image") {
+    const auto fonts_before = bundled_font_data_styles();
+    std::atomic<bool> stop{true};
+    auto check = [](const void *p) { return int(static_cast<const std::atomic<bool> *>(p)->load()); };
+    char error[512]{};
+    assert(!mdf_image_renderer(check, &stop, 0, error, sizeof(error)));
+    assert(std::string(error).find("canceled") != std::string::npos);
+    stop = false;
+    const MdfImageApi *published[8]{};
+    std::vector<std::thread> loaders;
+    for (int i=0;i<8;++i) loaders.emplace_back([&,i] { char detail[512]{};
+      published[i]=mdf_image_renderer(check,&stop,0,detail,sizeof(detail)); });
+    for (auto &loader:loaders) loader.join();
+    if (!published[0]) {
+      mdf_image_renderer(check,&stop,0,error,sizeof(error));
+      std::cerr << error << '\n'; return 21;
+    }
+    for (auto *api:published) assert(api==published[0]);
+    unsigned char pixels[]{10,20,30,40,50,60};
+    MdfPixels source{pixels,2,1,3},decoded{}; MdfEncodedImage png{};
+    assert(published[0]->encode(&source,sizeof(pixels),&png));
+    assert(published[0]->decode(png.data,png.length,sizeof(pixels),&decoded));
+    assert(decoded.width==2 && decoded.height==1 && decoded.channels==3 && !std::memcmp(decoded.data,pixels,sizeof(pixels)));
+    std::free(png.data);std::free(decoded.data);
+    assert(!diagram_renderer_loaded() && bundled_font_data_styles()==fonts_before);
+    assert(mdf_diagram_stats(MDF_MODULE_IMAGE).ready_ns);
+    std::cout << "PASS: independent Zignal codec ABI, concurrent once-only loading, pixels and no additional fonts/diagrams\n";
+    return 0;
+  }
   if (option.rfind("--module-probe", 0) == 0) {
     try {
       std::atomic<bool> stop{false};
       const auto kind = option == "--module-probe-mermaid" ? DiagramModule::mermaid : DiagramModule::svg;
+      stop = true;
+      bool canceled = false;
+      try { diagram_renderer(stop, kind); }
+      catch (const std::exception &error) { canceled = std::string(error.what()).find("canceled") != std::string::npos; }
+      assert(canceled && !diagram_renderer_loaded());
+      stop = false;
+      const MdfDiagramApi *published[8]{};
+      std::exception_ptr failures[8];
+      std::vector<std::thread> loaders;
+      for (int i = 0; i < 8; ++i) loaders.emplace_back([&, i] {
+        try { published[i] = diagram_renderer(stop, kind); }
+        catch (...) { failures[i] = std::current_exception(); }
+      });
+      for (auto &loader : loaders) loader.join();
+      for (const auto &failure : failures) if (failure) std::rethrow_exception(failure);
       auto *api = diagram_renderer(stop, kind);
+      for (const auto *result : published) assert(result == api);
       if (!api || !diagram_renderer_loaded()) return 20;
       assert(diagram_renderer_loaded(kind));
       assert(!diagram_renderer_loaded(kind == DiagramModule::svg ? DiagramModule::mermaid : DiagramModule::svg));
@@ -73,6 +119,7 @@ int main(int argc, char **argv) {
   }
   size_t count = 0;
   jpeg_fixtures();
+  if (argc == 3) legacy_image_fixtures(argv[2]);
   {
     MdfPixels invalid{};
     assert(!mdf_decode_pixels(nullptr, 0, SIZE_MAX, &invalid) && !invalid.data);
@@ -103,6 +150,13 @@ int main(int argc, char **argv) {
     else reference = std::make_unique<Fl_JPEG_Image>(nullptr, bytes.data(), bytes.size());
     if (!same_pixels(image, *reference, extension == ".png", path.string())) {
       std::cerr << "Pixel mismatch: " << path << '\n'; return 4;
+    }
+    if (image.channels != 2) {
+      MdfEncodedImage encoded{};
+      assert(mdf_encode_png(&image, size_t(image.width) * image.height * image.channels, &encoded));
+      Fl_PNG_Image written(nullptr, encoded.data, encoded.length);
+      assert(same_pixels(image, written, true, "Zignal PNG output: " + path.string()));
+      std::free(encoded.data);
     }
     std::free(image.data);
     if (mdf_decode_pixels(bytes.data(), bytes.size(), 1, &image) || image.data) return 5;

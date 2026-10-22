@@ -30,10 +30,29 @@ spec.loader.exec_module(profile)
 
 
 def estimate(values):
-    # Approximate Student-t 95% interval, conservative table for small n.
-    n=len(values)
-    factor=12.706 if n==2 else 4.303 if n<5 else 2.776 if n<10 else 2.262 if n<20 else 2.093 if n<30 else 2.045 if n<60 else 2.0
-    return statistics.mean(values),factor*statistics.stdev(values)/math.sqrt(n) if n>1 else 0
+    stats=profile.timing_stats(values)
+    return stats['mean_ms'],stats['margin_95_ms'] or 0
+
+
+def optimized_profile(raw):
+    ui=raw.get('ui_mode')
+    if raw.get('mode')!='ReleaseFast' or ui not in ('Release','ReleaseFast') or raw.get('dropped_events'):
+        raise RuntimeError('Expected complete optimized production profiles.')
+    if raw.get('gui','').startswith('FLTK') and ui!='Release':
+        raise RuntimeError('Expected an optimized reference C++ frontend.')
+
+
+def stage_executable(path, data):
+    # Keep the same pathname without opening a possibly still-executable inode
+    # for writing. Finish staging I/O before starting the measured launch.
+    pending=path.with_name(path.name+'.next')
+    try:
+        with pending.open('wb') as output:
+            output.write(data);output.flush();os.fsync(output.fileno())
+        pending.chmod(0o755)
+        pending.replace(path)
+    finally:
+        pending.unlink(missing_ok=True)
 
 
 def check_conditions(initial, current):
@@ -69,11 +88,11 @@ def assess(rows, policy='startup'):
                 if after > before or (policy == 'startup' and after == before):
                     failures.append(f'{document}: actual {boundary} did not improve')
     return {'status': 'rejected' if failures else 'inconclusive' if uncertain else 'retained',
-            'reasons': failures or uncertain or [('Scaffold and viewport passed the batch medians, p95 and actual-frame gates; optional rendering readiness is reported separately.' if policy == 'compressed' else 'Both documents passed the median, p95, readiness and paired-confidence gates.')]}
+            'reasons': failures or uncertain or [('Scaffold and viewport passed the batch medians, p95 and actual-frame gates; optional rendering readiness is reported separately.' if policy == 'compressed' else 'All documents passed the median, p95, readiness and paired-confidence gates.')]}
 
 
 def benchmark(before, after, output, batches, pairs, policy='startup', documents=None,
-              compositor_label='Current Wayland desktop'):
+              compositor_label='Current Wayland desktop',cache_state='cold'):
     if batches<2 or pairs<2:raise ValueError('Use at least two batches and two pairs per batch.')
     output=profile.timestamped_output(output)
     directory=output.parent/output.stem
@@ -93,22 +112,32 @@ def benchmark(before, after, output, batches, pairs, policy='startup', documents
         if ui_symbols.is_file():
             (directory/(variant+'-mdf-ui.debug')).write_bytes(ui_symbols.read_bytes())
     with zipfile.ZipFile(directory/'sources.zip','w',zipfile.ZIP_DEFLATED) as bundle:
-        for pattern in ('src/*.zig','frontend/*.cpp','frontend/*.hpp','frontend/*.c','frontend/*.h',
-                        'frontend/CMakeLists.txt','frontend/core-build.zig','frontend/dependencies.json','frontend/diagram-module.map','frontend/patches/fltk/*',
+        for pattern in ('src/*.zig','frontend/*.cpp','frontend/*.hpp','frontend/*.c','frontend/*.h','frontend/*.zig','frontend/native/*',
+                        'frontend/CMakeLists.txt','frontend/core-build.zig','frontend/dependencies.json','frontend/diagram-module.map','frontend/image-module.map','frontend/patches/fltk/*',
                         'frontend/pozeiden.zig','frontend/svg.zig','frontend/image-pixels.zig','frontend/launcher.zig','frontend/frontend.map','assets/licenses/*',
                         'modules/pozeiden/**/*.zig','modules/pozeiden/build.zig.zon','modules/pozeiden/**/*.langium','modules/pozeiden/LICENSE','.gitmodules',
                         'modules/zig-svg/**/*.zig','modules/zig-svg/build.zig.zon','modules/zig-svg/LICENSES/*',
                         'modules/zignal/**/*.zig','modules/zignal/build.zig.zon','modules/zignal/LICENSE','scripts/prepare-zignal.py',
-                        'tests/text-layout.hpp','tests/cairo.cpp','docs/text-stack.md','docs/cairo.md','scripts/build-cairo.py','scripts/build-text-stack.py','scripts/build-frontend.sh','scripts/prepare-mvzr.py','scripts/prepare-fltk.py','scripts/pack-diagram.py','scripts/pack-frontend.py','scripts/pack-font.py'):
+                        'tests/text-layout.hpp','tests/cairo.cpp','docs/text-stack.md','docs/cairo.md','scripts/build-cairo.py','scripts/build-text-stack.py','scripts/build-frontend.sh','scripts/prepare-mvzr.py','scripts/prepare-fltk.py','scripts/pack-diagram.py','scripts/pack-frontend.py','scripts/pack-font.py','scripts/repack-optional-modules.py','scripts/generate-profile-samples.py','SAMPLE-*-TEXT.md','SAMPLE-*-IMAGES.md'):
             for path in sorted(ROOT.glob(pattern)):
                 if path.is_file():bundle.write(path,path.relative_to(ROOT))
-    documents=documents or [ROOT/'SAMPLE.md',ROOT/'SAMPLE-HUGE.md']
+    documents=documents or profile.sample_documents(ROOT)
     hashes={p:hashlib.sha256(p.read_bytes()).hexdigest() for p in documents}
     environment={**os.environ,'FLTK_BACKEND':'wayland','MESA_SHADER_CACHE_DISABLE':'true','__GL_SHADER_DISK_CACHE':'0'}
     environment.pop('WAYLAND_SOCKET',None)
     environment.pop('MDF_CAPTURE_FRAME',None)
     profile.require_wayland_session(environment)
     initial=profile.runtime_conditions()
+    if cache_state not in ('cold','warm'):raise ValueError('Unknown cache state')
+    if cache_state=='warm':
+        for doc in documents:
+            for variant in binaries:
+                stage_executable(executable,binaries[variant])
+                warmed=subprocess.run([str(executable),'--profile',str(doc)],env=environment,capture_output=True,text=True,timeout=45)
+                if warmed.returncode:raise RuntimeError(warmed.stderr)
+                optimized_profile(json.loads(warmed.stdout))
+                check_conditions(initial,profile.runtime_conditions())
+        print('Warm-up complete for both variants and every document.',flush=True)
     collected={variant:{doc:[] for doc in documents} for variant in binaries}
     rows=[]
     rng=random.Random(82911)
@@ -124,12 +153,16 @@ def benchmark(before, after, output, batches, pairs, policy='startup', documents
             for variant in order:
                 conditions=profile.runtime_conditions()
                 check_conditions(initial, conditions)
-                executable.write_bytes(binaries[variant]);executable.chmod(0o755)
+                stage_executable(executable,binaries[variant])
                 with tempfile.TemporaryDirectory(prefix='cache-',dir=directory) as cache:
                     inputs=profile.cold_input_paths(executable,doc)
-                    reset=profile.drop_linux_caches(flush_paths=inputs)
-                    reset['binary']=profile.verify_cold_binary(executable)
-                    reset['inputs']=profile.verify_cold_inputs(inputs[1:])
+                    if cache_state=='cold':
+                        reset=profile.drop_linux_caches(flush_paths=inputs)
+                        reset['binary']=profile.verify_cold_binary(executable)
+                        reset['inputs']=profile.verify_cold_inputs(inputs[1:])
+                    else:
+                        for source in inputs:source.read_bytes()
+                        reset={'state':'warm','inputs_read':len(inputs),'verified_cold':False}
                     started=time.monotonic_ns()
                     process=subprocess.run([str(executable),'--profile',str(doc)],env={**environment,'XDG_CACHE_HOME':cache},
                                            capture_output=True,text=True,timeout=45)
@@ -138,8 +171,7 @@ def benchmark(before, after, output, batches, pairs, policy='startup', documents
                 check_conditions(initial, final_conditions)
                 if process.returncode:raise RuntimeError(process.stderr)
                 raw=json.loads(process.stdout)
-                if raw.get('mode')!='ReleaseFast' or raw.get('ui_mode')!='Release' or raw.get('dropped_events'):
-                    raise RuntimeError('Expected complete optimized production profiles.')
+                optimized_profile(raw)
                 measured=profile.analyze_run(profile.include_process_launch(raw,started,finished))
                 if 'first_diagram_ms' not in measured['metrics']:
                     rendering=[(e['start_ns']+e['duration_ns'])/1_000_000 for e in measured['events']
@@ -175,12 +207,12 @@ def benchmark(before, after, output, batches, pairs, policy='startup', documents
         if hashes[doc]!=hashlib.sha256(doc.read_bytes()).hexdigest():raise RuntimeError('A sample changed during the comparison.')
     links={}
     for variant,binary in [('before',before),('after',after)]:
-        project=profile.project_context(ROOT,saved[variant],documents[0],collected[variant][documents[0]][0]);project.pop('input',None)
+        project=profile.project_context(ROOT,saved[variant],documents[0],collected[variant][documents[0]][0],observed_runs=[run for runs in collected[variant].values() for run in runs]);project.pop('input',None)
         target=profile.timestamped_output(output.with_name(output.stem+'-'+variant+'.html'))
         archive={'generated_at':datetime.now(timezone.utc).isoformat(timespec='seconds'),'host':platform.platform(),
                  'logical_cpus':os.cpu_count(),'tracks':profile.TRACKS,'project':project,
                  'compositor':compositor_label,
-                 'cache_policy':'Paired untraced optimized launches; fsync all benchmark inputs + drop_caches=3 and mincore zero-page verification before every launch',
+                 'cache_policy':('Paired optimized cold launches; fsync inputs + drop_caches=3 and mincore zero-page verification before every launch' if cache_state=='cold' else 'Paired optimized warm launches; both variants pre-run for every document; executable/document/assets read before each measured launch; no cache reset'),
                  'documents':[profile.document_summary(doc,collected[variant][doc]) for doc in documents]}
         profile.write_report(archive,target);links[variant]=target.name
     table=[]
@@ -203,7 +235,7 @@ def benchmark(before, after, output, batches, pairs, policy='startup', documents
             batch_rows.append('<tr>'+''.join(f'<td>{html.escape(str(value))}</td>' for value in [batch,doc.name,
                 *[f'{statistics.median([r[v][k] for r in selected]):.2f}' for k in ['scaffold_ms','first_document_ms','first_frame_ms'] for v in ['before','after']]])+'</tr>')
     body='''<!doctype html><meta charset=utf-8><title>MDF paired startup comparison</title><style>body{font:15px system-ui;max-width:1300px;margin:36px auto;padding:0 22px;background:#15202d;color:#e2e9f0}table{width:100%;border-collapse:collapse;margin:18px 0}td,th{padding:9px;text-align:left;border-bottom:1px solid #3b4a5b}p{line-height:1.6}a{color:#8cbaff}details{margin:22px 0}pre{white-space:pre-wrap}</style><h1>Paired optimized startup comparison</h1>'''
-    body+=f'<p>{batches} batches × {pairs} pairs per document; {batches*pairs*len(documents)*2} cold launches. Governor: {html.escape(", ".join(initial["cpu_governors"]))}. No tracing; no outliers removed. Positive saving means faster.</p>'
+    body+=f'<p>{batches} batches × {pairs} pairs per document; {batches*pairs*len(documents)*2} {cache_state} launches. Governor: {html.escape(", ".join(initial["cpu_governors"]))}. No tracing; no outliers removed. Positive saving means faster.</p>'
     body+='<p>CPU power settings and affinity were checked before and after every launch: governor, energy preference, frequency limits, turbo/boost, platform profile, and readable power caps. A change aborts the comparison.</p>'
     body+=f'<p><strong>Selection: {decision["status"].upper()}</strong> — '+html.escape(' · '.join(decision['reasons']))+'</p>'
     if any(row['after'].get('rendered_diagrams', 0) > row['before'].get('rendered_diagrams', 0) for row in rows):
@@ -216,7 +248,7 @@ def benchmark(before, after, output, batches, pairs, policy='startup', documents
     body+='<p>Wayland environment: '+html.escape(compositor_label)+'.</p>'
     if policy == 'compressed':
         body+='<p>This comparison evaluates compressed on-demand rendering. Scaffold and viewport medians and tails must not worsen. First-diagram and fully-ready timings include optional decompression and are reported separately from the initial-frame gates. The original first-diagram timestamp is derived from that same launch’s first completed rendering span.</p>'
-    body+='<p>Margins are approximate paired/sample Student-t 95% intervals. Background load and compositor scheduling can correlate samples; these margins are not a guarantee. Both variants use the same file path, settings, Markdown and cache policy. Order is balanced across batches. The same optimized executable used for production emits each native profile; graph times are never imported from another run.</p>'
+    body+='<p>Margins are paired/sample Student-t 95% intervals. Background load and compositor scheduling can correlate samples; these margins are not a guarantee. Both variants use the same file path, settings, Markdown and cache policy. Order is balanced across batches. The same optimized executable used for production emits each native profile; graph times are never imported from another run.</p>'
     body+='<p>'+ ' · '.join(f'<a href="{name}">{variant.title()} native call graphs and individual launches</a>' for variant,name in links.items())+'</p>'
     body+=f'<p>Frozen <a href="{directory.name}/before-mdf">before executable</a>, <a href="{directory.name}/after-mdf">after executable</a>, and <a href="{directory.name}/sources.zip">source snapshot</a> remain with this comparison.</p>'
     body+='<details open><summary>Batch medians, ms</summary><table><tr><th>Batch</th><th>Document</th><th>Window before</th><th>Window after</th><th>Viewport before</th><th>Viewport after</th><th>Ready before</th><th>Ready after</th></tr>'+''.join(batch_rows)+'</table></details>'
@@ -229,6 +261,8 @@ def benchmark(before, after, output, batches, pairs, policy='startup', documents
     for variant,binary in binaries.items():body+=f'<p>{variant.title()}: {len(binary):,} bytes · SHA-256 <code>{hashlib.sha256(binary).hexdigest()}</code></p>'
     body+='</details>'
     profile.atomic_write(output,body)
+    profile.atomic_write(output.with_suffix('.json'),json.dumps({'cache_state':cache_state,'batches':batches,'pairs_per_batch':pairs,'compositor':compositor_label,
+        'conditions':initial,'decision':decision,'rows':rows,'binaries':{name:{'bytes':len(data),'sha256':hashlib.sha256(data).hexdigest()} for name,data in binaries.items()}},indent=2))
     (directory/'progress.html').unlink(missing_ok=True)
     print('Comparison:',output,flush=True)
     print('Selection:',decision['status'],'; '.join(decision['reasons']),flush=True)
@@ -241,13 +275,14 @@ def main():
     parser.add_argument('--batches',type=int,default=2)
     parser.add_argument('--pairs-per-batch',type=int,default=10)
     parser.add_argument('--compressed-renderer',action='store_true',help='Gate initial frames; report deferred diagram preparation separately')
-    parser.add_argument('--document',type=Path,action='append',help='Override the default two samples; may be repeated for a plain-document control')
+    parser.add_argument('--document',type=Path,action='append',help='Override the six TEXT/IMAGES editions; may be repeated')
     parser.add_argument('--compositor-label',default='Current Wayland desktop',help='Describe the measured Wayland environment in the reports')
+    parser.add_argument('--cache-state',choices=['cold','warm'],default='cold')
     parser.add_argument('--output',type=Path,default=ROOT/'build/startup-experiment/comparison.html')
     args=parser.parse_args()
     benchmark(args.before.resolve(),args.after.resolve(),args.output.resolve(),args.batches,args.pairs_per_batch,
               'compressed' if args.compressed_renderer else 'startup',
-              [p.resolve() for p in args.document] if args.document else None,args.compositor_label)
+              [p.resolve() for p in args.document] if args.document else None,args.compositor_label,args.cache_state)
 
 
 if __name__=='__main__':main()

@@ -205,6 +205,9 @@ def main():
     image(ROOT/'assets/sample-pipeline.png',43,3)
     image(ROOT/'assets/sample-survey.jpg',52)
     huge_document()
+    # Keep the profiler's six matched editions in sync with the originals.
+    import runpy
+    runpy.run_path(str(ROOT/'scripts/generate-profile-samples.py'), run_name='__main__')
     for name in ['SAMPLE.md','SAMPLE-HUGE.md']:
         path=ROOT/name
         print(name, f'{path.stat().st_size:,} text bytes', hashlib.sha256(path.read_bytes()).hexdigest())

@@ -44,7 +44,9 @@ def cached_packages(manifests, fetch=False):
                 if not fetch:
                     raise ValueError('Missing pinned Zig source '+expected+'; run make setup')
                 cache = ROOT/'build/.zig-cache/package-fetch'
-                actual = subprocess.check_output([os.environ.get('ZIG','zig'),'fetch','--global-cache-dir',str(cache),record['url']],text=True).strip()
+                # Zig 0.17's fetch command no longer accepts --global-cache-dir.
+                environment = {**os.environ, 'ZIG_GLOBAL_CACHE_DIR': str(cache)}
+                actual = subprocess.check_output([os.environ.get('ZIG','zig'),'fetch',record['url']],env=environment,text=True).strip()
                 if actual != expected:
                     raise ValueError('Zig dependency checksum mismatch: '+record['url'])
                 PACKAGES.mkdir(exist_ok=True)

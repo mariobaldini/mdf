@@ -1,7 +1,7 @@
 const std = @import("std");
 const c = @import("native");
 
-pub const Track = enum { gui, document, fonts, navigation, images, fallback, input, ui, ui_dependencies };
+pub const Track = enum { gui, document, fonts, navigation, images, fallback, input, ui, ui_dependencies, bundled_fonts, minimap };
 pub const Kind = enum { work, wait, signal };
 pub const Event = struct {
     name: []const u8,
@@ -35,6 +35,23 @@ pub fn nowNs() u64 {
 pub fn begin(comptime src: std.builtin.SourceLocation, comptime name: []const u8, track: Track) Span {
     return if (active) |recorder| recorder.start(src, name, track, .work) else .{};
 }
+
+/// A Zig operation nested inside a frontend scope keeps the caller's depth.
+/// This does not change the native Zig scope counters on the same track.
+pub fn beginExternal(comptime src: std.builtin.SourceLocation, comptime name: []const u8, track: Track, depth: usize) ExternalSpan {
+    return .{ .source = src, .name = name, .track = track, .depth = depth, .start = if (active != null) nowNs() else 0 };
+}
+pub const ExternalSpan = struct {
+    source: std.builtin.SourceLocation,
+    name: []const u8,
+    track: Track,
+    depth: usize,
+    start: u64,
+
+    pub fn end(self: ExternalSpan) void {
+        if (self.start != 0) external(self.track, .work, self.name, self.source.file, self.source.line, self.start, nowNs() - self.start, self.depth);
+    }
+};
 
 pub fn wait(comptime src: std.builtin.SourceLocation, comptime name: []const u8) Span {
     return waitOn(src, name, .gui);

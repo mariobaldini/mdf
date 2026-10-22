@@ -42,6 +42,9 @@ int main() {
          FcPatternGetCharSet(body_faces->fonts[0], FC_CHARSET, 0, &latin) == FcResultMatch);
   assert(missing_characters("ASCII, café, ação, 123 − + … € •\n\t", latin).empty());
   assert(missing_characters("a\u200d\ufe0f", latin).empty());
+  assert(missing_characters("a\u200d\ufe0f\U000e0100", latin).empty());
+  assert(missing_characters(std::string("\xf0\x9f", 2), latin).empty());
+  assert(missing_characters("A\xffЖ中", latin) == std::vector<FcChar32>({0x416, 0x4e2d}));
   assert(missing_characters("ЖЖ中Ж中", latin) == std::vector<FcChar32>({0x416, 0x4e2d}));
   FallbackWorker fallback_worker;
   const std::string scripts = "Привет Ελληνικά العربية עברית 中文 日本語 한국어 → ∑ 😀";

@@ -72,6 +72,28 @@ def healthy_png(path):
                 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
 
 
+def find_focused(path):
+    """The disposable default Typora theme outlines its focused Find field blue.
+
+    Require a long horizontal border; scattered blue source text and the
+    blinking caret do not satisfy the focus check.
+    Fail closed if a different UI/theme no longer supplies this visual signal.
+    """
+    from PIL import Image
+    with Image.open(path) as image:
+        band=image.convert('RGB').crop((80,30,image.width-130,70))
+        pixels=band.tobytes()
+        stride=band.width*3
+        for row in range(band.height):
+            run=0
+            line=pixels[row*stride:(row+1)*stride]
+            for r,g,b in zip(line[::3],line[1::3],line[2::3]):
+                run=run+1 if b>130 and b>r+35 and g>r+10 else 0
+                if run>image.width*.4:
+                    return True
+        return False
+
+
 class Desktop:
     def __init__(self, directory, module, width):
         self.directory, self.module, self.width = directory, module, width
@@ -79,6 +101,7 @@ class Desktop:
         self.instance = None
         self.input = None
         self.logs = []
+        self.runtime = None
 
     def launch(self, args, environment, name, **kwargs):
         log = (self.directory/name).open('w')
@@ -87,8 +110,7 @@ class Desktop:
                                 start_new_session=True, **kwargs)
 
     def __enter__(self):
-        runtime = self.directory/'runtime'
-        runtime.mkdir(mode=0o700)
+        runtime = self.runtime = Path(tempfile.mkdtemp(prefix='mdf-render-'))
         fifo = runtime/'input'
         os.mkfifo(fifo, 0o600)
         self.environment = {**os.environ, 'XDG_RUNTIME_DIR': str(runtime),
@@ -103,8 +125,10 @@ class Desktop:
                 self.input = os.open(fifo, os.O_WRONLY)
                 return self
             if self.process.poll() is not None:
+                self.__exit__()
                 raise RuntimeError('Private Weston failed; see '+str(self.directory/'weston.log'))
             time.sleep(.05)
+        self.__exit__()
         raise RuntimeError('Private Wayland socket did not appear')
 
     def key(self, code, flags=0):
@@ -117,7 +141,17 @@ class Desktop:
         codes.update({' ':(57,0), '#':(4,2), '-':(12,0), '.':(52,0), ',':(51,0), '/':(53,0)})
         for char in value.lower():
             self.key(*codes[char])
-            time.sleep(.012)
+            time.sleep(.025)
+
+    def wait_find(self, focused):
+        deadline=time.monotonic()+12
+        while time.monotonic()<deadline:
+            state=self.directory/'find-state.png'
+            self.screenshot(state,validate=False)
+            if find_focused(state)==focused:
+                return
+            time.sleep(.2)
+        raise RuntimeError(f'Typora Find focus did not become {focused}; stopping the capture')
 
     def section(self, raw_heading):
         if not raw_heading:
@@ -127,16 +161,19 @@ class Desktop:
         # Source-mode Find uniquely matches literal Markdown headings rather
         # than identically named links in the table of contents. Then return
         # to the actual rendered document and jump to the selection.
-        self.key(53,1); time.sleep(.4)
+        self.key(53,1); time.sleep(.8)
         self.key(102,1); time.sleep(.15)
-        self.key(33,1); time.sleep(.4)
+        self.key(33,1)
+        self.wait_find(True)
         self.key(30,1); time.sleep(.1)
         self.type_query(raw_heading); time.sleep(.4)
-        self.key(1); time.sleep(.2)
-        self.key(53,1); time.sleep(.4)
-        self.key(36,1); time.sleep(.4)
+        self.screenshot(self.directory/'query-state.png',validate=False)
+        self.key(1)
+        self.wait_find(False)
+        self.key(53,1); time.sleep(.8)
+        self.key(36,1); time.sleep(.8)
 
-    def screenshot(self, destination):
+    def screenshot(self, destination, validate=True):
         staging = self.directory/'shots'
         staging.mkdir(exist_ok=True)
         result = subprocess.run(['weston-screenshooter'], cwd=staging, env=self.environment,
@@ -147,17 +184,17 @@ class Desktop:
         if len(files) != 1:
             raise RuntimeError('Expected exactly one compositor screenshot')
         files[0].replace(destination)
-        return healthy_png(destination)
+        return healthy_png(destination) if validate else None
 
     def open_typora(self, document):
         # Flatpak prints an instance ID to an owned pipe. Cleanup kills this
         # exact instance, never the user's existing Typora windows.
         read_fd, write_fd = os.pipe()
         os.set_blocking(read_fd, False)
-        display = str(self.directory/'runtime/mdf-render')
+        display = str(self.runtime/'mdf-render')
         environment = {**os.environ, 'WAYLAND_DISPLAY': display}
         self.typora = self.launch(['flatpak','run','--instance-id-fd='+str(write_fd),'--nosocket=x11',
-                                   '--env=WAYLAND_DISPLAY='+display,'io.typora.Typora',
+                                   '--env=WAYLAND_DISPLAY='+display,'--filesystem='+str(self.runtime)+':ro','io.typora.Typora',
                                    '--user-data-dir='+str(self.directory/'typora-profile'),
                                    '--disable-renderer-backgrounding','--disable-features=Vulkan','--ozone-platform=wayland',str(document)],
                                   environment,'typora.log',pass_fds=(write_fd,))
@@ -201,7 +238,11 @@ class Desktop:
         self.close_typora()
         if self.input is not None:
             os.close(self.input)
+            self.input = None
         stop(self.process)
+        if self.runtime:
+            shutil.rmtree(self.runtime,ignore_errors=True)
+            self.runtime = None
         for log in self.logs:
             log.close()
 
@@ -227,9 +268,13 @@ def main():
     parser.add_argument('--binary',type=Path,default=ROOT/'build/bin/mdf')
     parser.add_argument('--output',type=Path,default=ROOT/'build/render-comparison')
     parser.add_argument('--case',action='append',choices=[c[0] for c in CASES])
+    parser.add_argument('--latin-only',action='store_true',help='Review the regular sample without the extended-script fixture')
     parser.add_argument('--check',action='store_true')
     args=parser.parse_args()
-    cases=[c for c in CASES if not args.case or c[0] in args.case]
+    cases=[c for c in CASES if (not args.case or c[0] in args.case) and
+           (not args.latin_only or c[0] not in CASE_DOCUMENTS)]
+    if not cases:
+        parser.error('No sections selected for the requested scope')
     groups={}
     for case in cases:
         groups.setdefault(CASE_DOCUMENTS.get(case[0],'SAMPLE.md'),[]).append(case)

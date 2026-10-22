@@ -148,6 +148,9 @@ pub const State = enum(u8) { idle, working, ready, failed };
 pub const Worker = struct {
     allocator: std.mem.Allocator,
     notify: *const fn () void,
+    // Set before the first job is published. Pure data preparation only;
+    // Fontconfig registration and all UI operations stay on the main thread.
+    prepare_fonts: ?*const fn ([]const document.Block) void = null,
     state: std.atomic.Value(State) = .init(.idle),
     stop: std.atomic.Value(bool) = .init(false),
     thread: ?std.Thread = null,
@@ -263,6 +266,7 @@ pub const Worker = struct {
         if (self.model) |*model| {
             model.reflow(self.blocks, parameters, &self.stop) catch return false;
         } else {
+            if (!self.stop.load(.monotonic)) if (self.prepare_fonts) |prepare_fonts| prepare_fonts(self.blocks);
             self.model = Model.prepare(self.allocator, self.blocks, self.path, parameters, &self.stop) catch return false;
         }
         return true;

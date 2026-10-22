@@ -64,4 +64,22 @@ template<class Check> void check_text_layout(DocumentView &reader, Check check) 
             "Deferred monospace words and tabs retain their painting metrics");
     }
   }
+  bool checked_table = false;
+  for (size_t index = 0; index < reader.blocks.size(); ++index) {
+    const auto &table = reader.blocks[index];
+    if (table.kind != "table_row" || !table.table_header || table.cells.size() < 16) continue;
+    reader.invalidate();
+    const auto measured = reader.measure(index);
+    for (const auto &run : measured.runs) {
+      if (run.style.monospace || needs_fallback(run.text, reader.bundled_coverage)) continue;
+      fl_font(run.style.face, run.style.size);
+      check(run.w == float(fl_width(run.text.data(), run.text.size())) &&
+                run.font_height == float(fl_height()) && run.font_descent == float(fl_descent()),
+            "Table glyphs restore their own font after measuring column widths");
+    }
+    reader.invalidate();
+    checked_table = true;
+    break;
+  }
+  check(checked_table, "Large table font-state regression fixture exists");
 }

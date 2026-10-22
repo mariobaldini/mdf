@@ -34,6 +34,23 @@ pub fn decode(a: std.mem.Allocator, raw: []const u8) ![]u8 {
     if (std.mem.indexOfScalar(u8, decoded.items, 0) != null) return error.InvalidLink;
     return decoded.toOwnedSlice(a);
 }
+pub fn droppedPath(a: std.mem.Allocator, text: []const u8) ![]u8 {
+    var lines=std.mem.splitScalar(u8,text,'\n');
+    while(lines.next()) |raw| {
+        const line=std.mem.trim(u8,raw,"\r");
+        if(line.len==0 or line[0]=='#') continue;
+        if(!std.ascii.startsWithIgnoreCase(line,"file://")) return error.UnsupportedDrop;
+        const rest=line[7..];
+        const start=std.mem.indexOfScalar(u8,rest,'/') orelse return error.InvalidDropPath;
+        const host=rest[0..start];
+        if(host.len>0 and !std.ascii.eqlIgnoreCase(host,"localhost")) return error.RemoteFileDrop;
+        const path=try decode(a,rest[start..]);
+        errdefer a.free(path);
+        if(!std.fs.path.isAbsolute(path) or std.mem.indexOfAny(u8,path,"\r\n")!=null) return error.InvalidDropPath;
+        return path;
+    }
+    return error.EmptyDrop;
+}
 
 test "relative Markdown links are decoded without shell interpretation" {
     const a = std.testing.allocator;

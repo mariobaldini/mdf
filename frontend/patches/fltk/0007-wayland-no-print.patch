@@ -1,0 +1,14 @@
+--- a/CMake/options.cmake
++++ b/CMake/options.cmake
+@@ -1014,9 +1014,9 @@
+ 
+ #######################################################################
+ set(FL_NO_PRINT_SUPPORT FALSE)
+-if(X11_FOUND AND NOT FLTK_OPTION_PRINT_SUPPORT)
++if((X11_FOUND OR FLTK_BACKEND_WAYLAND) AND NOT FLTK_OPTION_PRINT_SUPPORT)
+   set(FL_NO_PRINT_SUPPORT TRUE)
+-endif(X11_FOUND AND NOT FLTK_OPTION_PRINT_SUPPORT)
++endif()
+ #######################################################################
+ 
+ #######################################################################

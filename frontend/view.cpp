@@ -4,83 +4,80 @@
 #include <FL/Fl_Image_Surface.H>
 #include <FL/platform.H>
 #include <cctype>
-#include <cerrno>
 #include <cstdio>
-#include <linux/memfd.h>
-#include <sys/syscall.h>
 #include <unistd.h>
+
+namespace {
+struct LayoutMeasurements {
+  const DocumentView *view;
+  int face = -1, size = -1;
+  std::exception_ptr failed;
+  static MdfFlowMetrics measure(void *opaque, MdfLayoutFont font, const unsigned char *text, size_t len) noexcept {
+    auto &ctx = *static_cast<LayoutMeasurements *>(opaque);
+    try {
+      const auto face = FL_FREE_FONT + int(font.face);
+      if (ctx.face != face || ctx.size != font.size) {
+        fl_font(face, font.size);
+        ctx.face = face; ctx.size = font.size;
+      }
+      if (font.flags & 2) return {float(fl_width(reinterpret_cast<const char *>(text), len)), float(fl_height()), float(fl_descent())};
+      Style style{};
+      style.face = face; style.size = font.size; style.monospace = font.flags & 1;
+      const auto metrics = ctx.view->text_metrics(style, reinterpret_cast<const char *>(text), len);
+      return {metrics.width, metrics.height, metrics.descent};
+    } catch (...) {
+      ctx.failed = std::current_exception();
+      return {std::numeric_limits<float>::quiet_NaN(), 0, 0};
+    }
+  }
+  static const float *columns(void *opaque, size_t index, float width, size_t *count) noexcept {
+    auto &ctx = *static_cast<LayoutMeasurements *>(opaque);
+    try {
+      const auto &values = ctx.view->table_columns(int(index), width);
+      // Intrinsic measurement uses another context and can change FLTK's
+      // current face. The next run must select its own font again.
+      ctx.face = ctx.size = -1;
+      *count = values.size();
+      return values.data();
+    } catch (...) {
+      ctx.face = ctx.size = -1;
+      ctx.failed = std::current_exception();
+      *count = 0;
+      return nullptr;
+    }
+  }
+
+};
+}
 
 static Fl_Color rgb(unsigned c) {
   return fl_rgb_color(c >> 16, (c >> 8) & 255, c & 255);
 }
 Palette Palette::get(const Settings &s) {
-  unsigned bg = s.dark ? 0x202124 : 0xffffff, fg = s.dark ? 0xd7d9dc : 0x42464b,
-           panel = s.dark ? 0x292c31 : 0xf5f6f7,
-           border = s.dark ? 0x3c3e42 : 0xd8dce1,
-           link = s.dark ? 0x8ab4e5 : 0x3276b0;
-  if (s.theme == "paper") {
-    bg = s.dark ? 0x29251f : 0xfbf5e9;
-    fg = s.dark ? 0xe1d5bf : 0x514635;
-    panel = s.dark ? 0x342e25 : 0xf0e7d6;
-    border = s.dark ? 0x4b4033 : 0xe2d7c3;
-    link = s.dark ? 0xdfb77b : 0x8c542b;
-  }
-  if (s.theme == "terminal") {
-    bg = s.dark ? 0x141c19 : 0xf2f7f3;
-    fg = s.dark ? 0xc4d7cb : 0x304b3b;
-    panel = s.dark ? 0x1e2c24 : 0xe6efe8;
-    border = s.dark ? 0x2d4237 : 0xd4e2d7;
-    link = s.dark ? 0x8dcca5 : 0x326c48;
-  }
-  return {rgb(bg),
-          rgb(fg),
-          rgb(panel),
-          rgb(border),
-          rgb(link),
-          rgb(s.dark ? 0xadb4be : 0x6b6f75),
-          rgb(s.dark ? 0x385779 : 0xc5ddf5)};
+  const auto p = mdf_theme_palette(mdf_theme_index(reinterpret_cast<const unsigned char *>(s.theme.data()), s.theme.size()), s.dark);
+  return {rgb(p.bg), rgb(p.fg), rgb(p.panel), rgb(p.border), rgb(p.link), rgb(p.muted),
+          rgb(p.selection), rgb(p.highlight), rgb(p.note), rgb(p.tip), rgb(p.important), rgb(p.warning), rgb(p.caution)};
 }
-FontStore::~FontStore() {
-  if (coverage) FcCharSetDestroy(coverage);
-  if (config)
-    FcConfigDestroy(config);
-  for (int fd : fds)
-    close(fd);
-}
+FontStore::~FontStore() { mdf_body_fonts_destroy(owner); }
 void FontStore::prepare() {
   PHASE("Prepare bundled Open Sans");
   {
     PHASE("Create private Fontconfig configuration");
-    config = FcConfigCreate();
-    if (!config)
-      throw std::runtime_error("Cannot create private font configuration");
-    // No XML, font directories, extracted files, or disk caches are used.
-    FcConfigSetRescanInterval(config, 0);
+    owner = mdf_body_fonts_create();
+    if (!owner) throw std::runtime_error("Cannot create private font configuration");
   }
-  const char *names[] = {"Register Open Sans regular",
-                         "Register Open Sans bold", "Register Open Sans italic",
-                         "Register Open Sans bold italic"};
   fds.reserve(4);
-  for (unsigned style = 0; style < 2; ++style)
-    add(bundled_font(style), names[style]);
-  styles = 3;
-  auto *faces = FcConfigGetFonts(config, FcSetApplication);
-  FcCharSet *first = nullptr;
-  if (!faces || !faces->nfont ||
-      FcPatternGetCharSet(faces->fonts[0], FC_CHARSET, 0, &first) != FcResultMatch)
-    throw std::runtime_error("Embedded Open Sans coverage unavailable");
-  coverage = FcCharSetCopy(first);
+  for (unsigned style = 0; style < 2; ++style) add(bundled_font(style), style);
 }
 void FontStore::ensure_styles(uint32_t required) {
   const uint32_t added = required & ~styles & 12;
   if (!added) return;
   PHASE("Prepare required Open Sans italic faces");
   for (unsigned style = 2; style < 4; ++style) if (added & (1u << style)) {
-    add(bundled_font(style), style == 2 ? "Register Open Sans italic" : "Register Open Sans bold italic");
-    styles |= 1u << style;
+    add(bundled_font(style), style);
   }
   if (adopted) {
-    pango_fc_font_map_config_changed(PANGO_FC_FONT_MAP(pango_cairo_font_map_get_default()));
+    mdf_body_fonts_refresh_default();
     const char *names[] = {"Open Sans", "Open Sans Bold", "Open Sans Italic", "Open Sans Bold Italic"};
     for (int i = 0; i < FL_FREE_FONT + 4; ++i) if (added & (1u << (i % 4))) {
       Fl::set_font(i, "");
@@ -90,22 +87,10 @@ void FontStore::ensure_styles(uint32_t required) {
 }
 void FontStore::add_fallback(const CodeFont &font) {
   PHASE("Publish selected fallback fonts for native labels");
-  auto retained = font.resources();
-  auto *from = FcConfigGetFonts(retained->config, FcSetApplication);
-  auto *to = FcConfigGetFonts(config, FcSetApplication);
-  // Retain data before publishing patterns that refer to its anonymous files.
-  fallbacks.push_back(std::move(retained));
-  for (int i = 0; i < from->nfont; ++i) {
-    FcChar8 *family = nullptr;
-    if (FcPatternGetString(from->fonts[i], FC_FAMILY, 0, &family) == FcResultMatch &&
-        std::string(reinterpret_cast<const char *>(family)) == "Open Sans") continue;
-    FcPatternReference(from->fonts[i]);
-    if (!FcFontSetAdd(to, from->fonts[i])) {
-      FcPatternDestroy(from->fonts[i]);
-      throw std::runtime_error("Cannot publish document fallback font");
-    }
-  }
-  pango_fc_font_map_config_changed(PANGO_FC_FONT_MAP(pango_cairo_font_map_get_default()));
+  char error[512]{};
+  if (!mdf_body_fonts_add_fallback(owner, font.resources()->owner, error, sizeof error))
+    throw std::runtime_error(error[0] ? error : "Cannot publish document fallback font");
+  mdf_body_fonts_refresh_default();
   // FLTK caches single-character advances outside Pango. Discard the old
   // descriptors so headings/TOC/minimap cannot retain missing-glyph widths.
   const char *names[] = {"Open Sans", "Open Sans Bold", "Open Sans Italic", "Open Sans Bold Italic"};
@@ -118,16 +103,14 @@ void FontStore::adopt() {
   {
     // Publish before Pango or Fl::set_font can initialize the system config.
     PHASE("Publish private Fontconfig configuration");
-    if (!config || !FcConfigSetCurrent(config))
+    if (!owner || !mdf_body_fonts_activate(owner))
       throw std::runtime_error(
           "Cannot activate bundled Open Sans configuration");
   }
   {
     PHASE("Adopt Fontconfig configuration in Pango");
-    auto *map = pango_cairo_font_map_get_default();
-    if (!PANGO_IS_FC_FONT_MAP(map))
+    if (!mdf_body_fonts_adopt_default(owner))
       throw std::runtime_error("Pango Fontconfig backend unavailable");
-    pango_fc_font_map_set_config(PANGO_FC_FONT_MAP(map), config);
   }
   {
     // Fl::set_font otherwise opens the display implicitly, hiding this cost.
@@ -146,50 +129,44 @@ void FontStore::adopt() {
   }
   adopted = true;
 }
-void FontStore::add(Buffer bytes, const char *name) {
-  if (!bytes.ptr || !bytes.len)
-    throw std::runtime_error("Embedded Open Sans face unavailable");
-  int fd;
-  {
-    PHASE("Prepare anonymous font data");
-    fd = syscall(SYS_memfd_create, "mdf-font", MFD_CLOEXEC);
-    if (fd < 0)
-      throw std::runtime_error("Cannot create font memory file");
-    fds.push_back(fd);
-    size_t off = 0;
-    while (off < bytes.len) {
-      auto n = write(fd, bytes.ptr + off, bytes.len - off);
-      if (n < 0 && errno == EINTR)
-        continue;
-      if (n <= 0)
-        throw std::runtime_error("Cannot prepare embedded Open Sans data");
-      off += n;
-    }
-  }
-  {
-    Phase registration(name, __FILE__, __LINE__);
-    auto path = "/proc/self/fd/" + std::to_string(fd);
-    if (!FcConfigAppFontAddFile(config, (const FcChar8 *)path.c_str()))
-      throw std::runtime_error("Fontconfig rejected embedded Open Sans face");
-  }
+void FontStore::add(Buffer bytes, uint32_t style) {
+  if (!bytes.ptr || !bytes.len) throw std::runtime_error("Embedded Open Sans face unavailable");
+  char error[512]{};
+  if (!mdf_body_fonts_add(owner, style, bytes.ptr, bytes.len, profile_enabled, profile_depth, error, sizeof error))
+    throw std::runtime_error(error[0] ? error : "Cannot prepare embedded Open Sans data");
+  const auto view = mdf_body_fonts_view(owner);
+  config = static_cast<FcConfig *>(view.config);
+  coverage = static_cast<FcCharSet *>(view.coverage);
+  fds.assign(view.fds, view.fds + view.count);
+  styles = view.styles;
 }
+
 DocumentView::DocumentView(int X, int Y, int W, int H, const Settings &s)
-    : Fl_Widget(X, Y, W, H), settings(s), palette(Palette::get(s)) {}
+    : Fl_Widget(X, Y, W, H), settings(s), palette(Palette::get(s)),
+      geometry_revision(geometry.fields->geometry_revision), scroll(geometry.fields->scroll),
+      horizontal_scroll(geometry.fields->horizontal_scroll), content_width(geometry.fields->content_width),
+      margin(geometry.fields->margin), horizontal_extent(geometry.fields->horizontal_extent),
+      horizontal_dirty(geometry.fields->horizontal_dirty) {}
 float DocumentView::character_width() const {
   fl_font(FL_FREE_FONT, body_size());
   return fl_width("m");
 }
 void DocumentView::document(const Json &j, Core &core, FontStore &fonts) {
+  model = core.handle;
   int anchor = index_at(scroll);
   float delta = scroll - (offsets.empty() ? 0 : offsets[anchor]);
   bool automatic = j.value("automatic", false);
   blocks.clear();
   starts.clear();
-  plain.clear();
+  plain = {};
   images.clear();
   image_pixels.clear();
   diagram_sizes.clear();
   diagram_errors.clear();
+  diagram_states.clear();
+  diagram_focus.reset();
+  diagram_drag.reset();
+  diagram_control = false;
   has_diagrams = false;
   has_code = false;
   cache.clear();
@@ -200,33 +177,16 @@ void DocumentView::document(const Json &j, Core &core, FontStore &fonts) {
   path = text(j, "path");
   const size_t count = j.value("block_count", size_t(0));
   blocks.reserve(count);
-  starts.reserve(count);
-  plain.reserve(j.value("source_bytes", size_t(0)));
-  uint32_t required_styles = 0;
-  for (size_t i = 0; i < count; ++i) {
-    auto b = read_block(core, i);
-    has_diagrams = has_diagrams || b.mermaid();
-    has_code = has_code || (b.kind == "code" && !b.mermaid());
-    starts.push_back(plain.size());
-    plain += b.prefix;
-    for (auto &s : b.spans) {
-      plain += s.text;
-      if (s.italic && !s.text.empty()) required_styles |= 1u << (style(s, b).face - FL_FREE_FONT);
-    }
-    for (size_t i = 0; i < b.cells.size(); ++i) {
-      if (i)
-        plain += '\t';
-      for (auto &s : b.cells[i].spans) {
-        plain += s.text;
-        if (s.italic && !s.text.empty()) required_styles |= 1u << (style(s, b).face - FL_FREE_FONT);
-      }
-    }
-    plain += "\n\n";
-    blocks.push_back(std::move(b));
-  }
+  const auto projection = mdf_core_document_text(core.handle);
+  if (projection.count != count) throw std::runtime_error("Inconsistent document text projection");
+  plain = projection.text.len ? std::string_view(reinterpret_cast<const char *>(projection.text.ptr), projection.text.len) : std::string_view{};
+  if (count) starts.assign(projection.starts, projection.starts + count);
+  has_code = projection.flags & 1;
+  has_diagrams = projection.flags & 2;
+  for (size_t i = 0; i < count; ++i) blocks.push_back(read_block(core, i));
   // Parsed spans cover nested emphasis, HTML, and table headers. Adopt final
   // faces before invalidate() can measure any document block.
-  fonts.ensure_styles(required_styles);
+  fonts.ensure_styles(projection.styles);
   {
     PHASE("Check document against bundled glyph coverage");
     required_glyphs = missing_characters(plain, bundled_coverage);
@@ -312,33 +272,28 @@ bool DocumentView::visible(int index) const {
   return true;
 }
 int DocumentView::index_at(float y) const {
-  if (blocks.empty())
-    return 0;
-  auto i = std::upper_bound(offsets.begin(), offsets.end(), y);
-  return std::clamp(int(i - offsets.begin()) - 1, 0, (int)blocks.size() - 1);
+  return int(mdf_viewport_index_at(geometry.handle, y, blocks.size()));
+}
+void DocumentView::borrow_geometry() {
+  const auto view = mdf_viewport_view(geometry.handle);
+  heights = {view.heights, view.count};
+  offsets = {view.offsets, view.offset_count};
 }
 void DocumentView::reindex() {
-  offsets.assign(1, 24);
-  for (float h : heights)
-    offsets.push_back(offsets.back() + h);
-  ++geometry_revision;
+  if (!mdf_viewport_reindex(geometry.handle)) throw std::bad_alloc();
+  borrow_geometry();
 }
 void DocumentView::invalidate() {
   text_measurements.clear();
   cached_words = 0;
   int anchor = index_at(scroll);
   float delta = scroll - (offsets.empty() ? 0 : offsets[anchor]);
-  float available = std::max(40, w() - 48);
-  content_width = std::min(
-      available, settings.width == "percent_100"      ? available
-                 : settings.width == "characters_100" ? character_width() * 100
-                                                      : w() * .8f);
-  margin = std::max(0.f, (w() - content_width) / 2);
-  horizontal_dirty = true;
-  if (settings.line_wrap) horizontal_scroll = 0;
+  const uint32_t mode = settings.width == "characters_100" ? 0 : settings.width == "percent_100" ? 2 : 1;
+  mdf_viewport_configure(geometry.handle, w(), mode, mode == 0 ? character_width() : 0, settings.line_wrap);
   cache.clear();
   table_widths.clear();
-  heights.resize(blocks.size());
+  if (!mdf_viewport_resize(geometry.handle, blocks.size())) throw std::bad_alloc();
+  borrow_geometry();
   for (int i = 0; i < (int)blocks.size(); ++i)
     heights[i] = estimate(i);
   reindex();
@@ -348,15 +303,10 @@ void DocumentView::invalidate() {
   scroll = std::clamp(scroll, 0.f, max_scroll());
 }
 Style DocumentView::style(const Span &s, const Block &b) const {
-  float points =
-      b.kind == "heading"
-          ? std::vector<int>{12, 26, 20, 16, 14, 12, 12}[std::min(6, b.heading)]
-      : b.kind == "code" ? 11
-                         : 12;
-  return {FL_FREE_FONT + int(s.bold || b.kind == "heading" || b.table_header) +
-              2 * int(s.italic),
-          std::max(
-              1, int(std::round(points * 1.4f * zoom() * (s.small ? .8f : 1)))),
+  const uint32_t flags = uint32_t(s.bold) | uint32_t(s.italic) << 1 | uint32_t(s.small) << 6;
+  const auto numeric = mdf_text_style(b.kind == "heading" ? 1 : b.kind == "code" ? 2 : 0,
+                                      b.heading, flags, b.table_header, zoom());
+  return {FL_FREE_FONT + int(numeric.face), numeric.size,
           s.strike,
           s.underline,
           s.code,
@@ -399,14 +349,8 @@ float DocumentView::estimate(int index) const {
   if (!visible(index))
     return 0;
   auto &b = blocks[index];
-  float z = zoom(), sz = style(Span{}, b).size;
-  float avail =
-      std::max(40.f, content_width - std::min(20, b.indent + b.quote) * 22 * z);
-  float lines = settings.line_wrap ? std::max(float(std::max(1, b.lines)),
-                         std::ceil(b.bytes * sz * .5f / avail)) : float(std::max(1, b.lines));
-  return b.kind == "rule"
-             ? 24 * z
-             : lines * sz * 1.5f + 24 * z + (b.kind == "heading" ? 24 * z : 0);
+  return mdf_estimate_block(b.kind == "rule" ? 3 : b.kind == "heading" ? 1 : 0,
+      b.bytes, b.lines, b.indent, b.quote, style(Span{}, b).size, zoom(), content_width, settings.line_wrap);
 }
 static size_t utf8_len(unsigned char c) {
   return c < 0x80 ? 1 : c < 0xe0 ? 2 : c < 0xf0 ? 3 : 4;
@@ -415,95 +359,58 @@ Flow
 DocumentView::flow(const std::vector<Span> &ss, const Block &b, float left,
                    float top, float width, int sz, size_t start,
                    const std::string &align, bool collect_runs) const {
-  std::vector<Run> out;
-  float x = left, y = top, line_h = sz * 1.5f, right = left;
-  size_t pos = start, line_start = 0;
-  auto endline = [&]() {
-    float used = x - left, shift = align == "right"    ? width - used
-                                   : align == "center" ? (width - used) / 2
-                                                       : 0;
-    right = std::max(right, x + std::max(0.f, shift));
-    for (size_t i = line_start; i < out.size(); ++i)
-      out[i].x += std::max(0.f, shift);
-    line_start = out.size();
-  };
-  for (auto &s : ss) {
-    auto st = style(s, b);
-    st.size = std::max(1, int(sz * (s.small ? .8f : 1)));
-    fl_font(st.face, st.size);
-    size_t at = 0;
-    while (at < s.text.size()) {
-      if (s.text[at] == '\n') {
-        endline();
-        x = left;
-        y += line_h;
-        ++at;
-        ++pos;
-        continue;
-      }
-      if (st.monospace && s.text[at] == '\t') {
-        const auto metrics = text_metrics(st, " ", 1);
-        const float stop = std::max(1.f, metrics.width * 4);
-        float gap = stop - std::fmod(std::max(0.f, x - left), stop);
-        if (gap < .01f) gap = stop;
-        if (collect_runs)
-          out.push_back({"\t", st, x, y + (line_h - metrics.height) / 2 + metrics.height - metrics.descent,
-                         gap, line_h, pos, metrics.height, metrics.descent});
-        x += gap; ++pos; ++at;
-        continue;
-      }
-      size_t end = at;
-      bool space = std::isspace((unsigned char)s.text[at]);
-      while (end < s.text.size() && s.text[end] != '\n' &&
-             !(st.monospace && s.text[end] == '\t') &&
-             bool(std::isspace((unsigned char)s.text[end])) == space)
-        end += utf8_len((unsigned char)s.text[end]);
-      std::string word = s.text.substr(at, end - at);
-      const auto metrics = text_metrics(st, word.data(), word.size());
-      float width_word = metrics.width;
-      if (settings.line_wrap && x > left && x + width_word > left + width && !space) {
-        endline();
-        x = left;
-        y += line_h;
-      }
-      if (!settings.line_wrap || width_word <= width || space) {
-        if (space && x == left && b.kind != "code") {
-          pos += word.size();
-          at = end;
-          continue;
-        }
-        float asc = metrics.height - metrics.descent;
-        if (collect_runs)
-          out.push_back({word, st, x, y + (line_h - metrics.height) / 2 + asc,
-                         width_word, line_h, pos, metrics.height, metrics.descent});
-        x += width_word;
-        pos += word.size();
-      } else {
-        size_t p = 0;
-        while (p < word.size()) {
-          size_t n = utf8_len((unsigned char)word[p]);
-          std::string part = word.substr(p, n);
-          const auto glyph = text_metrics(st, part.data(), part.size());
-          float cw = glyph.width;
-          if (x > left && x + cw > left + width) {
-            endline();
-            x = left;
-            y += line_h;
-          }
-          if (collect_runs) out.push_back(
-              {part, st, x,
-               y + (line_h - glyph.height) / 2 + glyph.height - glyph.descent, cw,
-               line_h, pos, glyph.height, glyph.descent});
-          x += cw;
-          pos += n;
-          p += n;
-        }
-      }
-      at = end;
-    }
+  std::vector<Style> styles;
+  std::vector<MdfFlowSpan> spans;
+  styles.reserve(ss.size());
+  spans.reserve(ss.size());
+  for (const auto &span : ss) {
+    auto st = style(span, b);
+    st.size = std::max(1, int(sz * (span.small ? .8f : 1)));
+    spans.push_back({reinterpret_cast<const unsigned char *>(span.text.data()),
+                     span.text.size(), uint32_t(st.monospace)});
+    styles.push_back(std::move(st));
   }
-  endline();
-  return {std::move(out), y - top + line_h, right};
+  struct Context {
+    const DocumentView *view;
+    const std::vector<Style> *styles;
+    size_t current = std::numeric_limits<size_t>::max();
+    std::exception_ptr failed;
+  } context{this, &styles};
+  auto measure = [](void *opaque, size_t span, const unsigned char *text, size_t len) noexcept -> MdfFlowMetrics {
+    auto &ctx = *static_cast<Context *>(opaque);
+    try {
+      const auto &st = (*ctx.styles)[span];
+      if (ctx.current != span) {
+        fl_font(st.face, st.size);
+        ctx.current = span;
+      }
+      const auto metrics = ctx.view->text_metrics(st, reinterpret_cast<const char *>(text), len);
+      return {metrics.width, metrics.height, metrics.descent};
+    } catch (...) {
+      ctx.failed = std::current_exception();
+      return {std::numeric_limits<float>::quiet_NaN(), 0, 0};
+    }
+  };
+  const MdfFlowSpec spec{left, top, width, sz, start,
+    align == "right" ? 2u : align == "center" ? 1u : 0u,
+    uint32_t(settings.line_wrap) | (b.kind == "code" ? 2u : 0u) | (collect_runs ? 4u : 0u)};
+  MdfFlowResult result;
+  if (!mdf_text_flow(spans.data(), spans.size(), spec, measure, &context, &result)) {
+    if (context.failed) std::rethrow_exception(context.failed);
+    throw std::runtime_error("Cannot lay out text");
+  }
+  struct Release {
+    MdfFlowResult result;
+    ~Release() { mdf_text_flow_free(result); }
+  } release{result};
+  Flow output{{}, result.height, result.right};
+  output.runs.reserve(result.count);
+  for (size_t i = 0; i < result.count; ++i) {
+    const auto &run = result.runs[i];
+    output.runs.push_back({ss[run.span].text.substr(run.offset, run.len), styles[run.span],
+      run.x, run.y, run.width, run.height, run.position, run.font_height, run.font_descent});
+  }
+  return output;
 }
 const std::vector<float> &DocumentView::table_columns(int index, float width) const {
   while (index > 0 && !blocks[index].table_header &&
@@ -511,6 +418,20 @@ const std::vector<float> &DocumentView::table_columns(int index, float width) co
     --index;
   if (auto found = table_widths.find(index); found != table_widths.end())
     return found->second;
+  if (model) {
+    LayoutMeasurements context{this};
+    MdfFloatBuffer measured;
+    if (!mdf_core_table_columns(model, index, width, zoom(), settings.line_wrap, code_font.ready(),
+                                 LayoutMeasurements::measure, &context, profile_depth, &measured)) {
+      if (context.failed) std::rethrow_exception(context.failed);
+      throw std::runtime_error("Cannot measure intrinsic table columns");
+    }
+    struct Release { MdfFloatBuffer buffer; ~Release() { mdf_float_buffer_free(buffer); } } release{measured};
+    std::vector<float> widths;
+    if (measured.count) widths.assign(measured.data, measured.data + measured.count);
+    return table_widths.emplace(index, std::move(widths)).first->second;
+  }
+  // Hand-built native font regression fixtures retain the reference adapter.
   PHASE("Measure intrinsic table column widths");
   const float padding = 16 * zoom();
   std::vector<float> minimum(blocks[index].cells.size(), padding + 1), preferred = minimum;
@@ -548,55 +469,54 @@ const std::vector<float> &DocumentView::table_columns(int index, float width) co
       preferred[col] = std::max(preferred[col], std::max(longest_line, line) + padding + 1);
     }
   }
-  float min_sum = 0, preferred_sum = 0;
-  for (size_t col = 0; col < minimum.size(); ++col) {
-    preferred[col] = std::max(minimum[col], preferred[col]);
-    min_sum += minimum[col];
-    preferred_sum += preferred[col];
-  }
-  std::vector<float> widths = minimum;
-  if (!settings.line_wrap && preferred_sum > width) {
-    widths = preferred;
-  } else if (min_sum > width) {
-    // Compact columns (labels/numbers whose whole cell fits on one line)
-    // retain their intrinsic width while paragraph columns wrap more tightly.
-    float compact = 0;
-    int flexible = 0;
-    auto compact_column = [&](size_t col) {
-      return preferred[col] <= minimum[col] + .01f && minimum[col] <= width * .5f;
-    };
-    for (size_t col = 0; col < minimum.size(); ++col) {
-      if (compact_column(col)) compact += minimum[col];
-      else ++flexible;
-    }
-    const bool protect = flexible && compact + flexible * (padding + 1) <= width;
-    // A single oversized token also needs a cap. Preserve smaller columns
-    // where possible instead of shrinking them by its character-count weight.
-    float low = 0, high = min_sum;
-    for (int step = 0; step < 24; ++step) {
-      const float cap = (low + high) / 2;
-      float used = 0;
-      for (size_t col = 0; col < minimum.size(); ++col)
-        used += protect && compact_column(col) ? minimum[col] : std::min(minimum[col], cap);
-      if (used > width) high = cap;
-      else low = cap;
-    }
-    for (size_t col = 0; col < widths.size(); ++col)
-      if (!protect || !compact_column(col))
-        widths[col] = std::min(widths[col], low);
-  } else {
-    for (size_t col = 0; col < widths.size(); ++col) {
-      if (preferred_sum > width)
-        widths[col] += (width - min_sum) * (preferred[col] - minimum[col]) /
-                      (preferred_sum - min_sum);
-      else
-        widths[col] = preferred[col] + (width - preferred_sum) * preferred[col] /
-                     std::max(1.f, preferred_sum);
-    }
-  }
+  std::vector<float> widths(minimum.size());
+  if (!mdf_table_widths(minimum.data(), preferred.data(), minimum.size(), width, padding,
+                        settings.line_wrap, widths.data()))
+    throw std::runtime_error("Cannot fit intrinsic table columns");
   return table_widths.emplace(index, std::move(widths)).first->second;
 }
 Measured DocumentView::measure(int index, bool collect_runs) const {
+  if (!model) return measure_reference(index, collect_runs);
+  const auto image = images.find(index);
+  const auto dimensions = diagram_sizes.find(index);
+  const auto failure = diagram_errors.find(index);
+  const std::string_view message = failure == diagram_errors.end() ? std::string_view{} : failure->second;
+  const MdfLayoutOptions options{content_width, margin, zoom(), settings.line_wrap, collect_runs,
+      code_font.ready(), visible(index), image != images.end(), dimensions != diagram_sizes.end(),
+      dimensions != diagram_sizes.end() ? dimensions->second.first : image != images.end() ? float(image->second->data_w()) : 0,
+      dimensions != diagram_sizes.end() ? dimensions->second.second : image != images.end() ? float(image->second->data_h()) : 0,
+      {reinterpret_cast<const unsigned char *>(message.data()), message.size()},
+      blocks[index].mermaid() && image != images.end() ? diagram_scale(index) : 0,
+      blocks[index].mermaid() && image != images.end() ? diagram_controls(index, 0).height : 0};
+  LayoutMeasurements context{this};
+  auto *layout = mdf_core_layout_block(model, index, &options, LayoutMeasurements::measure, LayoutMeasurements::columns, &context);
+  if (!layout) {
+    if (context.failed) std::rethrow_exception(context.failed);
+    throw std::runtime_error("Cannot lay out Markdown block");
+  }
+  struct Release { MdfBlockLayout *layout; ~Release() { mdf_layout_result_free(layout); } } release{layout};
+  const auto view = mdf_layout_result_view(layout);
+  Measured result;
+  result.height = view.height; result.right = view.right; result.image = view.image;
+  result.ix = view.ix; result.iy = view.iy; result.iw = view.iw; result.ih = view.ih;
+  result.runs.reserve(view.run_count);
+  for (size_t i = 0; i < view.run_count; ++i) {
+    const auto &run = view.runs[i];
+    auto link = view_text(run.link);
+    Style style{FL_FREE_FONT + int(run.font.face), run.font.size, bool(run.flags & 8), bool(run.flags & 16),
+      bool(run.flags & 4), bool(run.flags & 32), link, run.role ? role(run.role) : link.empty() ? palette.fg : palette.link,
+      bool(run.font.flags & 1)};
+    result.runs.push_back({view_text(run.text), std::move(style), run.x, run.y, run.width, run.height,
+                            run.position, run.font_height, run.font_descent});
+  }
+  result.rects.reserve(view.rect_count);
+  for (size_t i = 0; i < view.rect_count; ++i) {
+    const auto &rect = view.rects[i];
+    result.rects.push_back({rect.x, rect.y, rect.width, rect.height, int(rect.role)});
+  }
+  return result;
+}
+Measured DocumentView::measure_reference(int index, bool collect_runs) const {
   Measured m;
   if (!visible(index))
     return m;
@@ -649,12 +569,14 @@ Measured DocumentView::measure(int index, bool collect_runs) const {
   const bool details = b.kind == "details";
   std::string prefix = details ? "" : b.prefix;
   fl_font(style(Span{}, b).face, sz);
-  float pw =
-      b.task.has_value() || details ? sz * 1.5f : fl_width(prefix.c_str());
+  float pw = b.task.has_value() || details || b.indent
+                 ? std::max(sz * 1.5f, float(fl_width(prefix.c_str())))
+                 : fl_width(prefix.c_str());
+  const float prefix_pad = b.kind == "code" || b.quote ? 12 * z : 0;
   if (!prefix.empty() && b.kind != "table_row") {
     Span s;
     s.text = prefix;
-    auto [r, h, right] = flow({s}, b, left, y, width, sz, starts[index], "left", collect_runs);
+    auto [r, h, right] = flow({s}, b, left + prefix_pad, y + prefix_pad, width, sz, starts[index], "left", collect_runs);
     m.right = std::max(m.right, right);
     m.runs.insert(m.runs.end(), r.begin(), r.end());
   }
@@ -715,7 +637,7 @@ Measured DocumentView::measure(int index, bool collect_runs) const {
       m.rects.push_back({left, before, 3 * z, y - before + h + 2 * pad,
                          b.alert.empty() ? 1 : alert_role});
     if (b.task) {
-      float cx = left + 2 * z, cy = y + pad + sz * .35f, side = sz * .65f;
+      float cx = left + pad + 2 * z, cy = y + pad + sz * .35f, side = sz * .65f;
       if (*b.task) {
         m.rects.push_back({cx, cy, side, side, 3});
         for (int i = 0; i < 7; ++i) {
@@ -742,21 +664,82 @@ Measured DocumentView::measure(int index, bool collect_runs) const {
   return m;
 }
 float DocumentView::horizontal_total() const {
-  if (settings.line_wrap) return w();
   if (horizontal_dirty) {
-    PHASE("Measure unwrapped document width");
+    PHASE("Measure document horizontal extent");
     float right = w();
     // Keep the existing lazy viewport cache. This pass measures width without
     // retaining all the document's text runs or changing its vertical layout.
     for (int i = 0; i < (int)blocks.size(); ++i) {
       const auto cached = cache.find(i);
+      if (settings.line_wrap && (cached == cache.end() ||
+          (blocks[i].kind != "table_row" && !blocks[i].mermaid()))) continue;
       const float edge = cached == cache.end() ? measure(i, false).right : cached->second.right;
       if (edge > 0) right = std::max(right, edge + margin);
     }
-    horizontal_extent = std::max(float(w()), std::ceil(right - .01f));
-    horizontal_dirty = false;
+    mdf_viewport_horizontal(geometry.handle, w(), right);
   }
   return horizontal_extent;
+}
+DocumentView::DiagramControls DocumentView::diagram_controls(int index, float top) const {
+  const float indent = std::min(20, blocks[index].indent + blocks[index].quote) * 22 * zoom();
+  const float left = margin + indent, width = std::max(30.f, content_width - indent);
+  DiagramControls result;
+  float x = left, y = top + 2;
+  const float widths[] = {28, 62, 28, 44};
+  for (int i = 0; i < 4; ++i) {
+    const float w = std::min(widths[i], width);
+    if (x > left && x + w > left + width) { x = left; y += 32; }
+    result.boxes[i] = {x, y, w, 28}; x += w + 4;
+  }
+  result.height = y - top + 30;
+  return result;
+}
+float DocumentView::diagram_scale(int index) const {
+  const auto state = diagram_states.find(index);
+  if (state == diagram_states.end()) return 1;
+  if (!state->second.fit) return state->second.zoom;
+  const float indent = std::min(20, blocks[index].indent + blocks[index].quote) * 22 * zoom();
+  return std::min(1.f, std::max(30.f, content_width - indent) /
+      std::max(1.f, diagram_sizes.at(index).first * zoom()));
+}
+void DocumentView::zoom_diagram(int index, int action) {
+  if (!images.count(index) || !blocks[index].mermaid()) return;
+  const float current = diagram_scale(index);
+  diagram_focus = index;
+  if ((action == 0 && current <= .25f) || (action == 2 && current >= 2)) return;
+  auto &state = diagram_states[index];
+  if (action == 1) state = {};
+  else if (action == 3) state = {1, true};
+  else state = {std::clamp(current * (action == 0 ? .8f : 1.25f), .25f, 2.f), false};
+  const int anchor = index_at(scroll);
+  const float delta = scroll - offsets[anchor];
+  cache.erase(index);
+  auto measured = measure(index);
+  heights[index] = measured.height;
+  cache.emplace(index, std::move(measured));
+  reindex();
+  scroll = std::clamp(offsets[anchor] + delta, 0.f, max_scroll());
+  horizontal_dirty = true;
+  horizontal_scroll = std::clamp(horizontal_scroll, 0.f, max_horizontal_scroll());
+  redraw();
+  if (changed) changed();
+}
+std::optional<std::pair<int, int>> DocumentView::diagram_hit(float px, float py) const {
+  if (blocks.empty()) return {};
+  const int index = index_at(py + scroll);
+  const auto found = cache.find(index);
+  if (!blocks[index].mermaid() || found == cache.end() || !found->second.image) return {};
+  const auto &m = found->second;
+  py += scroll - offsets[index];
+  auto group = diagram_controls(index, 0);
+  group = diagram_controls(index, m.iy - group.height);
+  for (int i = 0; i < 4; ++i) {
+    const auto &b = group.boxes[i];
+    if (px >= b.x && px < b.x + b.w && py >= b.y && py < b.y + b.h) return std::pair{index, i};
+  }
+  if (px + horizontal_scroll >= m.ix && px + horizontal_scroll < m.ix + m.iw &&
+      py >= m.iy && py < m.iy + m.ih) return std::pair{index, -1};
+  return {};
 }
 Fl_Color DocumentView::role(int r) const {
   switch (r) {
@@ -767,25 +750,23 @@ Fl_Color DocumentView::role(int r) const {
   case 3:
     return palette.link;
   case 4:
-    return FL_WHITE;
+    return settings.dark ? palette.bg : FL_WHITE;
   case 5:
-    return rgb(settings.dark ? 0x79b8ff : 0x0969da);
+    return palette.note;
   case 6:
-    return rgb(settings.dark ? 0x7ee787 : 0x1a7f37);
+    return palette.tip;
   case 7:
-    return rgb(settings.dark ? 0xd2a8ff : 0x8250df);
+    return palette.important;
   case 8:
-    return rgb(settings.dark ? 0xe3b341 : 0x9a6700);
+    return palette.warning;
   case 9:
-    return rgb(settings.dark ? 0xff7b72 : 0xcf222e);
+    return palette.caution;
   default:
     return palette.bg;
   }
 }
 void DocumentView::prepare_visible() {
   PHASE("Measure visible Markdown blocks");
-  if (!settings.line_wrap)
-    horizontal_scroll = std::clamp(horizontal_scroll, 0.f, max_horizontal_scroll());
   for (int pass = 0; pass < 8; ++pass) {
     int first = index_at(scroll);
     float delta = scroll - offsets[first];
@@ -796,6 +777,7 @@ void DocumentView::prepare_visible() {
         auto m = measure(i);
         heights[i] = m.height;
         cache.emplace(i, std::move(m));
+        horizontal_dirty = true;
         change = true;
       }
     }
@@ -805,6 +787,7 @@ void DocumentView::prepare_visible() {
     scroll = offsets[first] + delta;
   }
   scroll = std::clamp(scroll, 0.f, max_scroll());
+  horizontal_scroll = std::clamp(horizontal_scroll, 0.f, max_horizontal_scroll());
 }
 void DocumentView::draw() {
   PHASE("Draw native FLTK reader viewport");
@@ -843,6 +826,24 @@ void DocumentView::draw() {
         auto &image = images[i];
         image->scale(m.iw, m.ih, 0, 1);
         image->draw(origin_x + m.ix, dy + m.iy);
+        if (model && blocks[i].mermaid()) {
+          const float scale = diagram_scale(i);
+          const auto group = diagram_controls(i, m.iy - diagram_controls(i, 0).height);
+          for (int action = 0; action < 4; ++action) {
+            const auto &b = group.boxes[action];
+            const auto state = diagram_states.find(i);
+            const bool fit = state != diagram_states.end() && state->second.fit;
+            const bool active = action == 3 ? fit : action == 1 && !fit && std::abs(scale - 1) < .001f;
+            fl_draw_box(active ? FL_DOWN_BOX : FL_UP_BOX, x() + b.x, dy + b.y, b.w, b.h,
+                        active ? rgb(0x3276b0) : palette.panel);
+            const bool enabled = !((action == 0 && scale <= .25f) || (action == 2 && scale >= 2));
+            fl_color(!enabled ? palette.muted : active ? FL_WHITE : palette.fg);
+            fl_font(FL_FREE_FONT, b.w < 40 ? 11 : 13);
+            const auto label = action == 0 ? std::string("−") : action == 2 ? std::string("+") :
+                action == 3 ? std::string("Fit") : scale < .01f ? std::string("<1%") : std::to_string(int(std::round(scale * 100))) + "%";
+            fl_draw(label.c_str(), x() + b.x, dy + b.y, b.w, b.h, FL_ALIGN_CENTER);
+          }
+        }
       }
       for (auto &r : m.runs) {
         float xx = origin_x + r.x, base = dy + r.y;
@@ -850,7 +851,7 @@ void DocumentView::draw() {
         const bool fallback = fallback_font.ready() && needs_fallback(r.text, bundled_coverage);
         float asc = r.font_height - r.font_descent, top = base - asc;
         if (r.style.code || r.style.highlight) {
-          fl_color(r.style.highlight ? rgb(0xebd77f) : palette.panel);
+          fl_color(r.style.highlight ? palette.highlight : palette.panel);
           fl_rectf(xx - 1, top - 1, r.w + 2, r.font_height + 2);
         }
         if (selection && r.pos != std::numeric_limits<size_t>::max()) {
@@ -866,7 +867,7 @@ void DocumentView::draw() {
             fl_rectf(xx + sx, top, sw, r.font_height + 2);
           }
         }
-        fl_color(r.style.color);
+        fl_color(r.style.highlight ? palette.fg : r.style.color);
         if (r.style.monospace)
           code_font.draw(r.text.data(), r.text.size(), r.style.size,
                           (r.style.face - FL_FREE_FONT) & 3, xx, base);
@@ -893,13 +894,13 @@ void DocumentView::resize(int X, int Y, int W, int H) {
   redraw();
 }
 void DocumentView::move_scroll(float value) {
-  scroll = std::clamp(value, 0.f, max_scroll());
+  mdf_viewport_move(geometry.handle, value, h());
   redraw();
   if (changed)
     changed();
 }
 void DocumentView::move_horizontal(float value) {
-  horizontal_scroll = settings.line_wrap ? 0.f : std::clamp(value, 0.f, max_horizontal_scroll());
+  mdf_viewport_move_horizontal(geometry.handle, value, max_horizontal_scroll(), false);
   redraw();
   if (changed) changed();
 }
@@ -963,8 +964,24 @@ std::string DocumentView::selected() const {
   auto [a, b] = *selection;
   if (a > b)
     std::swap(a, b);
-  return plain.substr(std::min(a, plain.size()),
-                      std::min(b, plain.size()) - std::min(a, plain.size()));
+  return std::string(plain.substr(std::min(a, plain.size()),
+                      std::min(b, plain.size()) - std::min(a, plain.size())));
+}
+Fl_Cursor DocumentView::hover_cursor(float xx, float yy) const {
+  if (diagram_hit(xx, yy)) return FL_CURSOR_HAND;
+  if (blocks.empty()) return FL_CURSOR_ARROW;
+  const int index = index_at(yy + scroll);
+  const auto found = cache.find(index);
+  if (found == cache.end()) return FL_CURSOR_ARROW;
+  xx += horizontal_scroll;
+  const float local_y = yy + scroll - offsets[index];
+  for (const auto &run : found->second.runs) {
+    if (run.style.link.empty()) continue;
+    const float top = run.y - run.font_height + run.font_descent;
+    if (xx >= run.x && xx < run.x + run.w && local_y >= top && local_y < top + run.font_height)
+      return FL_CURSOR_HAND;
+  }
+  return FL_CURSOR_ARROW;
 }
 void DocumentView::select_all() {
   selection = std::pair<size_t, size_t>{0, plain.size()};
@@ -984,6 +1001,23 @@ void DocumentView::select_word(size_t p) {
   redraw();
 }
 void DocumentView::pointer(int kind, float px, float py) {
+  if (kind == 0 || kind == 3) {
+    diagram_control = false; diagram_drag.reset();
+    if (const auto target = diagram_hit(px, py)) {
+      pressed.reset(); diagram_focus = target->first;
+      if (target->second >= 0) { zoom_diagram(target->first, target->second); diagram_control = true; }
+      else diagram_drag = std::pair{px, horizontal_scroll};
+      return;
+    }
+    diagram_focus.reset();
+  } else if (diagram_control) {
+    if (kind == 2) diagram_control = false;
+    return;
+  } else if (diagram_drag) {
+    if (kind == 1) move_horizontal(diagram_drag->second + diagram_drag->first - px);
+    else diagram_drag.reset();
+    return;
+  }
   auto target = hit(px, py);
   if (!target)
     return;
@@ -1032,14 +1066,15 @@ int DocumentView::handle(int e) {
     pointer(2, Fl::event_x() - x(), Fl::event_y() - y());
     return 1;
   case FL_MOUSEWHEEL:
-    if (!settings.line_wrap && (Fl::event_dx() || Fl::event_state(FL_SHIFT)))
+    if (Fl::event_dx() || Fl::event_state(FL_SHIFT))
       move_horizontal(horizontal_scroll + (Fl::event_dx() +
                       (Fl::event_state(FL_SHIFT) ? Fl::event_dy() : 0)) * body_size() * 3);
-    if (!Fl::event_state(FL_SHIFT) || settings.line_wrap)
+    if (!Fl::event_state(FL_SHIFT))
       move_scroll(scroll + Fl::event_dy() * body_size() * 3);
     return 1;
   case FL_ENTER:
-    fl_cursor(FL_CURSOR_INSERT);
+  case FL_MOVE:
+    fl_cursor(hover_cursor(Fl::event_x() - x(), Fl::event_y() - y()));
     return 1;
   case FL_LEAVE:
     fl_cursor(FL_CURSOR_DEFAULT);
@@ -1048,7 +1083,14 @@ int DocumentView::handle(int e) {
   case FL_UNFOCUS:
     return 1;
   case FL_KEYDOWN:
-    if (!settings.line_wrap && (Fl::event_key() == FL_Left || Fl::event_key() == FL_Right)) {
+    if (diagram_focus && !Fl::event_state(FL_CTRL)) {
+      const int key = Fl::event_key();
+      if (key == '-' || key == '+' || key == '=' || key == '0') {
+        zoom_diagram(*diagram_focus, key == '-' ? 0 : key == '0' ? 1 : 2); return 1;
+      }
+      if (key == FL_Escape) { diagram_focus.reset(); redraw(); return 1; }
+    }
+    if (max_horizontal_scroll() > 0 && (Fl::event_key() == FL_Left || Fl::event_key() == FL_Right)) {
       move_horizontal(horizontal_scroll + (Fl::event_key() == FL_Left ? -1 : 1) * body_size() * 3);
       return 1;
     }

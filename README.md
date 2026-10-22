@@ -1,17 +1,23 @@
 # Markdown FAST
 
 A fast, minimal Markdown viewer for Linux with Wayland, including Fedora 44.
-It uses FLTK 1.4.5 with Cairo/Pango for the GUI and Zig with MD4C for document processing.
-The used Pango Cairo/Fontconfig code is linked into the private UI engine.
-The [text stack guide](docs/text-stack.md) describes its pinned build and relinking procedure.
-The [Cairo guide](docs/cairo.md) describes the bundled image/font renderer and disabled backends.
+The default UI uses FLTK 1.4.5 with Cairo/Pango drawing and standard FLTK menus and controls.
+Zigmark/Mecha parse Markdown, Zignal handles images, and Zig owns the document core, JSON, decompression, and diagram renderers.
+FLTK and its C++ frontend are bundled into the single executable. Rust is not required.
+The [migration guide](docs/zig-migration.md) records the implementation and regression checks.
+The [text stack](docs/text-stack.md) and [Cairo](docs/cairo.md) guides describe the production FLTK frontend.
+The experimental Zig/z2d UI remains available with `make native`; it is not used by normal builds, profiling, or release packages.
 It requires a Wayland compositor. If Wayland is unavailable, the viewer exits with a clear error.
 It opens local documents, reloads after saves, and ships as a single `mdf` executable.
 Mermaid and local vector/text SVG rendering use separate compressed modules inside that executable.
-The existing static zlib decompresses each required module into anonymous memory after the first Markdown viewport.
+Their ELF sections are not mapped at startup. A worker loads only the required module into anonymous memory after the first Markdown viewport.
 SVG-only documents skip Mermaid. Mermaid uses the SVG module to render its generated vector output.
+Ordinary PNG/JPEG images use a third, independent Zignal module and do not load either renderer.
+Text-only documents load none of these modules. Explicit screenshot export loads the image codec only when saving the PNG.
+Optional modules use independent zlib payloads by default, favoring small and mid-sized text-only documents.
+They inflate only when needed, using Zig's existing decoder. Set `MDF_OPTIONAL_MODULE_COMPRESSION=raw` when building to compare uncompressed lazy payloads.
 The [module guide](docs/compressed-diagrams.md) describes the ABI, build, limits, and regression checks.
-The GUI includes a 48-pixel native title bar, light/dark mode, font controls, and optional auto-reload.
+The GUI includes window controls, light/dark mode, font controls, and optional auto-reload.
 The first toolbar icon shows or hides the table of contents. The right minimap supports click-and-drag navigation.
 The toolbar also has a light/dark toggle and one width button that cycles between 80% and 100%.
 The Preview button on the right shows or hides the minimap.
@@ -20,10 +26,16 @@ Font controls also appear in the Font menu.
 Wrapping is on by default, with the toolbar button unselected. Selecting the button turns it blue and enables no-wrap mode.
 With wrapping off, a horizontal scrollbar appears below the document, outside the TOC and minimap.
 Use the scrollbar, Shift + wheel, a horizontal trackpad gesture, or the left/right arrow keys to pan the document.
+Document text uses the normal arrow cursor and supports drag selection and Ctrl+C.
+Links and diagram controls use a hand cursor.
+Block quotations group their paragraphs and lists, with consistent spacing and indentation for nested content.
 The UI and ordinary text use bundled Latin Open Sans. Missing document characters use system fonts prepared in the background.
 Fenced code blocks trigger deferred monospace loading; inline code uses it too when available.
-The Theme menu contains Classic (12), Paper (14, warm colors), and Terminal (11, green colors).
+The Theme menu contains Classic (12), Paper (14), Terminal (11), Nord (13), Solarized (14), Gruvbox (12), and Catppuccin (13).
 Theme selection preserves light/dark mode. The sun/moon toolbar button switches that mode.
+The new styles range from cool blue Nord to cream-and-teal Solarized, warm retro Gruvbox, and lavender Catppuccin.
+Reader surfaces, menus, controls, selections, highlights, and alerts follow the selected palette.
+All themes reuse the bundled fonts and load no theme files at startup. See [theme notes and references](docs/themes.md).
 The defaults are light mode, Open Sans, font size 12, and 80% text width.
 Enable **Settings > Save settings across sessions** to keep your preferences in
 `~/.config/mdf/settings.json`. This saves the theme, light/dark mode, font size, text width, line wrapping, sidebar visibility, and auto-reload.
@@ -32,10 +44,12 @@ The Wayland compositor controls window placement.
 **Settings > Reset settings** restores the defaults and turns saving off.
 
 The executable embeds Latin subsets of Open Sans regular, bold, italic, and bold italic.
-Regular/bold stay immediately available. Each italic face is compressed separately and loaded once, only when its style is required.
+Each face is compressed separately. Regular and bold inflate in a startup worker while the UI libraries load.
+Each italic face inflates once, only when its style is required.
 Markdown emphasis uses its final font before measurement and the first render. SVG text requests its own resolved styles on demand.
 The subsets preserve Latin accents, existing punctuation and symbols, kerning, and hinting.
-The viewer registers anonymous memory files in a private Fontconfig configuration before Pango or FLTK font registration.
+The FLTK renderer uses the bundled fonts through private Fontconfig/Pango maps.
+Deferred font workers register anonymous memory files in private Fontconfig/PangoFT2 maps.
 Before the first Markdown frame, it reads no system fonts, Fontconfig files, or font caches.
 After parsing, MDF checks the rendered text against the bundled font's character coverage.
 If characters are missing, a worker selects system Sans fonts covering those characters and loads only the required families into anonymous memory.
@@ -49,13 +63,18 @@ Reading and parsing overlap window initialization. Ready Markdown can appear in 
 Startup uses a libc-only Zig launcher. Separate workers prepare the embedded UI engine and its system libraries while the core parses the document.
 Image-file reads and heading preparation start before the UI handoff. Preview reflow retains those image bytes.
 The UI engine is uncompressed and loads from anonymous memory. The distribution remains one executable.
-The GUI prepares first-frame buffers and visible layout while the compositor configures the window, then reuses that layout for painting.
+During window configuration, the GUI prepares visible Markdown layout, then FLTK submits a Wayland shared-memory frame.
 See [parallel startup](docs/parallel-bootstrap.md) for the ABI, ownership, profiling, and upgrade rules.
 Navigation preparation starts when the document is adopted, before waiting for that frame.
 A separate worker decodes PNG/JPEG pixels with Zig/Zignal while the GUI handles window events and draws navigation.
 That worker also renders fenced `mermaid` diagrams through Pozeiden and zig-svg/z2d, all written in Zig.
+Mermaid diagrams open at natural size to keep labels readable in narrow windows.
+Use the diagram's minus/plus buttons to zoom, its percentage button to reset to 100%, and **Fit** for an overview.
+Drag the diagram horizontally, or use the body scrollbar and arrow keys to pan. The zoom controls stay visible while panning.
+After clicking a diagram, `+`/`-` zoom, `0` resets, and Escape returns focus to the document.
+Each diagram keeps its own zoom. Zooming reuses decoded pixels and reflows only that block; it does not rerun Mermaid or SVG rendering.
 Diagrams use embedded Open Sans and adapt to light/dark mode. SVG text has limited font fallback and no complex-script shaping.
-Explicit RTL or vertical SVG text produces a readable error. Arabic joining and automatic missing-glyph fallback remain unsupported in SVG labels.
+Explicit RTL or vertical SVG text produces a readable error. Prepared system Sans fonts can supply missing SVG label characters. Arabic joining remains unsupported there.
 Some system font collections are unsupported. These limits affect SVG and diagram labels; Markdown body text keeps its separate Pango font support.
 The 17 supported families are flowchart, sequence, class, state, ER, pie, Gantt, Git graph, timeline,
 XY chart, quadrant, mindmap, Sankey, C4, block, requirement, and Kanban.
@@ -67,18 +86,18 @@ Diagram source is limited to 256 KiB, and generated SVG is limited to 16 MiB.
 Pozeiden also limits graph layout to 10,000 nodes and 20,000 edges, flowcharts to 500 subgraphs, and mindmaps to 100 nesting levels.
 Rendered canvases are limited to 16384 pixels per side and 64 MiB of RGBA pixels.
 Tables measure word and line widths across all rows before allocating columns, keeping short labels and numbers intact where space permits.
-If navigation and image pixels are already prepared, the GUI includes them in the first frame.
-Otherwise Markdown appears first and the GUI adopts optional results when they finish. Sidebar spaces stay fixed during this work.
+The first Markdown frame precedes deferred image/diagram decoding and system-font discovery.
+Sidebar spaces stay fixed during this work.
 
-Bundled FLTK startup patches prepare keyboard resources on a worker and preserve early input until adoption.
-Cursor-theme loading can finish after the first Markdown viewport. Fully-ready timing includes these resources.
+Keyboard resources prepare on a worker, with early input preserved until adoption.
+FLTK uses compositor cursor shapes when supported and its cursor-theme fallback otherwise.
 Window handling, drawing, and Wayland buffer submission stay on the GUI thread.
-Experimental frame preparation remains disabled because it did not pass the cold-launch regression guards.
-The [FLTK patch guide](frontend/patches/fltk/README.md) records the upstream version, patch order, ownership rules, and upgrade checks.
+The [FLTK patch guide](frontend/patches/fltk/README.md) documents local backend changes and future upgrade checks.
 
 ## Install
 
-For a Wayland desktop on Linux x86_64 with glibc 2.38 or later, Pixman, GLib/GIO, FriBidi, libthai, HarfBuzz, Fontconfig, FreeType, and libxkbcommon.
+For a Wayland desktop on Linux x86_64 with glibc 2.38 or later.
+Packages declare the required Wayland, XKB, Pixman, GLib/GIO, HarfBuzz, Fontconfig, and FreeType system libraries.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/mariobaldini/mdf/main/tools/installer.sh | bash
@@ -90,7 +109,10 @@ Package installation requires administrator access.
 
 ### From source
 
-Requires Git LFS, GNU Make, Zig 0.17.0, GCC/G++, CMake, Ninja, and the Wayland, Cairo/Pango, and Fontconfig development libraries.
+The build requires Git LFS, GNU Make, Zig 0.17.0, GCC/G++, CMake, Ninja, Python, binutils, pkg-config, and the graphics development dependencies.
+`make setup` prepares the FLTK frontend and pinned Zig modules. Builds then run offline.
+`make reference` is an isolated FLTK build in `build/reference`; `make setup-reference` remains an alias for the same dependencies.
+`make setup-native` prepares the minimal dependencies for the optional experimental Zig UI.
 On Fedora 44, `make setup` installs missing requirements and downloads the pinned sources.
 If the default compiler has another version, setup caches the exact official compiler in `zig-pkg/zig-0.17.0/`.
 Make uses that cached compiler automatically. An explicit `ZIG=/path/to/zig` overrides this choice.
@@ -113,8 +135,10 @@ Commercial use requires separate permission from its author. The [upstream licen
 zig-svg 0.2.0 is pinned in `modules/zig-svg`. It uses MIT, and its z2d dependency uses MPL 2.0.
 Zignal 0.11.0 is pinned in `modules/zignal` under MIT. The [decoder guide](docs/image-decoding.md) covers ownership, limits, and source fixes.
 
-JSON uses Zig's `std.json`, with a [C++ ownership binding](docs/json-boundary.md). No external JSON library is required.
+JSON uses Zig's `std.json`; no external JSON library is required.
+The [C++ ownership binding](docs/json-boundary.md) connects FLTK to the Zig core.
 The build requires no Rust compiler or Cargo.
+`make reference OPTIMIZE=ReleaseFast` builds the FLTK frontend in the isolated `build/reference/bin/mdf` location.
 
 ### Uninstall
 
@@ -139,7 +163,7 @@ make test-gui
 - `make tests` checks the optimized executable and runs unit tests in Debug, ReleaseSafe, and ReleaseFast. It needs no compositor. `make test` remains an alias.
 - `make test-unit` runs just the unit tests in the selected mode. Compiled test binaries are cached, but the tests execute on every invocation.
 - New unit cases live under `tests/unit/`. They cover Markdown, links, settings, layout, navigation, files, the JSON ABI, and profiling. Existing source tests remain enabled.
-- `make test-gui` checks the native GUI in an isolated headless Wayland compositor. Intermediate files and compiler caches stay under `build/`.
+- `make test-gui` checks the FLTK GUI in an isolated headless Wayland compositor. Intermediate files and compiler caches stay under `build/`.
 - `make test-images` compares PNG pixels exactly and bounds JPEG differences against the original decoder. It also checks cancellation and pixel ownership.
 - `make test-codecs` checks the pinned Zignal module and PNG compatibility fixes in Debug mode. It is included in `make test`.
 - `make test-json` checks the native JSON boundary and validates its output with Python. It is included in `make test`.
@@ -162,8 +186,10 @@ make test-gui
 make profile
 ```
 
-This builds ReleaseFast and opens `SAMPLE-SMALL.md`, `SAMPLE.md`, and `SAMPLE-HUGE.md` 12 times each, for 36 cold launches.
-Each round opens every sample once. Shuffled cycles use all six sample orders, twice each in the default run.
+This builds ReleaseFast and opens six samples 12 times each, for 72 cold launches.
+`SAMPLE-SMALL`, `SAMPLE-MID`, and `SAMPLE-HUGE` each have `-TEXT.md` and `-IMAGES.md` editions.
+Each pair shares the same prose. The image editions add PNG, JPEG, SVG, and Mermaid content.
+Each round opens every edition once. A shuffled cycle balances the six launch positions in forward and reversed orders.
 The report starts with each sample's average pre-load, scaffold, first viewport, and full readiness time, plus its 95% margin of error.
 These Student-t estimates include every run. They describe uncertainty in the mean; background load can correlate runs.
 The report records the order seed and every round's order. Use `scripts/profile.py --seed NUMBER` to repeat an order.
@@ -255,7 +281,9 @@ Each document tab records its text size, local image references, distinct files,
 The small sample contains regular and bold text, headings, lists, a quotation, links, and a table.
 It has no images, diagrams, italics, or code blocks, so it needs no deferred rendering or font workers.
 The regular sample covers Markdown syntax, code, and wide tables. The large sample is a fictional 100-station handbook with different data and images.
-All three use only characters covered by the bundled Open Sans faces. Code in the regular and huge samples still triggers deferred monospace loading.
+The six profiling editions use only characters covered by the bundled Open Sans faces.
+Code in the mid and huge editions still triggers deferred monospace loading.
+The original `SAMPLE-SMALL.md`, `SAMPLE.md`, and `SAMPLE-HUGE.md` remain compatibility fixtures for existing rendering checks.
 `SAMPLE-EXTENDED.md` contains Greek, Cyrillic, Arabic, Hebrew, CJK, emoji, and additional symbols for the system Sans fallback checks.
 See [the fixture notes](assets/SAMPLES.md) for provenance and regeneration instructions.
 For a separate scrolling check, run `build/profile/runtime/bin/mdf --profile-scroll SAMPLE.md`.
@@ -318,11 +346,13 @@ Flatpak launches the reference application only. MDF runs as the native release 
 The test uses private Wayland desktops, disposable Typora profiles, and read-only copies of the sample.
 It captures 29 sections at 1040 and 480 pixels wide, producing 58 section pairs and a local HTML gallery under `build/render-comparison/`.
 Script and symbol captures use `SAMPLE-EXTENDED.md`; the other cases use `SAMPLE.md`. Both applications receive identical frozen bytes for each case.
+Current support work targets Latin text. Use `python3 scripts/render-compare.py --latin-only` to omit the extended-script fixture.
 `--capture-reader` hides MDF navigation for these captures. `--capture-anchor ID` positions a requested heading in the viewport.
 Both options require `--capture PNG` and `--profile` or `--benchmark`.
 
 Review the gallery for missing content, overlap, clipping, malformed tables, and failed local images.
 Capture checks reject blank frames and verify MDF's requested heading is visible. Passing capture checks does not prove rendering equivalence.
+The Typora driver waits for its focused Find field before typing a query. If the expected field does not appear, it stops without typing into the document.
 Pixel equality is not expected: fonts, spacing, code styling, UI chrome, and enabled Markdown extensions differ.
 MDF keeps math source as text and renders supported Mermaid diagrams. Unsupported characters use installed system fonts when available; otherwise they show missing-glyph markers.
 Arabic and Hebrew glyphs shape within each word, but paragraph-level bidirectional word ordering remains a layout limitation.
@@ -333,6 +363,8 @@ After reviewing a capture directory, create a focused standalone A/B findings fi
 ```sh
 python3 scripts/render-findings.py build/render-comparison/render-UTC --reviewed
 ```
+
+Pass `--latin-only` to the findings script when reviewing a Latin-only capture set.
 
 The report embeds its cropped details and original screenshots, with 1×–3× zoom and finding filters. No image sidecars are needed to share it.
 Its curated notes show remaining font limits, intentional code styling and reference-editor differences first. Verified table and Mermaid fixes follow in a separate section.

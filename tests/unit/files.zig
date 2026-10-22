@@ -51,7 +51,7 @@ test "files: documents larger than the parser limit fail before allocation" {
     if (fd < 0) return error.TestOpenFailed;
     defer _ = c.close(fd);
     // Sparse length: no multi-gigabyte buffer or disk data is allocated.
-    try std.testing.expectEqual(@as(c_int, 0), c.ftruncate(fd, @as(c.off_t, std.math.maxInt(c.MD_SIZE)) + 1));
+    try std.testing.expectEqual(@as(c_int, 0), c.ftruncate(fd, @as(c.off_t, std.math.maxInt(u32)) + 1));
     try std.testing.expectError(error.FileTooLarge, mdf.loader.readDocument(a, path));
 }
 test "files: relative document paths resolve dot segments and gain a sentinel" {

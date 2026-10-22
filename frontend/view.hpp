@@ -2,39 +2,44 @@
 #include "core.hpp"
 #include "images.hpp"
 #include "monospace.hpp"
+#include "body-fonts.h"
 #include <FL/Fl_RGB_Image.H>
 #include <FL/Fl_Scrollbar.H>
 #include <FL/Fl_Widget.H>
 #include <FL/fl_draw.H>
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <fontconfig/fontconfig.h>
 #include <functional>
 #include <limits>
 #include <map>
 #include <memory>
+#include <new>
+#include <string_view>
 #include <pango/pangocairo.h>
 #include <pango/pangofc-fontmap.h>
 #include <unordered_map>
 
 struct Palette {
   Fl_Color bg, fg, panel, border, link, muted, selection;
+  Fl_Color highlight, note, tip, important, warning, caution;
   static Palette get(const Settings &s);
 };
 struct FontStore {
+  void *owner = nullptr;
   FcConfig *config = nullptr;
   FcCharSet *coverage = nullptr;
   uint32_t styles = 0;
   bool adopted = false;
   std::vector<int> fds;
-  std::vector<std::shared_ptr<PreparedFont>> fallbacks;
   FontStore() = default;
   FontStore(const FontStore &) = delete;
   ~FontStore();
   void prepare();
   void adopt();
   void ensure_styles(uint32_t required);
-  void add(Buffer bytes, const char *name);
+  void add(Buffer bytes, uint32_t style);
   void add_fallback(const CodeFont &font);
 };
 struct Style {
@@ -74,18 +79,31 @@ struct Hit {
   int block;
 };
 class DocumentView : public Fl_Widget {
+  MdfCore *model = nullptr;
+  struct ViewportOwner {
+    MdfViewport *handle;
+    MdfViewportFields *fields;
+    ViewportOwner() : handle(mdf_viewport_create()) {
+      if (!handle) throw std::bad_alloc();
+      fields = mdf_viewport_fields(handle);
+    }
+    ~ViewportOwner() { mdf_viewport_destroy(handle); }
+    ViewportOwner(const ViewportOwner &) = delete;
+  } geometry;
+  void borrow_geometry();
 public:
   Settings settings;
   Palette palette;
   std::vector<Block> blocks;
-  std::vector<float> heights, offsets;
+  BorrowedArray<float> heights;
+  BorrowedArray<const float> offsets;
   std::vector<size_t> starts;
-  std::string plain, path;
-  uint64_t revision = 0, geometry_revision = 0, preview_revision = 0;
+  std::string_view plain;
+  std::string path;
+  uint64_t revision = 0, &geometry_revision, preview_revision = 0;
   uint64_t paints = 0;
-  float scroll = 0, horizontal_scroll = 0, content_width = 0, margin = 24;
-  mutable float horizontal_extent = 0;
-  mutable bool horizontal_dirty = true;
+  float &scroll, &horizontal_scroll, &content_width, &margin, &horizontal_extent;
+  bool &horizontal_dirty;
   std::optional<std::pair<size_t, size_t>> selection;
   std::optional<Hit> pressed;
   float press_x = 0, press_y = 0;
@@ -111,6 +129,17 @@ public:
   std::unordered_map<int, std::pair<float, float>> diagram_sizes;
   std::unordered_map<int, std::string> diagram_errors;
   bool has_diagrams = false;
+  struct DiagramState { float zoom = 1; bool fit = false; };
+  struct DiagramBox { float x, y, w, h; };
+  struct DiagramControls { std::array<DiagramBox, 4> boxes; float height; };
+  std::unordered_map<int, DiagramState> diagram_states;
+  std::optional<int> diagram_focus;
+  bool diagram_control = false;
+  std::optional<std::pair<float, float>> diagram_drag;
+  DiagramControls diagram_controls(int index, float top) const;
+  float diagram_scale(int index) const;
+  void zoom_diagram(int index, int action);
+  std::optional<std::pair<int, int>> diagram_hit(float px, float py) const;
   std::vector<std::vector<std::string>> preview;
   std::function<void()> changed;
   std::function<void(const std::string &)> follow;
@@ -122,7 +151,7 @@ public:
   void reflow_fonts(bool fallback);
   bool visible(int index) const;
   int index_at(float y) const;
-  float total() const { return offsets.empty() ? 48 : offsets.back() + 24; }
+  float total() const { return mdf_viewport_total(geometry.handle); }
   float max_scroll() const { return std::max(0.f, total() - h()); }
   float horizontal_total() const;
   float max_horizontal_scroll() const { return std::max(0.f, horizontal_total() - w()); }
@@ -137,6 +166,7 @@ public:
   void move_scroll(float value);
   void move_horizontal(float value);
   std::optional<Hit> hit(float x, float y) const;
+  Fl_Cursor hover_cursor(float x, float y) const;
   std::string selected() const;
   void select_word(size_t pos);
   void select_all();
@@ -145,6 +175,7 @@ public:
   int handle(int event) override;
   void draw() override;
   Measured measure(int index, bool collect_runs = true) const;
+  Measured measure_reference(int index, bool collect_runs) const;
   const std::vector<float> &table_columns(int index, float width) const;
   Style style(const Span &s, const Block &b) const;
   TextMetrics text_metrics(const Style &style, const char *text, size_t length) const;

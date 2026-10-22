@@ -1,5 +1,20 @@
 # Markdown sample fixtures
 
+The default profiler uses six paired fixtures:
+
+| Size | Text only | With images |
+| --- | --- | --- |
+| Small | `SAMPLE-SMALL-TEXT.md` | `SAMPLE-SMALL-IMAGES.md` |
+| Mid | `SAMPLE-MID-TEXT.md` | `SAMPLE-MID-IMAGES.md` |
+| Huge | `SAMPLE-HUGE-TEXT.md` | `SAMPLE-HUGE-IMAGES.md` |
+
+Every pair shares the same prose. TEXT has no raster images, SVG, or Mermaid.
+IMAGES adds two, five, or 100 distinct PNG/JPEG files, plus a local SVG and a Mermaid flowchart.
+The image editions contain no deliberately missing assets. Existing syntax/error fixtures below remain unchanged.
+Run `python3 scripts/generate-profile-samples.py` to regenerate these six editions from the original fixtures without changing image bytes.
+`sample-vector.svg` is a project-generated observation pipeline used by all three image editions.
+It exercises local SVG independently from Mermaid's generated SVG.
+
 `SAMPLE-SMALL.md` is a short text-only document with regular and bold text.
 It includes headings, paragraphs, lists, a quotation, links, and a table.
 It has no images, diagrams, italic text, or code blocks and needs only the bundled fonts.

@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import zlib
 from unittest import mock
 from datetime import datetime, timezone
 
@@ -85,6 +86,11 @@ def size_fixture(path, symbols=True, identity=b"matching build", diagram=None, m
 
 
 class ProfileTests(unittest.TestCase):
+    def test_zig_inflater_symbols_are_not_attributed_to_c_zlib(self):
+        for name in ('compress.flate.Decompress.streamInner','std.compress.flate.Decompress.readVec'):
+            self.assertEqual(profile.symbol_family(name),('Language runtimes','Zig std.compress.flate'))
+        self.assertEqual(profile.symbol_family('compression.inflate'),('Application','Resource expansion (Zig)'))
+        self.assertEqual(profile.symbol_family('inflate'),('Bundled libraries','ZLIB'))
     def test_runtime_conditions_preserve_power_mode_affinity_and_system_load(self):
         with mock.patch.object(profile.os, "sched_getaffinity", return_value={3, 1}), \
              mock.patch.object(profile.os, "getloadavg", return_value=(17.5, 14.0, 8.0)), \
@@ -123,12 +129,13 @@ class ProfileTests(unittest.TestCase):
         data = fixture()
         data["main_started_ns"] = 105_000_000
         data["metrics"].update({"first_document_ms": 12, "scaffold_ms": 8, "backend_ms": 2,
-                                "first_document_commit_ms": 11,
+                                "first_document_commit_ms": 11,"ui_module_ready_ms":2.5,
                                 "read_ms": 1, "parse_ms": 3, "window_ms": 6})
         result = profile.analyze_run(profile.include_process_launch(data, 100_000_000, 130_000_000))
         self.assertEqual(result["metrics"]["pre_main_ms"], 5)
         self.assertEqual(result["metrics"]["first_document_ms"], 17)
         self.assertEqual(result["metrics"]["first_document_commit_ms"], 16)
+        self.assertEqual(result["metrics"]["ui_module_ready_ms"],7.5)
         self.assertEqual(result["metrics"]["first_frame_ms"], 25)
         self.assertEqual(result["metrics"]["in_app_viewport_ms"], 12)
         self.assertEqual(result["metrics"]["profiler_exit_ms"], 5)
@@ -209,19 +216,48 @@ class ProfileTests(unittest.TestCase):
             self.assertEqual({m['name'] for m in result['diagram_modules']},{'Mermaid renderer','SVG rendering'})
             self.assertNotIn('diagram_module',result)
 
-    def test_compressed_italic_font_counts_packed_bytes_only(self):
+    def test_raw_renderer_payloads_are_lazy_and_never_labeled_compressed(self):
         with tempfile.TemporaryDirectory() as directory:
-            project=Path(directory);binary=project/'mdf'
-            size_fixture(binary)
-            fonts=project/'assets/fonts/open-sans';fonts.mkdir(parents=True)
-            raw=b'optional-italic-font'*8
-            (fonts/'OpenSans-Italic.ttf').write_bytes(raw)
-            packed=struct.pack('<8sII',b'MDFONT1\0',len(raw),profile.zlib.crc32(raw))+profile.zlib.compress(raw,9)
-            data=bytearray(binary.read_bytes());data[288:384]=bytes(96);data[288:288+len(packed)]=packed;binary.write_bytes(data)
+            project=Path(directory);binary=project/'mdf';modules={}
+            for name in ('.mdf_mermaid','.mdf_svg'):
+                raw=b'raw-module'
+                modules[name]=struct.pack('<8sIIQQII',b'MDFDG01\0',2,40,len(raw),len(raw),123,1)+raw
+            size_fixture(binary,modules=modules)
             result=profile.binary_breakdown(project,binary)
-            group=next(g for g in result['children'] if g['name']=='Fonts')
-            self.assertEqual(group['children'],[{'name':'Open Sans Italic (zlib)','bytes':len(packed)}])
+            group=next(g for g in result['children'] if g['name']=='Lazy renderers')
+            self.assertEqual(group['bytes'],sum(map(len,modules.values())))
+            self.assertEqual({m['codec'] for m in result['diagram_modules']},{'raw'})
             self.assertEqual(sum(g['bytes'] for g in result['children']),binary.stat().st_size)
+            self.assertNotIn('Compressed renderers',{g['name'] for g in result['children']})
+
+    def test_raster_codec_section_records_actual_module_bytes_and_storage(self):
+        for codec in ('raw','zlib'):
+            with self.subTest(codec=codec), tempfile.TemporaryDirectory() as directory:
+                project=Path(directory);binary=project/'mdf'
+                decoded=b'codec bytes'*100;stored=decoded if codec=='raw' else zlib.compress(decoded)
+                payload=struct.pack('<8sIIQQII',b'MDFDG01\0',2,40,len(stored),len(decoded),zlib.crc32(decoded),int(codec=='raw'))+stored
+                size_fixture(binary,modules={'.mdf_image':payload})
+                result=profile.binary_breakdown(project,binary);module=result['diagram_modules'][0]
+                self.assertEqual(module['name'],'Zignal PNG/JPEG/GIF/BMP')
+                self.assertEqual(module['codec'],codec)
+                self.assertEqual(module['packed_bytes'],len(stored))
+                self.assertEqual(sum(g['bytes'] for g in result['children']),binary.stat().st_size)
+
+    def test_each_compressed_font_counts_packed_bytes_only(self):
+        for face in ('Regular', 'Bold', 'Italic', 'BoldItalic'):
+            with self.subTest(face=face), tempfile.TemporaryDirectory() as directory:
+                project=Path(directory);binary=project/'mdf'
+                size_fixture(binary)
+                fonts=project/'assets/fonts/open-sans';fonts.mkdir(parents=True)
+                raw=b'font-resource'*8
+                (fonts/f'OpenSans-{face}.ttf').write_bytes(raw)
+                packed=struct.pack('<8sII',b'MDFONT1\0',len(raw),profile.zlib.crc32(raw))+profile.zlib.compress(raw,9)
+                data=bytearray(binary.read_bytes());data[288:384]=bytes(96);data[288:288+len(packed)]=packed;binary.write_bytes(data)
+                result=profile.binary_breakdown(project,binary)
+                group=next(g for g in result['children'] if g['name']=='Fonts')
+                label=face.replace('BoldItalic','Bold italic')
+                self.assertEqual(group['children'],[{'name':f'Open Sans {label} (zlib)','bytes':len(packed)}])
+                self.assertEqual(sum(g['bytes'] for g in result['children']),binary.stat().st_size)
 
     def test_stripped_binary_uses_only_matching_build_symbols(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -253,7 +289,7 @@ class ProfileTests(unittest.TestCase):
                                 ("libdecor_frame_commit", "libdecor")):
             self.assertEqual(profile.symbol_family(symbol), ("Bundled libraries", library))
         for symbol in ('mdf_decode_pixels','image-pixels.png','codecs.jpeg.decode','png.decode'):
-            self.assertEqual(profile.symbol_family(symbol), ('Bundled libraries','Zignal PNG/JPEG'))
+            self.assertEqual(profile.symbol_family(symbol), ('Bundled libraries','Zignal PNG/JPEG/GIF/BMP'))
         for symbol in ('pango_shape_internal','_pango_cairo_font_private_get_scaled_font.lto_priv.0'):
             self.assertEqual(profile.symbol_family(symbol), ('Bundled libraries','Pango'))
         for symbol in ('cairo_create','_cairo_image_surface_create.lto_priv.0'):
@@ -266,6 +302,10 @@ class ProfileTests(unittest.TestCase):
                          ('Bundled libraries', 'SVG rendering'))
         self.assertEqual(profile.symbol_family('_RNvC123_3std2io'),
                          ('Language runtimes', 'Rust standard library & diagram support'))
+        for name in ('internal.Glyph.Outline.runOutline','internal.color_vector.interpolateVec','compositor.RGBA16Vec.runOperator','painter.fill','text.run'):
+            self.assertEqual(profile.symbol_family(name,native_ui=True),('Bundled libraries','z2d'))
+        self.assertEqual(profile.symbol_family('text.run'),('Application','Zig text'))
+        self.assertEqual(profile.symbol_family('window.Window.present'),('Application','Native window'))
 
     def test_nested_spans_do_not_double_count_self_time(self):
         run = profile.analyze_run(fixture())
@@ -321,6 +361,23 @@ class ProfileTests(unittest.TestCase):
             self.assertEqual(any(n['track']=='fonts' for n in counted),expected)
             self.assertEqual(sum(n['duration_ns'] for n in counted),10_000_000)
             self.assertFalse(any(nodes[key]['track']=='fonts' for key in model['paths']['viewport']['node_ids']))
+
+    def test_minimap_handoff_delays_readiness_without_entering_viewport_path(self):
+        data={'profile_version':1,'metrics':{'first_document_ms':2,'first_frame_ms':12},'events':[
+            span('Paint native window','gui',0,2),
+            span('Request minimap raster','gui',2,0,kind='signal'),
+            span('Rasterize native minimap text','minimap',2.1,7.9),
+            span('Minimap raster ready','minimap',10,0,kind='signal'),
+            span('Wait for native workers','gui',2,8.1,kind='wait'),
+            span('Adopt native minimap raster','gui',10.1,.4),
+            span('Minimap raster adopted','gui',10.2,0,kind='signal'),
+            span('Paint native window','gui',10.5,1.5)]}
+        data['events'][4]['wait']={'reason':'other descriptor'}
+        model=profile.analyze_run(data)['call_graph'];nodes={node['id']:node for node in model['nodes']}
+        for endpoint,total in [('viewport',2_000_000),('ready',12_000_000)]:
+            counted=[nodes[key] for key in model['paths'][endpoint]['node_ids']]
+            self.assertEqual(sum(node['duration_ns'] for node in counted),total)
+            self.assertEqual(any(node['track']=='minimap' for node in counted),endpoint=='ready')
 
     def test_bootstrap_critical_path_follows_nested_library_handoff(self):
         data={'profile_version':1,'metrics':{'first_document_ms':15,'first_frame_ms':16},'events':[
@@ -528,11 +585,12 @@ class ProfileTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             profile.launch_orders(0, 1, 1)
 
-    def test_cli_defaults_to_twelve_runs_of_all_three_samples(self):
+    def test_cli_defaults_to_twelve_runs_of_all_six_samples(self):
         with mock.patch.object(profile.sys, "argv", ["profile.py", "--seed", "11"]), \
              mock.patch.object(profile, "profile") as measure:
             self.assertEqual(profile.main(), 0)
-        self.assertEqual([path.name for path in measure.call_args.args[1]], ["SAMPLE-SMALL.md", "SAMPLE.md", "SAMPLE-HUGE.md"])
+        self.assertEqual([path.name for path in measure.call_args.args[1]],
+                         [f'SAMPLE-{size}-{edition}.md' for size in ('SMALL','MID','HUGE') for edition in ('TEXT','IMAGES')])
         self.assertEqual(measure.call_args.args[2], 12)
         self.assertEqual(measure.call_args.kwargs, {"seed": 11})
 
@@ -945,6 +1003,18 @@ class ProfileTests(unittest.TestCase):
         }''')
         self.assertEqual(records, {"md4c": {"url": "https://example.org/md4c.tar.gz", "hash": "pinned-hash"}})
 
+    def test_text_module_inspection_checks_size_stream_and_checksum(self):
+        expanded=b'bounded text helper bytes'
+        packed=profile.zlib.compress(expanded)
+        header=struct.pack('<8sIIQQII',b'MDFDG01\0',2,40,len(packed),len(expanded),profile.zlib.crc32(expanded),0)
+        image={'data':header+packed,'sections':[{'name':'.mdf_text','flags':0,'offset':0,'bytes':len(header+packed)}]}
+        self.assertEqual(profile.embedded_text(image),expanded)
+        for payload in (header+packed[:-1]+b'\x00',header+packed+b'extra'):
+            broken={**image,'data':payload,'sections':[{**image['sections'][0],'bytes':len(payload)}]}
+            with self.assertRaises((ValueError,profile.zlib.error)):profile.embedded_text(broken)
+        shorter=bytearray(header+packed);struct.pack_into('<Q',shorter,24,len(expanded)-1)
+        with self.assertRaises(ValueError):profile.embedded_text({**image,'data':shorter})
+
     def test_library_inventory_uses_file_sizes_without_embedding_sources_or_sample(self):
         with tempfile.TemporaryDirectory() as directory:
             project = Path(directory)
@@ -985,6 +1055,16 @@ class ProfileTests(unittest.TestCase):
             self.assertNotIn("sources", context)
             self.assertNotIn("SOURCE_MUST_NOT_BE_EMBEDDED", json.dumps(context))
             self.assertNotIn("SAMPLE_MUST_NOT_BE_EMBEDDED", json.dumps(context))
+            native={'version':'test','mode':'ReleaseFast','renderer':'z2d','compiler':'compiler recorded by the build','metrics':{'drawing_library_version':'0.13.0',
+                'markdown_parser':'zigmark','json_engine':'std.json','image_decoder':'zignal','png_encoder':'zignal','compression_engine':'std.compress.flate'}}
+            def native_command(arguments,**kwargs):
+                return '' if arguments[0]=='ldd' else '1.2.3'
+            with mock.patch.object(profile,'command_output',side_effect=native_command),mock.patch.object(profile,'binary_breakdown',return_value=size_map):
+                native_context=profile.project_context(project,binary,document,native)
+            names={library['name'] for library in native_context['libraries']}
+            self.assertEqual(native_context['compiler'],native['compiler'])
+            self.assertIn('z2d',names)
+            self.assertFalse(names&{'FLTK','libpng','IJG JPEG','zlib','libdecor','cairo','pangocairo','pangoft2','pango','fontconfig','freetype2','harfbuzz'},names)
             self.assertNotIn("source_tree_bytes", json.dumps(context))
 
     def test_missing_wayland_fails_before_any_global_cache_reset_or_launch(self):

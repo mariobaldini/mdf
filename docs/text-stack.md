@@ -4,7 +4,9 @@ MDF links Pango 1.57.1 into its private UI engine.
 The launcher still links only libc. Installation still needs one executable.
 The engine retains the Cairo, Fontconfig, and FreeType backends.
 The [minimal Cairo build](cairo.md) is also bundled in the default UI engine.
-System libraries still provide Pixman, GLib/GIO, FriBidi, libthai, HarfBuzz, Fontconfig, and FreeType.
+System libraries still provide Pixman, GLib/GIO, FriBidi, HarfBuzz, Fontconfig, and FreeType.
+The Latin-focused build disables optional libthai dictionary-based Thai word breaking.
+It has no direct libthai or libdatrie runtime dependency. Pango's general Unicode handling remains available.
 Complex scripts, glyph fallback, and system monospace keep the existing Pango code paths.
 
 `frontend/dependencies.json` pins the unmodified Pango source archive and its SHA-256.

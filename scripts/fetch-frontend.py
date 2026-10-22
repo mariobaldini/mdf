@@ -18,12 +18,14 @@ work = root / "build/downloads"
 work.mkdir(parents=True, exist_ok=True)
 pkg = root / "zig-pkg"
 pkg.mkdir(exist_ok=True)
-for module in ['pozeiden','zig-svg','zignal']:
-    if not (root/'modules'/module/'src/root.zig').is_file():
+for module,marker in [('pozeiden','src/root.zig'),('zig-svg','src/root.zig'),('zignal','src/root.zig'),('zigmark','src/root.zig'),('mecha','mecha.zig')]:
+    if not (root/'modules'/module/marker).is_file():
         subprocess.run(['git','submodule','update','--init','--recursive','--','modules/'+module],cwd=root,check=True)
 for name, record in manifest.items():
-    if name in ('pozeiden','zig_svg','zignal'):
+    if name in ('pozeiden','zig_svg','zignal','zigmark','mecha'):
         continue  # The parent repository's gitlink pins this source dependency.
+    if os.environ.get('MDF_REFERENCE','1')!='1' and name in ('fltk','pango','cairo','meson'):
+        continue
     destination = pkg / name
     marker = pkg / f".{name}-{record['version']}.sha256"
     if destination.exists() and marker.exists() and marker.read_text().strip() == record["sha256"]:
@@ -49,5 +51,6 @@ for name, record in manifest.items():
                 shutil.rmtree(destination)
             shutil.move(source, destination)
     marker.write_text(record["sha256"] + "\n")
-subprocess.run(['python3', 'scripts/prepare-fltk.py'], cwd=root, check=True)
+if os.environ.get('MDF_REFERENCE','1')=='1':
+    subprocess.run(['python3', 'scripts/prepare-fltk.py'], cwd=root, check=True)
 cached_packages([root/'build.zig.zon',root/'modules/pozeiden/build.zig.zon'],fetch=True)

@@ -1,5 +1,6 @@
 #pragma once
 #include "mermaid.h"
+#include "diagram-loader.h"
 #include <atomic>
 #include <cstdint>
 

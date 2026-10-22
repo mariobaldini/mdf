@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Profile all three Markdown samples and write one offline HTML startup report."""
+"""Profile the six TEXT/IMAGES samples in one offline HTML startup report."""
 
 import argparse
 from collections import defaultdict
@@ -28,7 +28,11 @@ import zlib
 TRACKS = {"launch": "Pre-load / startup", "gui": "GUI / main thread", "document": "Document worker", "fonts": "Deferred monospace worker",
           "navigation": "Navigation / assets worker", "images": "Images / diagrams worker", "fallback": "Sans glyph fallback worker",
           "input": "Keyboard preparation worker", "ui": "UI module loader", "ui_dependencies": "UI libraries loader",
-          "frame_memory": "First-frame memory worker"}
+          "frame_memory": "First-frame memory worker", "bundled_fonts": "Bundled font data worker", "minimap": "Minimap raster worker"}
+
+
+def sample_documents(root):
+    return [root/f'SAMPLE-{size}-{edition}.md' for size in ('SMALL','MID','HUGE') for edition in ('TEXT','IMAGES')]
 
 
 def command_output(arguments, cwd=None):
@@ -111,10 +115,22 @@ def elf_file(path):
             "build_id": data[note["offset"]:note["offset"] + note["bytes"]].hex() if note else None}
 
 
-def symbol_family(name):
+def symbol_family(name, native_ui=False):
     """Attribute surviving symbols; LTO inlined bytes stay with their caller."""
     if name == "main":
         return ("Application", "Main entry point")
+    if native_ui and (name.startswith(('internal.','painter.','compositor.','surface.','font.','path.','pattern.','pixel.','gradient.')) or name=='text.run'):
+        return ('Bundled libraries','z2d')
+    for prefix,label in (('window.','Native window'),('canvas.','Native drawing'),('reader.','Markdown rendering'),
+                         ('shell.','Native controls and dialogs'),('frame.','Native window controls'),
+                         ('directory.','File browser'),('cursor.','Native cursors'),('cursor-pixels.','Native cursors'),
+                         ('display-scale.','Native scaling'),('minimap.','Minimap'),('font-runtime.','Deferred fonts'),
+                         ('font-coverage.','Glyph coverage'),('external.','System link handler'),('receive.','Clipboard'),('transfer.','Clipboard')):
+        if name.startswith(prefix):return ('Application',label)
+    if name.startswith(("compress.flate.", "std.compress.flate.")):
+        return ("Language runtimes", "Zig std.compress.flate")
+    if name.startswith("compression."):
+        return ("Application", "Resource expansion (Zig)")
     if "bundled_font" in name or name == "mdf_font_resource":
         return ("Application", "Font setup")
     if "diagram_renderer" in name or "svg_image" in name or "6Module7prepare" in name:
@@ -123,12 +139,16 @@ def symbol_family(name):
         return ("Bundled libraries", "nlohmann JSON")
     if name.startswith(("mdf_json_", "json.", "std.json.")):
         return ("Language runtimes", "Zig std.json")
+    if name.startswith(("parser.", "inline.", "ast.", "combinators.", "zigmark.")):
+        return ("Bundled libraries", "Zigmark")
+    if name.startswith("mecha."):
+        return ("Bundled libraries", "Mecha")
     if name.startswith(("pango_", "_pango_")):
         return ("Bundled libraries", "Pango")
     if name.startswith(("cairo_", "_cairo_")):
         return ("Bundled libraries", "Cairo")
     if name.startswith(("image-pixels.", "codecs.png.", "codecs.jpeg.", "png.", "jpeg.")) or name == "mdf_decode_pixels":
-        return ("Bundled libraries", "Zignal PNG/JPEG")
+        return ("Bundled libraries", "Zignal PNG/JPEG/GIF/BMP")
     if "mermaid_rs_renderer" in name or "mdf_mermaid" in name or name == "mdf_render_mermaid":
         return ("Bundled libraries", "Mermaid renderer")
     if any(crate in name for crate in ("resvg", "usvg", "tiny_skia", "rustybuzz", "fontdb", "ttf_parser", "svgtypes", "simplecss")):
@@ -160,8 +180,8 @@ def symbol_family(name):
         return ("Application", "Native startup")
     if "Fl_" in name or name.startswith(("fl_", "_ZN2Fl", "_ZNK2Fl", "_ZZN2Fl")):
         return ("Bundled libraries", "FLTK")
-    if name.startswith(("core.", "loader.", "navigation.", "layout.", "document.", "footnotes.",
-                        "settings.", "profiling.", "runtime.", "mdf_")):
+    if name.startswith(("core.", "loader.", "navigation.", "layout.", "viewport.", "measurement.", "block_layout.", "flow.", "text.", "diagrams.", "document.", "footnotes.",
+                        "keyboard.", "image-worker.", "font-worker.", "system-text.", "body-fonts.", "ui-profile.", "settings.", "profiling.", "runtime.", "mdf_")):
         return ("Application", "Zig " + name.split(".", 1)[0] if "." in name else "Core API")
     if name.startswith(("__wrap_select", "__wrap_poll", "__wrap_wl_display_")) or "profile_gui_wait_reason" in name:
         return ("Application", "Profiling")
@@ -180,6 +200,36 @@ def embedded_ui(image):
         return None
     data=image['data'][section['offset']:section['offset']+section['bytes']]
     return data if data[:6]==b'\x7fELF\x02\x01' and struct.unpack_from('<HH',data,16)==(3,62) else None
+
+
+def embedded_text(image):
+    """Inspect an on-demand text module only when that launch loaded it."""
+    section=next((s for s in image['sections'] if s['name']=='.mdf_text'),None)
+    if not section:
+        return None
+    data=image['data'][section['offset']:section['offset']+section['bytes']]
+    if section['flags'] & 2 or len(data)<40:
+        raise ValueError('Invalid text module section')
+    magic,abi,header,packed,expanded,checksum,flags=struct.unpack_from('<8sIIQQII',data)
+    if magic!=b'MDFDG01\0' or abi!=2 or header!=40 or packed!=len(data)-header or not 0<expanded<=256*1024*1024 or flags:
+        raise ValueError('Invalid text module header')
+    inflater=zlib.decompressobj()
+    result=inflater.decompress(data[header:],expanded+1)
+    if len(result)!=expanded or not inflater.eof or inflater.unused_data or inflater.unconsumed_tail or zlib.crc32(result)!=checksum:
+        raise ValueError('Invalid text module payload')
+    return result
+
+
+def renderer_payload_info(image, section):
+    if section['bytes']<40 or section['flags']&2:
+        return None
+    magic,abi,header,stored,expanded,checksum,flags=struct.unpack_from('<8sIIQQII',image['data'],section['offset'])
+    if (magic!=b'MDFDG01\0' or abi!=2 or header!=40 or stored!=section['bytes']-40 or
+            not 0<expanded<=256*1024*1024 or flags not in (0,1) or (flags==1 and stored!=expanded)):
+        return None
+    return {'name':{'.mdf_mermaid':'Mermaid renderer','.mdf_svg':'SVG rendering','.mdf_image':'Zignal PNG/JPEG/GIF/BMP'}[section['name']],
+            'packed_bytes':stored,'expanded_bytes':expanded,'header_bytes':header,
+            'codec':'raw' if flags==1 else 'zlib','abi':abi}
 
 
 def binary_breakdown(root, binary, ui_engine=False):
@@ -214,11 +264,14 @@ def binary_breakdown(root, binary, ui_engine=False):
         name = section["name"]
         if name == ".mdf_ui":
             add(section["offset"], section["offset"] + section["bytes"],
-                ("Deferred UI engine", "FLTK, UI and image codecs (uncompressed)"), 30)
+                ("Deferred UI engine", "UI and image codecs (uncompressed)"), 30)
             continue
-        if name in (".mdf_mermaid", ".mdf_svg"):
+        if name in (".mdf_mermaid", ".mdf_svg", ".mdf_image"):
+            module=renderer_payload_info(image,section)
+            raw=module and module['codec']=='raw'
+            label={'.mdf_mermaid':'Mermaid layout','.mdf_svg':'SVG rendering','.mdf_image':'Zignal PNG/JPEG/GIF/BMP'}[name]
             add(section["offset"], section["offset"] + section["bytes"],
-                ("Compressed renderers", "Mermaid layout (zlib)" if name == ".mdf_mermaid" else "SVG rendering (zlib)"), 30)
+                ("Lazy renderers" if raw else "Compressed renderers", label+(" (uncompressed)" if raw else " (zlib)")), 30)
             continue
         if name == ".mdf_diagram":
             add(section["offset"], section["offset"] + section["bytes"],
@@ -236,6 +289,7 @@ def binary_breakdown(root, binary, ui_engine=False):
                 continue
             strings = symbols["sections"][table["link"]]
             names = symbols["data"][strings["offset"]:strings["offset"] + strings["bytes"]]
+            native_ui=ui_engine and b'window.Window.present\0' in names and b'canvas.Canvas.font\0' in names
             for offset in range(table["offset"], table["offset"] + table["bytes"], table["stride"]):
                 name_offset, info, _, index, address, size = struct.unpack_from("<IBBHQQ", symbols["data"], offset)
                 if not size or info & 15 not in (1, 2, 6) or index >= len(symbols["sections"]):
@@ -245,7 +299,7 @@ def binary_breakdown(root, binary, ui_engine=False):
                 if not target or source["address"] != target["address"]:
                     continue
                 name = names[name_offset:].split(b"\0", 1)[0].decode("utf-8", errors="replace")
-                family = symbol_family(name)
+                family = symbol_family(name,native_ui=native_ui)
                 if family or info & 15 == 2:
                     start = target["offset"] + address - target["address"]
                     add(max(start, target["offset"]), min(start + size, target["offset"] + target["bytes"]),
@@ -254,7 +308,7 @@ def binary_breakdown(root, binary, ui_engine=False):
         font = path.read_bytes()
         start = image["data"].find(font) if font else -1
         compressed = False
-        if start < 0 and "Italic" in path.stem:
+        if start < 0:
             font = struct.pack("<8sII", b"MDFONT1\0", len(font), zlib.crc32(font)) + zlib.compress(font, 9)
             start = image["data"].find(font)
             compressed = True
@@ -316,13 +370,11 @@ def binary_breakdown(root, binary, ui_engine=False):
                                         "header_bytes": header, "codec": "zlib", "abi": abi}
     modules = []
     for section in image["sections"]:
-        if section["name"] not in (".mdf_mermaid", ".mdf_svg") or section["bytes"] < 40:
+        if section["name"] not in (".mdf_mermaid", ".mdf_svg", ".mdf_image") or section["bytes"] < 40:
             continue
-        magic, abi, header, packed, expanded, checksum, flags = struct.unpack_from("<8sIIQQII", image["data"], section["offset"])
-        if magic == b"MDFDG01\0" and abi == 2 and header == 40 and packed == section["bytes"] - 40 and not flags:
-            modules.append({"name": "Mermaid renderer" if section["name"] == ".mdf_mermaid" else "SVG rendering",
-                            "packed_bytes": packed, "expanded_bytes": expanded, "header_bytes": header,
-                            "codec": "zlib", "abi": abi})
+        module=renderer_payload_info(image,section)
+        if module:
+            modules.append(module)
     if modules:
         result["diagram_modules"] = modules
     payload=embedded_ui(image) if not ui_engine else None
@@ -340,12 +392,13 @@ def binary_breakdown(root, binary, ui_engine=False):
     return result
 
 
-def project_context(root, binary, document, run):
+def project_context(root, binary, document, run, observed_runs=None):
     """Keep build identity and actual library sizes, without source snapshots."""
     frontend = json.loads((root / "frontend/dependencies.json").read_text())
     direct = dependencies((root / "build.zig.zon").read_text())
-    compiler = command_output([os.environ.get("ZIG", "zig"), "version"])
+    compiler = run.get('compiler') or command_output([os.environ.get("ZIG", "zig"), "version"])
     libraries = []
+    native=run.get('renderer')=='z2d'
     sdk = root / "build/fltk/ReleaseFast/lib"
 
     def bundled(name, version, role, paths=(), basis="static archive", included=None):
@@ -354,17 +407,25 @@ def project_context(root, binary, document, run):
                           "linkage": "bundled", "bytes": sum(path.stat().st_size for path in files) if files else None,
                           "size_basis": basis if files else included or "included in executable"})
 
-    bundled("FLTK", frontend["fltk"]["version"], "Native Wayland UI and image wrappers",
-            [sdk / "libfltk.a", sdk / "libfltk_images.a"], "static archives")
+    if native:
+        bundled('z2d',run.get('metrics',{}).get('drawing_library_version','pinned Zig dependency'),'Pure Zig UI and Markdown rasterization')
+    else:
+        bundled("FLTK", frontend["fltk"]["version"], "Native Wayland UI and image wrappers",
+                [sdk / "libfltk.a", sdk / "libfltk_images.a"], "static archives")
     if run.get('metrics', {}).get('text_library') == 'bundled-pango':
         bundled("Pango", run['metrics'].get('text_library_version', frontend['pango']['version']),
                 "Cairo/Fontconfig text layout; static code retained by LTO and dead-section removal")
     if run.get('metrics', {}).get('drawing_library') == 'bundled-cairo':
         bundled("Cairo", run['metrics'].get('drawing_library_version', frontend['cairo']['version']),
                 "Image surfaces and FreeType/Fontconfig fonts; no X11/XCB or export backends; system Pixman")
-    md4c = root / "zig-pkg" / direct["md4c"]["hash"] / "CMakeLists.txt"
-    match = re.search(r"project\s*\([^)]*?VERSION\s+([0-9.]+)", md4c.read_text(), re.I) if md4c.is_file() else None
-    bundled("MD4C", match.group(1) if match else "pinned commit", "Markdown parser")
+    if run.get('metrics', {}).get('markdown_parser') == 'zigmark':
+        bundled('Zigmark', frontend['zigmark']['version'], 'Pure Zig CommonMark/GFM parser with MDF block conversion')
+        bundled('Mecha', frontend['mecha']['version'], 'Pure Zig parser combinators used by Zigmark')
+    else:
+        previous = direct.get('md4c', {})
+        md4c = root / 'zig-pkg' / previous.get('hash', 'legacy-md4c-unavailable') / 'CMakeLists.txt'
+        match = re.search(r'project\s*\([^)]*?VERSION\s+([0-9.]+)', md4c.read_text(), re.I) if md4c.is_file() else None
+        bundled('MD4C', match.group(1) if match else 'previous C parser', 'Previous Markdown parser')
     if run.get('metrics', {}).get('json_engine') == 'std.json':
         bundled("Zig std.json", compiler, "Control messages, settings and profiler JSON; Zig standard library")
     else:
@@ -372,7 +433,7 @@ def project_context(root, binary, document, run):
         bundled("nlohmann JSON", frontend.get("nlohmann_json", {}).get("version", "3.12.0"), "Previous C++ JSON implementation")
     zignal_decoder = run.get('metrics', {}).get('image_decoder') == 'zignal'
     if zignal_decoder:
-        bundled('Zignal PNG/JPEG', frontend['zignal']['version'], 'Pure Zig PNG/JPEG decoding on the image worker')
+        bundled('Zignal PNG/JPEG/GIF/BMP', frontend['zignal']['version'], 'Pure Zig PNG/JPEG/GIF/BMP decoding and PNG capture encoding' if run['metrics'].get('png_encoder')=='zignal' else 'Pure Zig PNG/JPEG/GIF/BMP decoding on the image worker')
     if "rendered_diagrams" in run.get("metrics", {}):
         pozeiden = run["metrics"].get("mermaid_engine") == "pozeiden"
         version = "Pozeiden " + frontend["pozeiden"]["version"] if pozeiden else frontend.get("mermaid", {}).get("version", "0.3.1 (previous Rust renderer)")
@@ -387,13 +448,17 @@ def project_context(root, binary, document, run):
         ("zlib", "zlib", "zlib.h", r'#define ZLIB_VERSION\s+"([^"]+)"', "z", "Compressed modules/fonts and PNG capture" if zignal_decoder else "Image decompression"),
         ("libdecor", "libdecor", "meson.build", r"version:\s*'([^']+)'", None, "Native title bar (48 logical pixels)"),
     ):
+        if native:
+            continue
+        if (name == 'libpng' and run.get('metrics', {}).get('png_encoder') == 'zignal') or (name == 'zlib' and run.get('metrics', {}).get('compression_engine') == 'std.compress.flate'):
+            continue
         source = root / "zig-pkg/fltk" / directory / filename
         match = re.search(pattern, source.read_text()) if source.is_file() else None
         bundled(name, match.group(1) if match else "bundled with FLTK", role,
                 [sdk / f"libfltk_{archive}.a"] if archive else (), included="included in FLTK")
     faces = sorted((root / "assets/fonts/open-sans").glob("*.ttf"))
     bundled("Open Sans", font_metadata(faces[0]).get("version", "bundled") if faces else "unavailable",
-            "Regular/bold and independently compressed italic Latin subset faces", faces, "font data")
+            "Independently compressed Latin subset faces; regular/bold inflate during UI loading", faces, "font data")
     if run.get("metrics", {}).get("monospace_status") == "ready":
         info = run["metrics"]
         libraries.append({"name": info.get("monospace_family", "System monospace"), "version": "system font",
@@ -409,12 +474,15 @@ def project_context(root, binary, document, run):
     linked = {}
     dependency_output=command_output(["ldd", str(binary)]) or ""
     try:
-        ui_payload=embedded_ui(elf_file(binary))
-    except (OSError,ValueError,struct.error):
-        ui_payload=None
-    if ui_payload:
+        image=elf_file(binary)
+        payloads=[embedded_ui(image)]
+        if native and any(item.get('fonts',{}).get('module_loaded') for item in (observed_runs or [run])):
+            payloads.append(embedded_text(image))
+    except (OSError,ValueError,struct.error,zlib.error):
+        payloads=[]
+    for payload in filter(None,payloads):
         with tempfile.TemporaryDirectory(prefix='mdf-ui-libraries-') as directory:
-            path=Path(directory)/'ui.so';path.write_bytes(ui_payload)
+            path=Path(directory)/'module.so';path.write_bytes(payload)
             dependency_output+='\n'+(command_output(['ldd',str(path)]) or '')
     for line in dependency_output.splitlines():
         match = re.match(r"\s*(\S+) => (/\S+)", line)
@@ -436,6 +504,10 @@ def project_context(root, binary, document, run):
     used = set()
     for package, prefix, role in primary:
         found = next(((name, path) for name, path in linked.items() if name.startswith(prefix)), None)
+        if native and not found:
+            continue
+        if native and package in ('pangoft2','pango','fontconfig','freetype2','harfbuzz'):
+            role+='; deferred until a document needs system fonts'
         if package in ('pango', 'pangoft2', 'pangocairo') and not found and run.get('metrics', {}).get('text_library') == 'bundled-pango':
             continue
         if package == 'cairo' and not found and run.get('metrics', {}).get('drawing_library') == 'bundled-cairo':
@@ -475,7 +547,7 @@ def project_context(root, binary, document, run):
         module = next((item for item in binary_size.get("diagram_modules", []) if item["name"] == library["name"]), None)
         if module:
             library["linked_bytes"] = module["packed_bytes"] + module["header_bytes"]
-            library["size_basis"] = "independent compressed module"
+            library["size_basis"] = "independent uncompressed module" if module['codec']=='raw' else "independent compressed module"
         if library['name']=='UI engine':library['linked_bytes']=binary_size['ui_module']['bytes']
     return {"name": "Markdown FAST", "version": run["version"],
             "build": f'{run["mode"]} / {run.get("ui_mode", "Release")} · x86_64 baseline · LTO',
@@ -641,9 +713,9 @@ def account_thread_time(run, ready):
                     kind, name = "idle", "Before main entry"
                 elif track == "gui" and low == 0:
                     name = "Untraced startup / GUI setup"
-                elif track in ("document", "navigation", "images", "fallback", "input", "ui", "ui_dependencies", "frame_memory") or (track == "fonts" and "Request system monospace" in signals):
-                    request = signals.get({"document": "Request document", "navigation": "Request early document assets" if "Request early document assets" in signals else "Request navigation", "images": "Request image decoding", "fonts": "Request system monospace", "fallback": "Request system Sans fallback", "input": "Request keyboard preparation", "ui":"Request UI engine", "ui_dependencies":"Request UI dependencies", "frame_memory":"Request first-frame shared memory"}[track])
-                    finished = signals.get({"document": "Document ready", "navigation": "Navigation ready", "images": "Images ready", "fonts": "System monospace prepared", "fallback": "System Sans fallback prepared", "input": "Keyboard preparation ready", "ui":"UI engine ready", "ui_dependencies":"UI dependencies ready", "frame_memory":"First-frame shared memory prepared"}[track])
+                elif track in ("document", "navigation", "images", "fallback", "input", "ui", "ui_dependencies", "frame_memory", "bundled_fonts") or (track == "fonts" and "Request system monospace" in signals):
+                    request = signals.get({"document": "Request document", "navigation": "Request early document assets" if "Request early document assets" in signals else "Request navigation", "images": "Request image decoding", "fonts": "Request system monospace", "fallback": "Request system Sans fallback", "input": "Request keyboard preparation", "ui":"Request UI engine", "ui_dependencies":"Request UI dependencies", "frame_memory":"Request first-frame shared memory", "bundled_fonts":"Request startup font data"}[track])
+                    finished = signals.get({"document": "Document ready", "navigation": "Navigation ready", "images": "Images ready", "fonts": "System monospace prepared", "fallback": "System Sans fallback prepared", "input": "Keyboard preparation ready", "ui":"UI engine ready", "ui_dependencies":"UI dependencies ready", "frame_memory":"First-frame shared memory prepared", "bundled_fonts":"Startup font data prepared"}[track])
                     if request is not None and high <= request:
                         kind = "idle"
                         name = "Deferred — first viewport" if track in ("navigation", "fonts", "fallback") and request >= viewport and high <= viewport else "Not requested yet"
@@ -912,6 +984,7 @@ def call_graph_model(run):
         ("fallback", "Request system Sans fallback", "System Sans fallback prepared", "System Sans fallback adopted", "Adopt system Sans fallback"),
         ("input", "Request keyboard preparation", "Keyboard preparation ready", "Keyboard resources adopted", "Adopt prepared keyboard resources"),
         ("frame_memory", "Request first-frame shared memory", "First-frame shared memory prepared", "First-frame shared memory adopted", "Adopt prepared first-frame shared memory"),
+        ("minimap", "Request minimap raster", "Minimap raster ready", "Minimap raster adopted", "Adopt native minimap raster"),
     )
     tasks = []
     for track, request_name, ready_name, accept_name, scope in definitions:
@@ -942,7 +1015,7 @@ def call_graph_model(run):
             # blocked the GUI. Older traces need an explicit worker wait name.
             waited = any(e.get("wait", {}).get("reason") == "other descriptor" or
                          (not e.get("wait") and {"document":"document", "navigation":"navigation", "images":"image",
-                          "fonts":"monospace", "fallback":"fallback", "input":"keyboard", "ui":"ui engine", "ui_dependencies":"ui dependency", "frame_memory":"first-frame shared memory"}[track] in e["name"].lower()) for e in waits)
+                          "fonts":"monospace", "fallback":"fallback", "input":"keyboard", "ui":"ui engine", "ui_dependencies":"ui dependency", "frame_memory":"first-frame shared memory", "minimap":"minimap"}[track] in e["name"].lower()) for e in waits)
             bookkeeping = ("Check Wayland events", "Accept document and prepared workers")
             independent = [e for e in receiver_roots if e["kind"] == "work" and not e["name"].startswith(bookkeeping)]
             independent += [e for e in calls if e["track"] == receiver_track and e.get("parent") is not None and
@@ -1238,7 +1311,7 @@ def include_process_launch(data, started, finished):
     metrics = result["metrics"]
     metrics["in_app_viewport_ms"] = metrics.get("first_document_ms", metrics["first_frame_ms"])
     for name in ("first_frame_ms", "full_ready_ms", "first_document_ms", "first_document_commit_ms", "first_document_flush_ms", "scaffold_ms", "window_present_ms", "backend_ms",
-                 "diagram_module_ready_ms", "mermaid_module_ready_ms", "svg_module_ready_ms", "first_diagram_ms",
+                 "ui_module_ready_ms", "diagram_module_ready_ms", "mermaid_module_ready_ms", "svg_module_ready_ms", "image_module_ready_ms", "first_diagram_ms",
                  "monospace_request_ms", "monospace_adopted_ms", "monospace_frame_ms",
                  "fallback_request_ms", "fallback_adopted_ms", "fallback_frame_ms"):
         if name in metrics:
@@ -1446,7 +1519,7 @@ def profile(binary, documents, count, output, seed=None):
             print(f'Cold profile {document.name} {index + 1}/{count} (position {position + 1}/{len(documents)}): {viewport_ms:.2f} ms launch to first viewport, '
                   f'{run["metrics"]["pre_main_ms"]:.2f} ms pre-load, '
                   f'{run["metrics"]["first_frame_ms"]:.2f} ms fully ready', flush=True)
-    project = project_context(Path(__file__).resolve().parent.parent, binary, documents[0], collected[0][0])
+    project = project_context(Path(__file__).resolve().parent.parent, binary, documents[0], collected[0][0],observed_runs=[run for runs in collected for run in runs])
     project.pop("input", None)
     report = {
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -1479,15 +1552,15 @@ def main():
     root = Path(__file__).resolve().parent.parent
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, default=root / "build/profile/runtime/bin/mdf")
-    parser.add_argument("--document", type=Path, action="append", help="Document to measure; repeat to add tabs. Defaults to SAMPLE-SMALL.md, SAMPLE.md, and SAMPLE-HUGE.md.")
+    parser.add_argument("--document", type=Path, action="append", help="Document to measure; repeat to add tabs. Defaults to SMALL/MID/HUGE, each with TEXT and IMAGES editions.")
     parser.add_argument("--output", type=Path, default=root / "build/profile/profile.html", help="Report base name; a UTC datetime suffix is always added")
-    parser.add_argument("--runs", type=int, default=12, help="Cold launches per document (default: 12; two balanced six-order cycles)")
+    parser.add_argument("--runs", type=int, default=12, help="Cold launches per document (default: 12; one balanced twelve-order cycle for six documents)")
     parser.add_argument("--seed", type=int, help="Reproduce the launch order; otherwise generate and record a random seed")
     args = parser.parse_args()
     if args.runs < 1:
         parser.error("--runs must be positive")
     try:
-        documents = args.document or [root / "SAMPLE-SMALL.md", root / "SAMPLE.md", root / "SAMPLE-HUGE.md"]
+        documents = args.document or sample_documents(root)
         profile(args.binary.resolve(), [path.resolve() for path in documents], args.runs, args.output.resolve(), seed=args.seed)
     except (OSError, ValueError, KeyError, RuntimeError, subprocess.TimeoutExpired) as error:
         print(f"Profile failed: {error}", file=sys.stderr)

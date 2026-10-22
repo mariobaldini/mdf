@@ -1,23 +1,11 @@
 #pragma once
 #include "../zig-pkg/fltk/src/drivers/Wayland/mdf_startup.h"
-#include <condition_variable>
-#include <memory>
-#include <mutex>
+#include "keyboard.h"
 #include <string>
-#include <thread>
 
 // Each result crosses threads once. No XKB object is accessed by both threads.
 class KeyboardPreparation {
-  std::mutex mutex;
-  std::condition_variable changed;
-  std::thread worker;
-  std::string locale, pending;
-  uint64_t requested = 0, finished = 0;
-  bool stop = false, failed = false;
-  MdfKeyboardResult result{};
-  void (*notify)();
-  unsigned delay_ms;
-  void run();
+  void *worker = nullptr;
 public:
   explicit KeyboardPreparation(std::string locale, void (*notify)(), unsigned delay_ms = 0);
   ~KeyboardPreparation();

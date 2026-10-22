@@ -2,6 +2,23 @@ const std = @import("std");
 const links = @import("mdf").links;
 const a = std.testing.allocator;
 
+test "drops: URI lists decode the first local file without shell interpretation" {
+    const path=try links.droppedPath(a,"# Files\r\n\r\nfile://localhost/tmp/caf%C3%A9%20name.md\r\nfile:///tmp/second.md\n");
+    defer a.free(path);
+    try std.testing.expectEqualStrings("/tmp/café name.md",path);
+    const plain=try links.droppedPath(a,"file:///tmp/a%3Bb.md\n");
+    defer a.free(plain);
+    try std.testing.expectEqualStrings("/tmp/a;b.md",plain);
+}
+test "drops: remote files unsupported schemes invalid escapes and controls are rejected" {
+    try std.testing.expectError(error.RemoteFileDrop,links.droppedPath(a,"file://server/tmp/a.md\n"));
+    try std.testing.expectError(error.UnsupportedDrop,links.droppedPath(a,"https://example.invalid/a.md\n"));
+    try std.testing.expectError(error.InvalidLink,links.droppedPath(a,"file:///tmp/a%00.md\n"));
+    try std.testing.expectError(error.InvalidDropPath,links.droppedPath(a,"file:///tmp/a%0A.md\n"));
+    try std.testing.expectError(error.InvalidDropPath,links.droppedPath(a,"file://relative.md\n"));
+    try std.testing.expectError(error.EmptyDrop,links.droppedPath(a,"# Nothing\r\n\n"));
+}
+
 fn resolved(url: []const u8, expected: links.Link) !void {
     const result = try links.resolve(a, "/docs/guide/start.md", url);
     defer switch (result) {

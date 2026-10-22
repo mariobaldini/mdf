@@ -41,17 +41,17 @@ jobs:
           tar -xJf "$RUNNER_TEMP/zig.tar.xz" --strip-components=1 -C "$RUNNER_TEMP/zig"
           printf '%s\n' "$RUNNER_TEMP/zig" >> "$GITHUB_PATH"
 
-      - name: Fetch dependencies
+      - name: Fetch FLTK and Zig dependencies
         run: make setup
 
-      - name: Build debug executable
+      - name: Build FLTK debug executable
         run: make build
 
       - name: Run core and installation tests
         run: make test
 
-      - name: Run GUI tests without a desktop
-        run: make test-gui
+      - name: Run FLTK GUI tests without a desktop
+        run: make test-gui OPTIMIZE=ReleaseFast
 
       - name: Build release executable
         run: make release

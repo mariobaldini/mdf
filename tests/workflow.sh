@@ -1,13 +1,14 @@
 #!/bin/sh
 # Test the real Make targets with isolated, offline build-tool stubs.
 set -eu
-unset ZIG ZIG_GLOBAL_CACHE_DIR OPTIMIZE BUILD_PREFIX MAKEFLAGS MFLAGS MAKEOVERRIDES
+unset ZIG ZIG_GLOBAL_CACHE_DIR OPTIMIZE BUILD_PREFIX MAKEFLAGS MFLAGS MAKEOVERRIDES MDF_REFERENCE MDF_OPTIONAL_MODULE_COMPRESSION
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 real_make=$(command -v make)
 scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT HUP INT TERM
 mkdir -p "$scratch/project/scripts" "$scratch/project/zig-pkg/fltk" "$scratch/project/modules/pozeiden/src" "$scratch/project/modules/zig-svg/src" "$scratch/bin"
 mkdir -p "$scratch/project/modules/zignal/src"
+mkdir -p "$scratch/project/modules/zigmark/src" "$scratch/project/modules/mecha"
 mkdir -p "$scratch/project/tests"
 mkdir -p "$scratch/project/zig-pkg/pango" "$scratch/project/zig-pkg/meson/mesonbuild"
 mkdir -p "$scratch/project/zig-pkg/cairo"
@@ -16,16 +17,18 @@ mkdir -p "$scratch/project/zig-pkg/cairo"
 : > "$scratch/project/zig-pkg/meson/mesonbuild/mesonmain.py"
 for script in workflow.sh install.sh;do printf '#!/bin/sh\nexit 0\n' > "$scratch/project/tests/$script";done
 cp "$root/Makefile" "$root/.zig-version" "$scratch/project/"
-cp "$root/scripts/common.sh" "$root/scripts/check-requirements.sh" "$root/scripts/build-frontend.sh" "$scratch/project/scripts/"
+cp "$root/scripts/common.sh" "$root/scripts/check-requirements.sh" "$root/scripts/build-frontend.sh" "$root/scripts/build-reference.sh" "$scratch/project/scripts/"
 : > "$scratch/project/zig-pkg/fltk/CMakeLists.txt"
 : > "$scratch/project/modules/pozeiden/src/root.zig"
 : > "$scratch/project/modules/zig-svg/src/root.zig"
 : > "$scratch/project/modules/zignal/src/root.zig"
+: > "$scratch/project/modules/zigmark/src/root.zig"
+: > "$scratch/project/modules/mecha/mecha.zig"
 : > "$scratch/libstdc++.a"
 export MDF_TEST_LOG="$scratch/commands" MDF_TEST_STDLIB="$scratch/libstdc++.a"
 for utility in sh bash dirname cat head grep rm mktemp id mkdir cp mv chmod cmp env;do ln -s "$(command -v "$utility")" "$scratch/bin/$utility";done
 ln -s "$real_make" "$scratch/bin/make"
-for name in ninja gcc pkg-config rpm sudo rpmbuild dpkg-deb strace objcopy strip;do printf '#!/bin/sh\nexit 0\n' > "$scratch/bin/$name";chmod +x "$scratch/bin/$name";done
+for name in ninja gcc pkg-config rpm sudo rpmbuild dpkg-deb strace objcopy strip wayland-scanner;do printf '#!/bin/sh\nexit 0\n' > "$scratch/bin/$name";chmod +x "$scratch/bin/$name";done
 cat > "$scratch/bin/g++" <<'STUB'
 #!/bin/sh
 printf '%s\n' "$MDF_TEST_STDLIB"
@@ -62,10 +65,11 @@ if [ "$1" = --build ];then
  case "$2" in */fltk-ui/*)
   mkdir -p "$2"
   : > "$2/mdf-ui.debug"
+  : > "$2/mdf-ui.debug"
   printf '#!/bin/sh\nprintf "run %%s\\n" "$*" >> "$MDF_TEST_LOG"\n' > "$2/mdf"
   chmod +x "$2/mdf";;
  esac
- for native_test in mdf-image-tests mdf-buffer-tests mdf-cairo-tests;do
+ for native_test in mdf-image-tests mdf-buffer-tests mdf-cairo-tests mdf-startup-tests mdf-monospace-tests;do
   case " $* " in *" --target $native_test "*)
    printf '#!/bin/sh\nexit 0\n' > "$2/$native_test"
    chmod +x "$2/$native_test";;
@@ -87,12 +91,14 @@ expect_failure(){ if run "$@";then printf 'Expected failure: %s\n' "$*" >&2;exit
 mkdir -p "$scratch/project/build/bin" "$scratch/project/build/fltk-core/Debug/bin"
 : > "$scratch/project/build/bin/libmdf-extra.so"
 : > "$scratch/project/build/fltk-core/Debug/bin/libmdf-extra.so"
-run build
+run build || { cat "$scratch/output" >&2; exit 1; }
+grep -q -- '-DMDF_OPTIONAL_MODULE_COMPRESSION=zlib' "$MDF_TEST_LOG"
 grep -q -- 'zig build test .* -Doptimize=Debug --summary all' "$MDF_TEST_LOG"
 grep -q -- '-Doptimize=Debug' "$MDF_TEST_LOG"
 grep -q -- '-DCMAKE_BUILD_TYPE=Debug' "$MDF_TEST_LOG"
 grep -q -- '-DMDF_SVG_LIBRARY=.*libmdf-svg.a' "$MDF_TEST_LOG"
 grep -q -- '-DMDF_IMAGE_LIBRARY=.*libmdf-image.a' "$MDF_TEST_LOG"
+grep -q -- '-DMDF_UI_WORKERS_LIBRARY=.*libmdf-ui-workers.a' "$MDF_TEST_LOG"
 grep -q -- 'python3 scripts/build-text-stack.py .* --mode Debug' "$MDF_TEST_LOG"
 grep -q -- '-DMDF_BUNDLED_PANGO=ON' "$MDF_TEST_LOG"
 grep -q -- 'python3 scripts/build-cairo.py .* --mode Debug' "$MDF_TEST_LOG"
@@ -105,6 +111,19 @@ test ! -e "$scratch/project/build/bin/libmdf-extra.so"
 test ! -e "$scratch/project/build/fltk-core/Debug/bin/libmdf-extra.so"
 no_downloads
 printf '%s\n' 'PASS: Debug builds offline, with Wayland enabled and X11/OpenGL/GTK decorations disabled'
+: > "$MDF_TEST_LOG"
+run build MDF_OPTIONAL_MODULE_COMPRESSION=raw
+grep -q -- '-DMDF_OPTIONAL_MODULE_COMPRESSION=raw' "$MDF_TEST_LOG"
+no_downloads
+printf '%s\n' 'PASS: optional modules default to zlib; explicit raw comparisons remain available'
+for utility in gcc g++ cmake ninja;do mv "$scratch/bin/$utility" "$scratch/bin/$utility.off";done
+mv "$scratch/project/zig-pkg/fltk/CMakeLists.txt" "$scratch/fltk.saved"
+expect_failure build
+grep -q 'Missing' "$scratch/output"
+run check-native-requirements
+for utility in gcc g++ cmake ninja;do mv "$scratch/bin/$utility.off" "$scratch/bin/$utility";done
+mv "$scratch/fltk.saved" "$scratch/project/zig-pkg/fltk/CMakeLists.txt"
+printf '%s\n' 'PASS: FLTK is required by default; the experimental native requirements stay separate'
 : > "$MDF_TEST_LOG"
 export MDF_TEST_UNIT_FAILURE=1
 expect_failure build
@@ -123,6 +142,7 @@ no_downloads
 printf '%s\n' 'PASS: make tests runs all three core modes plus the native JSON and image suites offline'
 : > "$MDF_TEST_LOG"
 run release OPTIMIZE=Debug
+grep -q -- '-DMDF_OPTIONAL_MODULE_COMPRESSION=zlib' "$MDF_TEST_LOG"
 grep -q -- '-Doptimize=ReleaseFast' "$MDF_TEST_LOG"
 grep -q -- 'zig ld.lld -r -O3 --lto-O3' "$MDF_TEST_LOG"
 grep -q -- '-DCMAKE_BUILD_TYPE=Release' "$MDF_TEST_LOG"
@@ -137,14 +157,14 @@ printf '%s\n' 'PASS: release forces optimized Zig, FLTK, C++ UI and bundled imag
 mkdir -p "$scratch/project/build/profile/runtime/bin"
 : > "$scratch/project/build/profile/runtime/bin/libmdf-extra.so"
 run profile OPTIMIZE=Debug BUILD_PREFIX=debug-output PROFILE_RUNS=2
+grep -q -- '-DMDF_OPTIONAL_MODULE_COMPRESSION=zlib' "$MDF_TEST_LOG"
 grep -q -- '-Doptimize=ReleaseFast' "$MDF_TEST_LOG"
 grep -q -- '-DCMAKE_BUILD_TYPE=Release' "$MDF_TEST_LOG"
-grep -q 'python3 scripts/profile.py --binary build/profile/runtime/bin/mdf .* --runs 2$' "$MDF_TEST_LOG"
-grep -q -- '--document SAMPLE-SMALL.md --document SAMPLE.md --document SAMPLE-HUGE.md' "$MDF_TEST_LOG"
+grep -q 'python3 scripts/profile.py --binary build/profile/runtime/bin/mdf --output build/profile/profile.html --runs 2$' "$MDF_TEST_LOG"
 test -f "$scratch/project/build/profile/runtime/bin/mdf";test ! -d "$scratch/project/debug-output"
 test ! -e "$scratch/project/build/profile/runtime/bin/libmdf-extra.so"
 no_downloads
-printf '%s\n' 'PASS: profiling measures all three samples with an isolated optimized runtime, even with Debug/output overrides'
+printf '%s\n' 'PASS: profiling uses the six-edition defaults and an isolated optimized runtime, even with Debug/output overrides'
 : > "$MDF_TEST_LOG"
 run profile-trace OPTIMIZE=Debug
 grep -q -- '-Doptimize=ReleaseFast' "$MDF_TEST_LOG"

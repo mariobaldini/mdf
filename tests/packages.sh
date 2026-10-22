@@ -20,6 +20,7 @@ print('PASS: executable GLIBC symbol requirements stay within the declared 2.38 
 spec=importlib.util.spec_from_file_location('mdf_profile','scripts/profile.py')
 profile=importlib.util.module_from_spec(spec);spec.loader.exec_module(profile)
 image=profile.elf_file(Path('build/mdf'))
+assert '.mdf_text' not in {s['name'] for s in image['sections']}, 'FLTK uses its bundled Pango frontend, not the experimental text module'
 ui=next(s for s in image['sections'] if s['name']=='.mdf_ui')
 assert not ui['flags'] & 2
 with tempfile.NamedTemporaryFile(suffix='.so') as file:
@@ -29,25 +30,37 @@ with tempfile.NamedTemporaryFile(suffix='.so') as file:
     symbols=subprocess.check_output(['nm','-D','--defined-only',file.name],text=True)
     assert [line.split()[-1] for line in symbols.splitlines()]==['mdf_frontend_api']
 print('PASS: private embedded UI engine stays within the declared glibc 2.38 minimum')
-for name in ('.mdf_mermaid','.mdf_svg'):
+for name in ('.mdf_mermaid','.mdf_svg','.mdf_image'):
     section=next(s for s in image['sections'] if s['name']==name)
     assert not section['flags'] & 2
     magic,abi,header,packed,expanded,checksum,flags=struct.unpack_from('<8sIIQQII',image['data'],section['offset'])
-    assert magic==b'MDFDG01\0' and abi==2 and header==40 and packed==section['bytes']-40 and flags==0
-    module=zlib.decompress(image['data'][section['offset']+header:section['offset']+section['bytes']])
+    assert magic==b'MDFDG01\0' and abi==2 and header==40 and packed==section['bytes']-40 and flags in (0,1)
+    module=image['data'][section['offset']+header:section['offset']+section['bytes']]
+    if flags==1: assert packed==expanded, 'Raw renderer sizes must match exactly'
+    else: module=zlib.decompress(module)
     assert len(module)==expanded and zlib.crc32(module)==checksum
     with tempfile.NamedTemporaryFile(suffix='.so') as file:
         file.write(module);file.flush()
         versions=re.findall(r'GLIBC_([0-9.]+)',subprocess.check_output(['readelf','--version-info',file.name],text=True))
         assert max(tuple(map(int,v.split('.'))) for v in versions)<=(2,38)
         symbols=subprocess.check_output(['nm','-D','--defined-only',file.name],text=True)
-        assert [line.split()[-1] for line in symbols.splitlines()]==['mdf_diagram_api']
-print('PASS: both independent payloads, private ABIs, and GLIBC requirements stay within glibc 2.38')
+        assert [line.split()[-1] for line in symbols.splitlines()]==['mdf_image_api' if name=='.mdf_image' else 'mdf_diagram_api']
+print('PASS: three independent payloads, private ABIs, and GLIBC requirements stay within glibc 2.38')
 PY
 test "$(rpm -qp --queryformat '%{NAME} %{VERSION} %{ARCH}' "$mdf_rpm")" = "mdf $mdf_version x86_64"
 test "$(dpkg-deb --field "$mdf_deb" Package)" = mdf
 test "$(dpkg-deb --field "$mdf_deb" Version)" = "$mdf_version"
 test "$(dpkg-deb --field "$mdf_deb" Architecture)" = amd64
+mdf_requires=$(rpm -qp --requires "$mdf_rpm")
+mdf_depends=$(dpkg-deb --field "$mdf_deb" Depends)
+printf '%s\n' "$mdf_requires" | grep -q 'libwayland-cursor.so.0'
+printf '%s\n' "$mdf_requires" | grep -q 'libpixman-1.so.0'
+printf '%s\n' "$mdf_requires" | grep -q 'libgio-2.0.so.0'
+printf '%s\n' "$mdf_depends" | grep -q 'libwayland-cursor0'
+printf '%s\n' "$mdf_depends" | grep -q 'libpixman-1-0'
+if printf '%s\n%s\n' "$mdf_requires" "$mdf_depends" | grep -Eq 'pangoft2|libfltk|libstdc\+\+|libthai|libdatrie';then
+    printf '%s\n' 'FLTK packages retained an experimental text dependency or external bundled runtime.' >&2;exit 1
+fi
 mkdir -p "$mdf_scratch/rpm" "$mdf_scratch/deb"
 (cd "$mdf_scratch/rpm" && rpm2cpio "$mdf_rpm" | cpio --extract --make-directories --no-absolute-filenames --no-preserve-owner --quiet)
 dpkg-deb --extract "$mdf_deb" "$mdf_scratch/deb"

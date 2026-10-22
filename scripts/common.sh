@@ -3,6 +3,8 @@ set -eu
 MDF_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$MDF_ROOT"
 OPTIMIZE=${OPTIMIZE:-Debug}
+MDF_REFERENCE=${MDF_REFERENCE:-1}
+export MDF_REFERENCE
 MDF_TARGET=${MDF_TARGET:-x86_64-linux-gnu.2.38}
 ZIG_GLOBAL_CACHE_DIR=${ZIG_GLOBAL_CACHE_DIR:-$MDF_ROOT/build/.zig-cache/global}
 export ZIG_GLOBAL_CACHE_DIR
@@ -38,21 +40,25 @@ check_tools() {
         printf '%s\n' 'Missing certificates. Fedora 44: sudo dnf install ca-certificates' >&2
         mdf_errors=1
     fi
-    for mdf_tool in cmake ninja gcc g++ pkg-config python3; do
+    mdf_required_tools='pkg-config python3 wayland-scanner objcopy strip'
+    if [ "${MDF_REFERENCE:-0}" = 1 ];then mdf_required_tools="$mdf_required_tools cmake ninja gcc g++";fi
+    for mdf_tool in $mdf_required_tools; do
         if ! command -v "$mdf_tool" >/dev/null 2>&1; then
             printf 'Missing %s. Run make setup (Fedora: cmake ninja-build gcc-c++ pkgconf-pkg-config python3).\n' "$mdf_tool" >&2
             mdf_errors=1
         fi
     done
     if command -v pkg-config >/dev/null 2>&1; then
-        for mdf_library in pangocairo pangoft2 cairo fontconfig pixman-1 wayland-client wayland-cursor xkbcommon gio-2.0 fribidi libthai harfbuzz freetype2; do
+        mdf_required_libraries='pangoft2 fontconfig wayland-client wayland-protocols xkbcommon'
+        if [ "${MDF_REFERENCE:-0}" = 1 ];then mdf_required_libraries="$mdf_required_libraries pangocairo cairo pixman-1 wayland-cursor gio-2.0 fribidi harfbuzz freetype2";fi
+        for mdf_library in $mdf_required_libraries; do
             if ! pkg-config --exists "$mdf_library"; then
                 printf 'Missing %s development files. Run make setup (Fedora: pango-devel cairo-devel fontconfig-devel wayland-devel libxkbcommon-devel).\n' "$mdf_library" >&2
                 mdf_errors=1
             fi
         done
     fi
-    if command -v g++ >/dev/null 2>&1; then
+    if [ "${MDF_REFERENCE:-0}" = 1 ] && command -v g++ >/dev/null 2>&1; then
         if [ ! -r "$(g++ -print-file-name=libstdc++.a)" ]; then
             printf '%s\n' 'Missing static C++ runtime. Fedora: sudo dnf install libstdc++-static' >&2
             mdf_errors=1
@@ -78,12 +84,18 @@ offline_graph_check() {
 }
 
 check_frontend_cache() {
-    test -f "$MDF_ROOT/zig-pkg/fltk/CMakeLists.txt" && \
-    test -f "$MDF_ROOT/zig-pkg/pango/meson.build" && test -f "$MDF_ROOT/zig-pkg/meson/mesonbuild/mesonmain.py" && \
-    test -f "$MDF_ROOT/zig-pkg/cairo/meson.build" && \
     test -f "$MDF_ROOT/modules/pozeiden/src/root.zig" && test -f "$MDF_ROOT/modules/zig-svg/src/root.zig" && \
-    test -f "$MDF_ROOT/modules/zignal/src/root.zig" || {
-        printf '%s\n' 'Missing pinned frontend or image-codec sources. Run make setup (or git submodule update --init --recursive).' >&2
+    test -f "$MDF_ROOT/modules/zignal/src/root.zig" && test -f "$MDF_ROOT/modules/zigmark/src/root.zig" && \
+    test -f "$MDF_ROOT/modules/mecha/mecha.zig" || {
+        printf '%s\n' 'Missing pinned frontend, parser, or image-codec sources. Run make setup (or git submodule update --init --recursive).' >&2
         return 1
     }
+    if [ "${MDF_REFERENCE:-0}" = 1 ];then
+        test -f "$MDF_ROOT/zig-pkg/fltk/CMakeLists.txt" && \
+        test -f "$MDF_ROOT/zig-pkg/pango/meson.build" && test -f "$MDF_ROOT/zig-pkg/meson/mesonbuild/mesonmain.py" && \
+        test -f "$MDF_ROOT/zig-pkg/cairo/meson.build" || {
+            printf '%s\n' 'Missing FLTK frontend sources. Run make setup.' >&2
+            return 1
+        }
+    fi
 }

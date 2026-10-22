@@ -24,7 +24,7 @@ extern int mdf_mermaid_svg(const unsigned char *, size_t, int,
     const struct MdfFontData *, size_t, size_t, struct MdfSvgText *, char *, size_t);
 #else
 extern int mdf_render_svg(const unsigned char *, size_t, int,
-    const struct MdfFontData *, size_t, size_t, struct MdfPixels *, float *, float *, char *, size_t);
+    const struct MdfFontData *, size_t, size_t, struct MdfPixels *, float *, float *, char *, size_t, struct MdfSvgText *);
 #endif
 const struct MdfDiagramApi *mdf_diagram_api(uint32_t abi) {
   static const struct MdfDiagramApi api = {

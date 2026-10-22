@@ -20,7 +20,7 @@ def build(directory, mode):
                  '-Dintrospection=disabled', '-Ddocumentation=false', '-Dman-pages=false',
                  '-Dbuild-testsuite=false', '-Dbuild-examples=false', '-Dxft=disabled',
                  '-Dsysprof=disabled', '-Dcairo=enabled', '-Dfreetype=enabled', '-Dfontconfig=enabled',
-                 '-Dlibthai=enabled', '--buildtype='+('release' if mode=='ReleaseFast' else 'debug'),
+                 '-Dlibthai=disabled', '--buildtype='+('release' if mode=='ReleaseFast' else 'debug'),
                  '-Db_lto='+('true' if mode=='ReleaseFast' else 'false'),
                  '-Dc_args=-march=x86-64 -ffunction-sections -fdata-sections']
     identity = hashlib.sha256(json.dumps([manifest['pango'], manifest['meson'], arguments,
