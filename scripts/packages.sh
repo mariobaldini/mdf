@@ -4,6 +4,13 @@ set -eu
 umask 022
 mdf_stage=$1
 mdf_version=$2
+mdf_cairo_rpm_requires=
+mdf_cairo_deb_depends=
+if grep -q '^MDF_BUNDLED_CAIRO:BOOL=OFF$' build/fltk-ui/ReleaseFast/CMakeCache.txt;then
+    mdf_cairo_rpm_requires='Requires: libcairo.so.2()(64bit)
+Requires: cairo >= 1.18'
+    mdf_cairo_deb_depends=', libcairo2 (>= 1.18)'
+fi
 mdf_package_work=$(mktemp -d "$mdf_stage/.packages.XXXXXX")
 trap 'rm -rf "$mdf_package_work"' EXIT HUP INT TERM
 
@@ -18,17 +25,27 @@ Name: mdf
 Version: $mdf_version
 Release: 1
 Summary: Markdown FAST native Markdown viewer
-License: LicenseRef-Markdown-FAST AND PolyForm-Noncommercial-1.0.0 AND MPL-2.0
+License: LicenseRef-Markdown-FAST AND PolyForm-Noncommercial-1.0.0 AND MPL-2.0 AND LGPL-2.1-or-later AND LGPL-2.1-only
 URL: https://github.com/mariobaldini/mdf
 BuildArch: x86_64
 Requires: glibc >= 2.38
 Requires: libwayland-client.so.0()(64bit)
 Requires: libwayland-cursor.so.0()(64bit)
 Requires: libxkbcommon.so.0()(64bit)
-Requires: libpangocairo-1.0.so.0()(64bit)
-Requires: libpangoft2-1.0.so.0()(64bit)
-Requires: libcairo.so.2()(64bit)
+Requires: libgio-2.0.so.0()(64bit)
+Requires: libglib-2.0.so.0()(64bit)
+Requires: libgobject-2.0.so.0()(64bit)
+Requires: libfribidi.so.0()(64bit)
+Requires: libthai.so.0()(64bit)
+Requires: libharfbuzz.so.0()(64bit)
+Requires: libfreetype.so.6()(64bit)
+Requires: libpixman-1.so.0()(64bit)
 Requires: libfontconfig.so.1()(64bit)
+Requires: glib2 >= 2.82
+Requires: pixman >= 0.40
+$mdf_cairo_rpm_requires
+Requires: fontconfig >= 2.17
+Requires: harfbuzz >= 8.4
 
 %description
 Markdown FAST is a native Markdown viewer with a table of contents and minimap.
@@ -58,7 +75,7 @@ Package: mdf
 Version: $mdf_version
 Architecture: amd64
 Maintainer: Markdown FAST maintainers <mariobaldini@users.noreply.github.com>
-Depends: libc6 (>= 2.38), libwayland-client0, libwayland-cursor0, libxkbcommon0, libpangocairo-1.0-0, libpangoft2-1.0-0, libcairo2, libfontconfig1
+Depends: libc6 (>= 2.38), libwayland-client0, libwayland-cursor0, libxkbcommon0, libglib2.0-0 (>= 2.82), libfribidi0, libthai0, libharfbuzz0b (>= 8.4), libfreetype6, libpixman-1-0 (>= 0.40), libfontconfig1 (>= 2.17)$mdf_cairo_deb_depends
 Section: text
 Priority: optional
 Homepage: https://github.com/mariobaldini/mdf

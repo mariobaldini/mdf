@@ -252,6 +252,12 @@ class ProfileTests(unittest.TestCase):
                                 ("fltk_z_inflate", "ZLIB"), ("jpeg_read_header", "JPEG"),
                                 ("libdecor_frame_commit", "libdecor")):
             self.assertEqual(profile.symbol_family(symbol), ("Bundled libraries", library))
+        for symbol in ('mdf_decode_pixels','image-pixels.png','codecs.jpeg.decode','png.decode'):
+            self.assertEqual(profile.symbol_family(symbol), ('Bundled libraries','Zignal PNG/JPEG'))
+        for symbol in ('pango_shape_internal','_pango_cairo_font_private_get_scaled_font.lto_priv.0'):
+            self.assertEqual(profile.symbol_family(symbol), ('Bundled libraries','Pango'))
+        for symbol in ('cairo_create','_cairo_image_surface_create.lto_priv.0'):
+            self.assertEqual(profile.symbol_family(symbol), ('Bundled libraries','Cairo'))
 
     def test_native_diagram_symbols_are_attributed_separately_from_fltk(self):
         self.assertEqual(profile.symbol_family('_RNvC123_19mermaid_rs_renderer6render'),
@@ -959,10 +965,11 @@ class ProfileTests(unittest.TestCase):
             shared.write_bytes(b"actual shared library size")
             def command(arguments, **kwargs):
                 return f"libcairo.so.2 => {shared} (0x1234)" if arguments[0] == "ldd" else "1.2.3"
-            size_map = {"name": "mdf", "bytes": 7, "children": [{"name": "Bundled libraries", "bytes": 7, "children": [{"name": "FLTK", "bytes": 5}, {"name": "MD4C", "bytes": 2}]}]}
+            size_map = {"name": "mdf", "bytes": 10, "children": [{"name": "Bundled libraries", "bytes": 7, "children": [{"name": "FLTK", "bytes": 5}, {"name": "MD4C", "bytes": 2}]},
+                        {"name": "Language runtimes", "bytes": 3, "children": [{"name": "Zig std.json", "bytes": 3}]}]}
             with mock.patch.object(profile, "command_output", side_effect=command), \
                     mock.patch.object(profile, "binary_breakdown", return_value=size_map):
-                context = profile.project_context(project, binary, document, {"version": "test", "mode": "ReleaseFast"})
+                context = profile.project_context(project, binary, document, {"version": "test", "mode": "ReleaseFast", "metrics": {"json_engine": "std.json"}})
             libraries = {lib["name"]: lib for lib in context["libraries"]}
             self.assertEqual(context["binaries"], [profile.file_info(binary, "mdf")])
             self.assertNotIn("libmdf-extra.so", json.dumps(context))
@@ -971,6 +978,8 @@ class ProfileTests(unittest.TestCase):
             self.assertEqual(libraries["FLTK"]["bytes"], (sdk / "libfltk.a").stat().st_size)
             self.assertEqual(libraries["FLTK"]["linked_bytes"], 5)
             self.assertEqual(libraries["MD4C"]["linked_bytes"], 2)
+            self.assertNotIn("nlohmann JSON", libraries)
+            self.assertEqual(libraries["Zig std.json"]["linked_bytes"], 3)
             self.assertIsNone(libraries["cairo"]["linked_bytes"])
             self.assertEqual(libraries["MD4C"]["size_basis"], "included in executable")
             self.assertNotIn("sources", context)

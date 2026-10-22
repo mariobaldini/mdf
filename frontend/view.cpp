@@ -251,6 +251,8 @@ void DocumentView::adopt_fallback_font(std::unique_ptr<PreparedFont> font) {
   reflow_fonts(true);
 }
 void DocumentView::reflow_fonts(bool fallback) {
+  text_measurements.clear();
+  cached_words = 0;
   horizontal_dirty = true;
   const int anchor = index_at(scroll);
   const float delta = scroll - (offsets.empty() ? 0 : offsets[anchor]);
@@ -322,6 +324,8 @@ void DocumentView::reindex() {
   ++geometry_revision;
 }
 void DocumentView::invalidate() {
+  text_measurements.clear();
+  cached_words = 0;
   int anchor = index_at(scroll);
   float delta = scroll - (offsets.empty() ? 0 : offsets[anchor]);
   float available = std::max(40, w() - 48);
@@ -365,7 +369,27 @@ TextMetrics DocumentView::text_metrics(const Style &s, const char *text, size_t 
   if (s.monospace) return code_font.measure(text, length, s.size, (s.face - FL_FREE_FONT) & 3);
   if (fallback_font.ready() && needs_fallback({text, length}, bundled_coverage))
     return fallback_font.measure(text, length, s.size, (s.face - FL_FREE_FONT) & 3);
-  return {length ? float(fl_width(text, length)) : 0.f, float(fl_height()), float(fl_descent())};
+  const auto key = std::make_pair(s.face, s.size);
+  auto font = text_measurements.find(key);
+  if (font == text_measurements.end())
+    font = text_measurements.emplace(key, FontMeasurements{float(fl_height()), float(fl_descent()), {}}).first;
+  auto &metrics = font->second;
+  float width = 0;
+  if (length) {
+    if (length <= 128) {
+      std::string word(text, length);
+      auto found = metrics.widths.find(word);
+      if (found != metrics.widths.end()) width = found->second;
+      else {
+        width = float(fl_width(text, length));
+        if (cached_words < 2048) {
+          metrics.widths.emplace(std::move(word), width);
+          ++cached_words;
+        }
+      }
+    } else width = float(fl_width(text, length));
+  }
+  return {width, metrics.height, metrics.descent};
 }
 float DocumentView::prefix_width(const Run &run, size_t length) const {
   if (run.style.monospace && run.text == "\t") return length ? run.w : 0;
@@ -424,7 +448,7 @@ DocumentView::flow(const std::vector<Span> &ss, const Block &b, float left,
         if (gap < .01f) gap = stop;
         if (collect_runs)
           out.push_back({"\t", st, x, y + (line_h - metrics.height) / 2 + metrics.height - metrics.descent,
-                         gap, line_h, pos});
+                         gap, line_h, pos, metrics.height, metrics.descent});
         x += gap; ++pos; ++at;
         continue;
       }
@@ -451,7 +475,7 @@ DocumentView::flow(const std::vector<Span> &ss, const Block &b, float left,
         float asc = metrics.height - metrics.descent;
         if (collect_runs)
           out.push_back({word, st, x, y + (line_h - metrics.height) / 2 + asc,
-                         width_word, line_h, pos});
+                         width_word, line_h, pos, metrics.height, metrics.descent});
         x += width_word;
         pos += word.size();
       } else {
@@ -469,7 +493,7 @@ DocumentView::flow(const std::vector<Span> &ss, const Block &b, float left,
           if (collect_runs) out.push_back(
               {part, st, x,
                y + (line_h - glyph.height) / 2 + glyph.height - glyph.descent, cw,
-               line_h, pos});
+               line_h, pos, glyph.height, glyph.descent});
           x += cw;
           pos += n;
           p += n;
@@ -824,12 +848,10 @@ void DocumentView::draw() {
         float xx = origin_x + r.x, base = dy + r.y;
         fl_font(r.style.face, r.style.size);
         const bool fallback = fallback_font.ready() && needs_fallback(r.text, bundled_coverage);
-        const bool custom = r.style.monospace || fallback;
-        const auto metrics = text_metrics(r.style, custom ? r.text.data() : "", custom ? r.text.size() : 0);
-        float asc = metrics.height - metrics.descent, top = base - asc;
+        float asc = r.font_height - r.font_descent, top = base - asc;
         if (r.style.code || r.style.highlight) {
           fl_color(r.style.highlight ? rgb(0xebd77f) : palette.panel);
-          fl_rectf(xx - 1, top - 1, r.w + 2, metrics.height + 2);
+          fl_rectf(xx - 1, top - 1, r.w + 2, r.font_height + 2);
         }
         if (selection && r.pos != std::numeric_limits<size_t>::max()) {
           auto [a, b] = *selection;
@@ -841,7 +863,7 @@ void DocumentView::draw() {
             float sx = prefix_width(r, begin - r.pos),
                   sw = prefix_width(r, end - r.pos) - sx;
             fl_color(palette.selection);
-            fl_rectf(xx + sx, top, sw, metrics.height + 2);
+            fl_rectf(xx + sx, top, sw, r.font_height + 2);
           }
         }
         fl_color(r.style.color);

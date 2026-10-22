@@ -180,6 +180,20 @@ function sizeRectangles(items, x, y, width, height) {
   }
   return result;
 }
+function sizeName(node) {
+  const names = {'PNG': 'libpng · PNG', 'JPEG': 'IJG JPEG', 'ZLIB': 'zlib',
+    'nlohmann JSON': 'nlohmann/json', 'Zignal PNG/JPEG': 'Zignal · PNG/JPEG'};
+  const metrics = run().metrics ?? {};
+  if (node.name === 'Mermaid renderer' || node.name === 'Mermaid layout (zlib)') {
+    if (metrics.mermaid_engine === 'pozeiden') return `Pozeiden · ${node.name}`;
+    if ('rendered_diagrams' in metrics) return `mermaid-rs-renderer · ${node.name}`;
+  }
+  if (node.name === 'SVG rendering' || node.name === 'SVG rendering (zlib)') {
+    if (metrics.svg_engine === 'zig-svg') return `zig-svg + z2d · ${node.name}`;
+    if ('rendered_diagrams' in metrics) return `resvg/usvg · ${node.name}`;
+  }
+  return names[node.name] ?? node.name;
+}
 function sizeMap() {
   const root = report.project?.binary_size, chart = $('size-map');
   if (!root?.available || !chart.clientWidth) return;
@@ -188,10 +202,10 @@ function sizeMap() {
     'Unattributed code & alignment': [12, 43, 41], 'ELF format & loader': [221, 21, 39]};
   const current = sizePath.at(-1) ?? root;
   const width = chart.clientWidth, height = Math.max(350, Math.min(580, width * .52));
-  const svg = svgNode('svg', {viewBox: `0 0 ${width} ${height}`, width, height, role: 'group', 'aria-label': `File size treemap for ${current.name}`});
+  const svg = svgNode('svg', {viewBox: `0 0 ${width} ${height}`, width, height, role: 'group', 'aria-label': `File size treemap for ${sizeName(current)}`});
   const defs = svgNode('defs'); svg.append(defs);
   let sequence = 0;
-  const detail = (node, path) => text('size-detail', `${path.map(item => item.name).join(' / ')} · ${bytes(node.bytes)} · ${fmt(node.bytes / root.bytes * 100, 2)}% of ${root.name}`);
+  const detail = (node, path) => text('size-detail', `${path.map(sizeName).join(' / ')} · ${bytes(node.bytes)} · ${fmt(node.bytes / root.bytes * 100, 2)}% of ${root.name}`);
   const open = path => {sizePath = path; sizeMap();};
   const paint = (tile, path, shade, depth) => {
     const {node, x, y, width: w, height: h} = tile;
@@ -200,8 +214,8 @@ function sizeMap() {
     const [hue, saturation, lightness] = palette[group] ?? [215, 30, 40];
     const rect = svgNode('rect', {x, y, width: w, height: h, fill: `hsl(${hue} ${saturation}% ${lightness + shade}%)`, class: 'size-tile',
       tabindex: 0, role: 'button', 'data-size-name': node.name, 'data-size-bytes': node.bytes,
-      'aria-label': `${node.name}, ${bytes(node.bytes)}, ${fmt(node.bytes / root.bytes * 100)}% of executable${node.children ? ', explore group' : ''}`});
-    rect.append(svgNode('title', {}, `${next.map(item => item.name).join(' / ')}\n${node.bytes.toLocaleString()} bytes · ${fmt(node.bytes / root.bytes * 100)}% of ${root.name}`));
+      'aria-label': `${sizeName(node)}, ${bytes(node.bytes)}, ${fmt(node.bytes / root.bytes * 100)}% of executable${node.children ? ', explore group' : ''}`});
+    rect.append(svgNode('title', {}, `${next.map(sizeName).join(' / ')}\n${node.bytes.toLocaleString()} bytes · ${fmt(node.bytes / root.bytes * 100)}% of ${root.name}`));
     rect.addEventListener('pointerenter', () => detail(node, next));
     rect.addEventListener('focus', () => detail(node, next));
     const choose = () => {if (node.children) open(next); else detail(node, next);};
@@ -211,7 +225,7 @@ function sizeMap() {
     const clip = svgNode('clipPath', {id: key});
     clip.append(svgNode('rect', {x: x + 5, y: y + 3, width: Math.max(0, w - 10), height: Math.max(0, h - 6)})); defs.append(clip);
     if (w >= 42 && h >= 24) {
-      const label = node.children ? `${node.name} · ${bytes(node.bytes)}` : node.name;
+      const label = node.children ? `${sizeName(node)} · ${bytes(node.bytes)}` : sizeName(node);
       const cut = Math.max(3, Math.floor((w - 12) / 6.8));
       svg.append(svgNode('text', {x: x + 7, y: y + 17, class: 'size-name', 'clip-path': `url(#${key})`}, label.length > cut ? label.slice(0, cut - 1) + '…' : label));
     }
@@ -227,7 +241,7 @@ function sizeMap() {
   $('size-path').replaceChildren();
   [root, ...sizePath].forEach((node, index) => {
     if (index) $('size-path').append(document.createTextNode('›'));
-    const button = document.createElement('button'); button.type = 'button'; button.textContent = node.name;
+    const button = document.createElement('button'); button.type = 'button'; button.textContent = sizeName(node);
     button.setAttribute('aria-current', index === sizePath.length ? 'location' : 'false');
     button.addEventListener('click', () => open(sizePath.slice(0, index))); $('size-path').append(button);
   });

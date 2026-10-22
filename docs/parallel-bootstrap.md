@@ -31,6 +31,10 @@ flowchart TD
 The dependency list comes from the built engine. The system loader still resolves its libraries normally, including `LD_LIBRARY_PATH`.
 The library worker retains its handles for process lifetime. Function bindings remain lazy, as in the previous native executable.
 Failed preloads do not conceal the UI loader's final error.
+While the library worker loads the dependency graph, the UI-image worker can request read-ahead for common text-library files.
+These advisory opens use standard x86-64 library directories. They do not load code or choose the libraries used by `dlopen`.
+Missing paths are ignored. The worker stops issuing hints when dependency loading finishes.
+The ordinary loader retains its search rules, including `LD_LIBRARY_PATH`.
 The image-preparation worker copies the raw UI ELF into a sealed executable memfd. It performs no decompression or named-file extraction.
 The runtime therefore requires permission to create executable memfds for every GUI launch.
 It waits for the library worker before loading the engine from `/proc/self/fd/`.
@@ -43,6 +47,8 @@ Library constructors run during worker loading; review their thread requirements
 After sending the initial window requests, the main thread prepares Cairo/shared-memory buffers and visible Markdown layout while the compositor configures the window.
 The driver checks the window's own state. A readable Wayland display can contain keyboard or output events and must not suppress preparation.
 The normal paint reuses the prepared layout. Existing resize and scale handling invalidate it when the final geometry differs.
+The first shared pool reserves the page-rounded viewport size while keeping the original backing-storage guarantee.
+The main window draws directly into available shared memory. A repaint detaches to private storage if the compositor still owns that buffer.
 `MDF_PREPARE_FRAME=OFF` disables this preparation for diagnostics; the default is on.
 
 The launcher owns the core until the UI returns. The UI borrows it and consumes the pending document packet exactly once.
@@ -60,9 +66,11 @@ The critical path follows nested worker handoffs and chooses the later prerequis
 Nested calls and concurrent branches are not added to wall time twice.
 
 `make test-launcher` checks the private ABI, libc-only dependency boundary, malformed modules, and packing.
+`make test-buffers` checks shared-pixel ownership without a compositor.
 `make test-gui` checks the standalone executable, rendering, fonts, and presentation gates.
 `make test-packages` checks the host and every embedded module against the declared glibc requirement.
 Use paired cold runs of the preserved and new binaries to judge first Markdown commit/flush and full readiness.
+The [text stack guide](text-stack.md) describes bundled Pango and bounded measurement reuse.
 An earlier `main` or a later empty scaffold does not establish whether document rendering improved.
 
 For an ABI change, update `frontend/launch.h`, the launcher, and the engine together.

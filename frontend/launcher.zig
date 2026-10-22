@@ -188,6 +188,7 @@ const Ui = struct {
         if (c.fcntl(memory, c.F_ADD_SEALS, @as(c_int, c.F_SEAL_WRITE | c.F_SEAL_GROW | c.F_SEAL_SHRINK | c.F_SEAL_SEAL)) != 0)
             return error.CannotSealUiEngine;
         event("Prepare anonymous UI image", 7, started, false);
+        self.readAhead();
         if (self.dependencies_done.load(.acquire) == 0) {
             const waiting = mdf_now_ns();
             _ = wait(&self.dependencies_done);
@@ -199,6 +200,38 @@ const Ui = struct {
         var buffer: [64]u8 = undefined;
         const path = try std.fmt.bufPrintSentinel(&buffer, "/proc/self/fd/{d}", .{memory}, 0);
         try self.bind(path.ptr);
+    }
+
+    // Optional cold-load hints. Normal dlopen retains authority over
+    // soname resolution and custom library paths; these opens execute no code.
+    fn readAhead(self: *Ui) void {
+        if (self.dependencies_done.load(.acquire) != 0) return;
+        const began = mdf_now_ns();
+        const names = [_][]const u8{
+            "libpango-1.0.so.0", "libpangoft2-1.0.so.0", "libcairo.so.2",
+            "libharfbuzz.so.0",  "libfontconfig.so.1",   "libfreetype.so.6",
+            "libglib-2.0.so.0",  "libgobject-2.0.so.0",  "libgio-2.0.so.0",
+            "libpixman-1.so.0",  "libfribidi.so.0",      "libthai.so.0",
+            "libpcre2-8.so.0",   "libffi.so.8",          "libgraphite2.so.3",
+            "libxml2.so.2",
+        };
+        for (names) |name| {
+            if (self.dependencies_done.load(.acquire) != 0) break;
+            // Bundled Cairo is already in the prepared UI image. Avoid reading
+            // an unused system Cairo and its pages during that build's launch.
+            if (std.mem.eql(u8, name, "libcairo.so.2") and
+                std.mem.indexOf(u8, self.dependencies[0..self.dependencies_len], "libcairo.so.2\x00") == null) continue;
+            for ([_][]const u8{ "/lib64/", "/usr/lib64/", "/lib/x86_64-linux-gnu/", "/usr/lib/x86_64-linux-gnu/" }) |directory| {
+                var buffer: [128]u8 = undefined;
+                const path = std.fmt.bufPrintSentinel(&buffer, "{s}{s}", .{ directory, name }, 0) catch continue;
+                const fd = c.open(path.ptr, c.O_RDONLY | c.O_CLOEXEC | c.O_NONBLOCK);
+                if (fd < 0) continue;
+                _ = c.posix_fadvise(fd, 0, 0, c.POSIX_FADV_WILLNEED);
+                _ = c.close(fd);
+                break;
+            }
+        }
+        event("Read ahead text-library pages", 7, began, false);
     }
 
     fn bind(self: *Ui, path: [*:0]const u8) !void {

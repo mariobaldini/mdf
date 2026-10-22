@@ -15,6 +15,14 @@ for path in Path(sys.argv[1]).glob('*.log'):
     m=run['metrics']
     assert 0 < m['first_document_commit_ms'] <= m['first_document_flush_ms'] <= m['first_document_ms'] <= m['first_frame_ms'],path
     assert m['input_ready'],path
+    if os.environ.get('MDF_TEST_CURSOR_SHAPES'):
+        assert m['cursor_backend']=='compositor-shape',path
+        assert any(e['name']=='Compositor cursor shapes ready' for e in run['events']),path
+        assert not any(e['name']=='Load Wayland cursor theme' for e in run['events']),path
+    elif 'cursor_backend' in m:
+        assert m['cursor_backend']=='theme',path
+    if m.get('drawing_buffers')=='shared-until-busy':
+        assert any(e['name']=='Create shared Cairo drawing surface' for e in run['events']),path
     for name in ('monospace_request_ms','fallback_request_ms'):
         if name in m: assert m[name] > m['first_document_ms'],(path,name)
     if m.get('diagram_module_loaded'):

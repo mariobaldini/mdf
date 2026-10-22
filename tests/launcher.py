@@ -33,12 +33,25 @@ def main():
         temp=Path(directory)
         app=temp/'mdf';shutil.copy2(binary,app)
         engine=temp/'ui.so';engine.write_bytes(image['data'][ui['offset']:ui['offset']+ui['bytes']])
+        engine.chmod(0o700)
         assert struct.unpack_from('<HH',engine.read_bytes(),16)==(3,62)
         exports=subprocess.check_output(['nm','-D','--defined-only',str(engine)],text=True)
         assert [line.split()[-1] for line in exports.splitlines()]==['mdf_frontend_api']
         host_symbols={line.split()[-1] for line in subprocess.check_output(['nm','-D','--defined-only',str(binary)],text=True).splitlines()}
         imports={line.split()[-1] for line in subprocess.check_output(['nm','-D','--undefined-only',str(engine)],text=True).splitlines()}
         assert {name for name in imports if name.startswith('mdf_')} <= host_symbols
+        dependencies=subprocess.check_output(['readelf','-Wd',str(engine)],text=True)
+        pango_dependencies=[line for line in dependencies.splitlines() if '(NEEDED)' in line and 'libpango' in line]
+        if not pango_dependencies:
+            assert not any(name.startswith(('pango_','_pango_')) for name in imports)
+            assert 'libgio-2.0.so.0' in dependencies  # Real upstream GListModel support.
+            print('PASS: one private bundled Pango implementation; no system Pango dependency or leaked exports')
+        if 'libcairo.so.' not in dependencies:
+            assert not any(name.startswith('cairo_') for name in imports)
+            closure=subprocess.check_output(['ldd',str(engine)],text=True)
+            assert not any(name in closure for name in ('libcairo.so.', 'libX11.so.', 'libXext.so.', 'libXrender.so.', 'libxcb', 'libXau.so.'))
+            assert 'libpixman-1.so.0' in closure
+            print('PASS: private minimal Cairo; no external Cairo or X11/XCB dependency')
         for flag,expected in [('--version','mdf 0.2.0'),('--help','Usage: mdf'),('--licenses','Pozeiden')]:
             run=subprocess.run([str(app),flag],cwd=temp,capture_output=True,text=True,timeout=10)
             assert run.returncode==0 and expected in run.stdout,(flag,run.stderr)

@@ -12,13 +12,25 @@ export CCACHE_DIR="$MDF_ROOT/build/.ccache"
 mdf_core="$MDF_ROOT/build/fltk-core/$mdf_mode"
 mdf_sdk="$MDF_ROOT/build/fltk/$mdf_mode"
 mdf_ui="$MDF_ROOT/build/fltk-ui/$mdf_mode"
+mdf_text="$MDF_ROOT/build/pango/$mdf_mode"
+mdf_cairo="$MDF_ROOT/build/cairo/$mdf_mode"
+if [ "${MDF_BUNDLED_CAIRO:-ON}" = ON ];then
+    if [ "${MDF_BUNDLED_PANGO:-ON}" != ON ];then
+        printf '%s\n' 'Bundled Cairo requires bundled Pango. Set MDF_BUNDLED_CAIRO=OFF for a system-Pango comparison.' >&2
+        exit 1
+    fi
+    python3 scripts/build-cairo.py --build-dir "$mdf_cairo" --mode "$mdf_mode"
+fi
+if [ "${MDF_BUNDLED_PANGO:-ON}" = ON ];then
+    python3 scripts/build-text-stack.py --build-dir "$mdf_text" --mode "$mdf_mode"
+fi
 printf 'Building Zig core, renderers and fonts (%s, offline)...\n' "$mdf_mode"
 "$ZIG" build --system zig-pkg --cache-dir build/.zig-cache "-Dtarget=$MDF_TARGET" -Dcpu=baseline "-Doptimize=$mdf_mode" --prefix "$mdf_core"
 rm -f "$mdf_core/bin/libmdf-extra.so"
 mdf_lib="$mdf_core/lib"
 if [ "$mdf_lto" = ON ];then
     mkdir -p "$mdf_core/native"
-    for mdf_archive in mdf-core mdf-pozeiden mdf-svg;do
+    for mdf_archive in mdf-core mdf-pozeiden mdf-svg mdf-image;do
         "$ZIG" ld.lld -r -O3 --lto-O3 --whole-archive "$mdf_lib/lib$mdf_archive.a" --no-whole-archive -o "$mdf_core/native/$mdf_archive.o"
         rm -f "$mdf_core/native/lib$mdf_archive.next.a"
         "$ZIG" ar rcs "$mdf_core/native/lib$mdf_archive.next.a" "$mdf_core/native/$mdf_archive.o"
@@ -50,9 +62,12 @@ cmake -S frontend -B "$mdf_ui" -G Ninja \
     -DCMAKE_C_COMPILER="${MDF_CC:-/usr/bin/gcc}" -DCMAKE_CXX_COMPILER="${MDF_CXX:-/usr/bin/g++}" \
     "-DCMAKE_BUILD_TYPE=$mdf_cmake_mode" "-DFLTK_DIR=$mdf_sdk" "-DMDF_CORE_DIR=$mdf_lib" \
     "-DMDF_FLTK_PATCH_ID=$mdf_fltk_patch" \
+    "-DMDF_BUNDLED_PANGO=${MDF_BUNDLED_PANGO:-ON}" "-DMDF_PANGO_BUILD=$mdf_text" \
+    "-DMDF_BUNDLED_CAIRO=${MDF_BUNDLED_CAIRO:-ON}" "-DMDF_CAIRO_BUILD=$mdf_cairo" \
     "-DMDF_ASYNC_INPUT=${MDF_ASYNC_INPUT:-ON}" "-DMDF_PREPARE_FRAME=${MDF_PREPARE_FRAME:-ON}" \
+    "-DMDF_SHARED_DRAWING=${MDF_SHARED_DRAWING:-ON}" \
     "-DMDF_MERMAID_LIBRARY=$mdf_lib/libmdf-pozeiden.a" \
-    "-DMDF_SVG_LIBRARY=$mdf_lib/libmdf-svg.a"
+    "-DMDF_SVG_LIBRARY=$mdf_lib/libmdf-svg.a" "-DMDF_IMAGE_LIBRARY=$mdf_lib/libmdf-image.a"
 cmake --build "$mdf_ui" --parallel "${MDF_BUILD_JOBS:-2}"
 mkdir -p "$mdf_prefix/bin"
 cp "$mdf_core/bin/mdf-launcher" "$mdf_prefix/bin/mdf.new"

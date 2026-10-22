@@ -89,13 +89,17 @@ def benchmark(before, after, output, batches, pairs, policy='startup', documents
         symbols=path.with_name(path.name+'.debug')
         if symbols.is_file():
             (directory/(variant+'-mdf.debug')).write_bytes(symbols.read_bytes())
+        ui_symbols=path.with_name(path.name+'-ui.debug')
+        if ui_symbols.is_file():
+            (directory/(variant+'-mdf-ui.debug')).write_bytes(ui_symbols.read_bytes())
     with zipfile.ZipFile(directory/'sources.zip','w',zipfile.ZIP_DEFLATED) as bundle:
         for pattern in ('src/*.zig','frontend/*.cpp','frontend/*.hpp','frontend/*.c','frontend/*.h',
                         'frontend/CMakeLists.txt','frontend/core-build.zig','frontend/dependencies.json','frontend/diagram-module.map','frontend/patches/fltk/*',
-                        'frontend/pozeiden.zig','frontend/svg.zig','frontend/launcher.zig','frontend/frontend.map','assets/licenses/*',
+                        'frontend/pozeiden.zig','frontend/svg.zig','frontend/image-pixels.zig','frontend/launcher.zig','frontend/frontend.map','assets/licenses/*',
                         'modules/pozeiden/**/*.zig','modules/pozeiden/build.zig.zon','modules/pozeiden/**/*.langium','modules/pozeiden/LICENSE','.gitmodules',
                         'modules/zig-svg/**/*.zig','modules/zig-svg/build.zig.zon','modules/zig-svg/LICENSES/*',
-                        'scripts/build-frontend.sh','scripts/prepare-mvzr.py','scripts/prepare-fltk.py','scripts/pack-diagram.py','scripts/pack-frontend.py','scripts/pack-font.py'):
+                        'modules/zignal/**/*.zig','modules/zignal/build.zig.zon','modules/zignal/LICENSE','scripts/prepare-zignal.py',
+                        'tests/text-layout.hpp','tests/cairo.cpp','docs/text-stack.md','docs/cairo.md','scripts/build-cairo.py','scripts/build-text-stack.py','scripts/build-frontend.sh','scripts/prepare-mvzr.py','scripts/prepare-fltk.py','scripts/pack-diagram.py','scripts/pack-frontend.py','scripts/pack-font.py'):
             for path in sorted(ROOT.glob(pattern)):
                 if path.is_file():bundle.write(path,path.relative_to(ROOT))
     documents=documents or [ROOT/'SAMPLE.md',ROOT/'SAMPLE-HUGE.md']

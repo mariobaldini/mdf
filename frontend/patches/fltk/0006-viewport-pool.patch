@@ -1,0 +1,58 @@
+--- a/src/drivers/Wayland/Fl_Wayland_Graphics_Driver.H
++++ b/src/drivers/Wayland/Fl_Wayland_Graphics_Driver.H
+@@ -61,6 +61,7 @@
+   static struct wld_buffer *create_wld_buffer(int width, int height, bool with_shm = true, bool shared_drawing = false);
+   static void mdf_make_writable(wld_buffer *buffer);
+   static void create_shm_buffer(wld_buffer *buffer);
++  static size_t mdf_pool_size(size_t bytes, bool compact);
+   static void buffer_release(struct wld_window *window);
+   static void buffer_commit(struct wld_window *window, cairo_region_t *r = NULL);
+   static void cairo_init(struct draw_buffer *buffer, int width, int height, int stride,
+--- a/src/drivers/Wayland/Fl_Wayland_Graphics_Driver.cxx
++++ b/src/drivers/Wayland/Fl_Wayland_Graphics_Driver.cxx
+@@ -24,6 +24,7 @@
+ #include <errno.h>
+ #include <string.h> // for strerror()
+ #include <cairo/cairo.h>
++#include <limits.h>
+ 
+ extern "C" {
+ #  include "../../../libdecor/src/os-compatibility.h" // for libdecor_os_create_anonymous_file()
+@@ -49,6 +50,15 @@
+   buffer_release_listener
+ };
+ 
++
++size_t Fl_Wayland_Graphics_Driver::mdf_pool_size(size_t bytes, bool compact) {
++  // Wayland's pool size and buffer offsets use signed 32-bit integers.
++  const size_t page = 4096, maximum = size_t(INT_MAX) & ~(page - 1);
++  if (!bytes || bytes > maximum) return 0;
++  if (compact) return (bytes + page - 1) & ~(page - 1);
++  if (bytes <= 10000000) return 10000000;
++  return bytes <= maximum / 2 ? 2 * bytes : bytes;
++}
+ 
+ void Fl_Wayland_Graphics_Driver::create_shm_buffer(Fl_Wayland_Graphics_Driver::wld_buffer *buffer) {
+   MDF_TRACE("Allocate Wayland shared buffer");
+@@ -75,9 +85,8 @@
+       free(pool_data);
+     }
+     chunk_offset = 0;
+-    pool_size = default_pool_size;
+-    if (buffer->draw_buffer.data_size > pool_size)
+-      pool_size = 2 * buffer->draw_buffer.data_size; // a larger pool is needed
++    pool_size = mdf_pool_size(buffer->draw_buffer.data_size, buffer->mdf_shared_drawing);
++    if (!pool_size) Fl::fatal("Wayland shared buffer exceeds the protocol size limit");
+     int fd = libdecor_os_create_anonymous_file(pool_size);
+     if (fd < 0) {
+       Fl::fatal("libdecor_os_create_anonymous_file failed: %s\n", strerror(errno));
+@@ -119,8 +128,8 @@
+     buffer->draw_buffer.width = width;
+     buffer->draw_buffer.stride = stride;
+     buffer->draw_buffer.data_size = size_t(stride) * height;
++    buffer->mdf_shared_drawing = true;
+     create_shm_buffer(buffer);
+-    buffer->mdf_shared_drawing = true;
+     cairo_init(&buffer->draw_buffer, width, height, stride, cairo_format, (unsigned char *)buffer->data);
+   } else cairo_init(&buffer->draw_buffer, width, height, stride, cairo_format);
+   buffer->draw_buffer_needs_commit = true;

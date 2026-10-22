@@ -4,13 +4,12 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
-#include <nlohmann/json.hpp>
+#include "json.hpp"
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
-using Json = nlohmann::json;
 extern "C" {
 struct MdfBlockView {
   Buffer kind, prefix, language, anchor, alert, image_src;
@@ -64,9 +63,9 @@ inline Json take_json(Buffer b) {
     Buffer b;
     ~Release() { mdf_buffer_free(b); }
   } release{b};
-  Json j = Json::parse(b.ptr, b.ptr + b.len);
+  Json j = Json::parse(b.ptr, b.len);
   if (j.contains("err"))
-    throw std::runtime_error(j["err"].get<std::string>());
+    throw std::runtime_error(j.get("err").as<std::string>());
   return j;
 }
 struct Core {
@@ -156,9 +155,9 @@ struct Phase {
 #define PROFILE_MARK(name) do { if (profile_enabled) mdf_profile_signal(profile_track, \
     (const unsigned char *)name, std::strlen(name), (const unsigned char *)__FILE__, \
     std::strlen(__FILE__), __LINE__, mdf_now_ns()); } while (0)
-inline std::string text(const Json &j, const char *name, const char *def = "") {
-  auto i = j.find(name);
-  return i != j.end() && i->is_string() ? i->get<std::string>() : def;
+inline std::string text(const JsonView &j, const char *name, const char *def = "") {
+  auto value = j.get(name);
+  return value.is_string() ? value.as<std::string>() : def;
 }
 struct Span {
   std::string text, link;
@@ -255,7 +254,7 @@ struct Settings {
     width = text(j, "max_width", "percent_80");
     size = j.value("font_size", 12);
     if (j.contains("window")) {
-      auto &w = j["window"];
+      auto w = j.get("window");
       window_w = w.value("width", 1040);
       window_h = w.value("height", 780);
       maximized = w.value("maximized", false);

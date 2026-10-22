@@ -2,6 +2,9 @@
 
 A fast, minimal Markdown viewer for Linux with Wayland, including Fedora 44.
 It uses FLTK 1.4.5 with Cairo/Pango for the GUI and Zig with MD4C for document processing.
+The used Pango Cairo/Fontconfig code is linked into the private UI engine.
+The [text stack guide](docs/text-stack.md) describes its pinned build and relinking procedure.
+The [Cairo guide](docs/cairo.md) describes the bundled image/font renderer and disabled backends.
 It requires a Wayland compositor. If Wayland is unavailable, the viewer exits with a clear error.
 It opens local documents, reloads after saves, and ships as a single `mdf` executable.
 Mermaid and local vector/text SVG rendering use separate compressed modules inside that executable.
@@ -49,7 +52,7 @@ The UI engine is uncompressed and loads from anonymous memory. The distribution 
 The GUI prepares first-frame buffers and visible layout while the compositor configures the window, then reuses that layout for painting.
 See [parallel startup](docs/parallel-bootstrap.md) for the ABI, ownership, profiling, and upgrade rules.
 Navigation preparation starts when the document is adopted, before waiting for that frame.
-A separate worker decodes PNG/JPEG pixels while the GUI handles window events and draws navigation.
+A separate worker decodes PNG/JPEG pixels with Zig/Zignal while the GUI handles window events and draws navigation.
 That worker also renders fenced `mermaid` diagrams through Pozeiden and zig-svg/z2d, all written in Zig.
 Diagrams use embedded Open Sans and adapt to light/dark mode. SVG text has limited font fallback and no complex-script shaping.
 Explicit RTL or vertical SVG text produces a readable error. Arabic joining and automatic missing-glyph fallback remain unsupported in SVG labels.
@@ -75,7 +78,7 @@ The [FLTK patch guide](frontend/patches/fltk/README.md) records the upstream ver
 
 ## Install
 
-For a Wayland desktop on Linux x86_64 with glibc 2.38 or later, Cairo, Pango, Fontconfig, and libxkbcommon.
+For a Wayland desktop on Linux x86_64 with glibc 2.38 or later, Pixman, GLib/GIO, FriBidi, libthai, HarfBuzz, Fontconfig, FreeType, and libxkbcommon.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/mariobaldini/mdf/main/tools/installer.sh | bash
@@ -108,6 +111,9 @@ Pozeiden 0.4.1 is pinned in `modules/pozeiden`. Its public license is PolyForm N
 Commercial use requires separate permission from its author. The [upstream licensing guide](modules/pozeiden/LICENSING.md) explains these terms.
 `mdf --licenses` includes the complete license and required notice.
 zig-svg 0.2.0 is pinned in `modules/zig-svg`. It uses MIT, and its z2d dependency uses MPL 2.0.
+Zignal 0.11.0 is pinned in `modules/zignal` under MIT. The [decoder guide](docs/image-decoding.md) covers ownership, limits, and source fixes.
+
+JSON uses Zig's `std.json`, with a [C++ ownership binding](docs/json-boundary.md). No external JSON library is required.
 The build requires no Rust compiler or Cargo.
 
 ### Uninstall
@@ -123,15 +129,21 @@ For a source installation, `make uninstall` removes the executable, any retired 
 
 ```sh
 make run-sample
-make test
+make tests
 make test-gui
 ```
 
 - `make setup` installs missing dependencies and downloads pinned libraries.
 - `make check-requirements` reports missing dependencies and Fedora installation commands.
-- `make build` compiles the Debug version offline into `build/bin/`. Intermediate files and compiler caches stay under `build/`.
-- `make test` runs core and workflow tests. `make test-gui` checks the native GUI in an isolated headless Wayland compositor.
-- `make test-images` compares bundled PNG/JPEG decoding against FLTK and checks worker cancellation and pixel ownership. It is included in `make test-gui`.
+- `make build` runs the unit tests in the selected build mode, then compiles offline into `build/bin/`. The default mode is Debug. Failed tests stop the build before it replaces the executable.
+- `make tests` checks the optimized executable and runs unit tests in Debug, ReleaseSafe, and ReleaseFast. It needs no compositor. `make test` remains an alias.
+- `make test-unit` runs just the unit tests in the selected mode. Compiled test binaries are cached, but the tests execute on every invocation.
+- New unit cases live under `tests/unit/`. They cover Markdown, links, settings, layout, navigation, files, the JSON ABI, and profiling. Existing source tests remain enabled.
+- `make test-gui` checks the native GUI in an isolated headless Wayland compositor. Intermediate files and compiler caches stay under `build/`.
+- `make test-images` compares PNG pixels exactly and bounds JPEG differences against the original decoder. It also checks cancellation and pixel ownership.
+- `make test-codecs` checks the pinned Zignal module and PNG compatibility fixes in Debug mode. It is included in `make test`.
+- `make test-json` checks the native JSON boundary and validates its output with Python. It is included in `make test`.
+- `make test-buffers` checks first-frame shared drawing and detachment before repainting compositor-owned pixels. It is included in `make tests`.
 - `make test-monospace` checks system font matching, fixed-width styles, uncached discovery without cache writes, missing-font fallback, cancellation, and resource ownership. It needs an installed monospace font and is included in `make test-gui`.
 - `make test-mermaid` checks all 17 Pozeiden families in light/dark mode, unsupported types, malformed input, limits, and dependency notices.
 - `make test-svg` checks SVG rasterization, font styles, malformed input, and allocation limits. Both targets are included in `make test`.
@@ -211,7 +223,7 @@ Waits and untraced intervals have separate blocks. Untraced intervals retain the
 The eager startup graph connects document adoption to navigation preparation, then navigation readiness to image decoding.
 Optional results that are already ready can share the first useful frame. Work that is still pending does not delay the Markdown viewport.
 Milestones from one submitted frame share a graph node, rather than appearing as fictitious serial paints.
-The image/diagram worker owns its source buffers and rendered pixels. It uses the bundled codecs and native Mermaid/SVG libraries, then sends a GUI wakeup.
+The image/diagram worker owns its source buffers and rendered pixels. It uses Zig/Zignal codecs and native Mermaid/SVG libraries, then sends a GUI wakeup.
 Pozeiden calculates Mermaid layout in Zig with estimated label widths. It does not measure the actual font metrics.
 SVG uses in-memory font callbacks. The image worker receives anonymous font data and does no system font discovery.
 The host rejects embedded images and external resources, including unused definitions. The SVG renderer performs no file or network I/O.

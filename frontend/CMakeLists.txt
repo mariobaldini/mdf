@@ -4,10 +4,46 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 option(MDF_ASYNC_INPUT "Prepare keyboard resources asynchronously and defer startup cursors" ON)
 option(MDF_PREPARE_FRAME "Prepare the first frame during compositor configuration" ON)
+option(MDF_SHARED_DRAWING "Draw into available Wayland shared memory" ON)
+option(MDF_BUNDLED_PANGO "Link the used Cairo/Fontconfig Pango code into the private UI" ON)
+option(MDF_BUNDLED_CAIRO "Link Cairo image/font backends without X11 or export backends" ON)
 set(MDF_FLTK_PATCH_ID "unknown" CACHE STRING "Identity of the pinned MDF FLTK patches")
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(NATIVE REQUIRED IMPORTED_TARGET pangocairo pangoft2 fontconfig)
 find_package(FLTK 1.4 REQUIRED CONFIG PATHS "${FLTK_DIR}" NO_DEFAULT_PATH)
+add_library(mdf-drawing INTERFACE)
+if(MDF_BUNDLED_CAIRO)
+  if(NOT MDF_BUNDLED_PANGO)
+    message(FATAL_ERROR "Bundled Cairo requires bundled Pango. Use MDF_BUNDLED_CAIRO=OFF for system Pango.")
+  endif()
+  pkg_check_modules(CAIRO_DEPS REQUIRED IMPORTED_TARGET pixman-1 fontconfig freetype2)
+  target_include_directories(mdf-drawing INTERFACE
+    "${MDF_CAIRO_BUILD}/src" "${CMAKE_CURRENT_SOURCE_DIR}/../zig-pkg/cairo/src")
+  target_link_libraries(mdf-drawing INTERFACE "${MDF_CAIRO_BUILD}/src/libcairo.a" PkgConfig::CAIRO_DEPS m dl)
+  get_target_property(mdf_fltk_links fltk::fltk INTERFACE_LINK_LIBRARIES)
+  list(FILTER mdf_fltk_links EXCLUDE REGEX "(^|/)libcairo\\.so($|\\.)")
+  set_property(TARGET fltk::fltk PROPERTY INTERFACE_LINK_LIBRARIES "${mdf_fltk_links}")
+else()
+  pkg_check_modules(CAIRO_SYSTEM REQUIRED IMPORTED_TARGET cairo)
+  target_link_libraries(mdf-drawing INTERFACE PkgConfig::CAIRO_SYSTEM)
+endif()
+add_library(mdf-text INTERFACE)
+if(MDF_BUNDLED_PANGO)
+  pkg_check_modules(TEXT_DEPS REQUIRED IMPORTED_TARGET fontconfig freetype2 harfbuzz glib-2.0 gobject-2.0 gio-2.0 fribidi libthai)
+  target_include_directories(mdf-text INTERFACE
+    "${CMAKE_CURRENT_SOURCE_DIR}/../zig-pkg/pango" "${MDF_PANGO_BUILD}")
+  target_link_libraries(mdf-text INTERFACE -Wl,--start-group
+    "${MDF_PANGO_BUILD}/pango/libpangocairo-1.0.a"
+    "${MDF_PANGO_BUILD}/pango/libpangoft2-1.0.a"
+    "${MDF_PANGO_BUILD}/pango/libpango-1.0.a" -Wl,--end-group mdf-drawing PkgConfig::TEXT_DEPS)
+  # The static FLTK SDK still advertises its original system Pango links.
+  # Keep its other dependencies; resolve all Pango calls with this one copy.
+  get_target_property(mdf_fltk_links fltk::fltk INTERFACE_LINK_LIBRARIES)
+  list(FILTER mdf_fltk_links EXCLUDE REGEX "(^|/)libpango(cairo|ft2)?-1\\.0\\.so($|\\.)")
+  set_property(TARGET fltk::fltk PROPERTY INTERFACE_LINK_LIBRARIES "${mdf_fltk_links}")
+else()
+  target_link_libraries(mdf-text INTERFACE PkgConfig::NATIVE)
+endif()
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 # FLTK/codecs are static and desktop dependencies are system libraries. Do not
 # make the loader probe the private SDK build directory for every system .so.
@@ -56,13 +92,18 @@ function(mdf_embed_diagram target)
         --binary "$<TARGET_FILE:${target}>" --payload "${payload}" --objcopy "${CMAKE_OBJCOPY}" VERBATIM)
   endforeach()
 endfunction()
-add_library(mdf-ui SHARED main.cpp view.cpp profile.cpp startup.cpp images.cpp diagrams.cpp bundled-fonts.cpp monospace.cpp image-pixels.c compat.c)
+add_library(mdf-ui SHARED main.cpp view.cpp profile.cpp startup.cpp images.cpp diagrams.cpp bundled-fonts.cpp monospace.cpp compat.c)
+add_dependencies(mdf-ui mdf-mermaid-payload mdf-svg-payload)
 target_compile_definitions(mdf-ui PRIVATE MDF_ASYNC_INPUT=$<BOOL:${MDF_ASYNC_INPUT}>
-  MDF_PREPARE_FRAME=$<BOOL:${MDF_PREPARE_FRAME}> MDF_FLTK_PATCH_ID="${MDF_FLTK_PATCH_ID}")
-target_include_directories(mdf-ui PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../zig-pkg" "${FLTK_INCLUDE_DIRS}")
+  MDF_PREPARE_FRAME=$<BOOL:${MDF_PREPARE_FRAME}> MDF_SHARED_DRAWING=$<BOOL:${MDF_SHARED_DRAWING}>
+  MDF_BUNDLED_PANGO=$<BOOL:${MDF_BUNDLED_PANGO}>
+  MDF_BUNDLED_CAIRO=$<BOOL:${MDF_BUNDLED_CAIRO}>
+  MDF_FLTK_PATCH_ID="${MDF_FLTK_PATCH_ID}")
+target_include_directories(mdf-ui PRIVATE "${FLTK_INCLUDE_DIRS}")
 # Core C symbols resolve from the launcher; keeping one core avoids duplicate
 # workers, allocators and profiling state across the module boundary.
-target_link_libraries(mdf-ui PRIVATE fltk::images fltk::fltk fltk::z PkgConfig::NATIVE m dl pthread)
+target_link_libraries(mdf-ui PRIVATE "${MDF_IMAGE_LIBRARY}" fltk::images fltk::fltk fltk::z mdf-text m dl pthread)
+set_property(TARGET mdf-ui APPEND PROPERTY LINK_DEPENDS "${MDF_IMAGE_LIBRARY}")
 target_link_options(mdf-ui PRIVATE -Wl,--gc-sections -Wl,--wrap=select -Wl,--wrap=poll -static-libstdc++ -static-libgcc)
 target_link_options(mdf-ui PRIVATE -Wl,--wrap=wl_display_dispatch -Wl,--wrap=wl_display_roundtrip)
 target_link_options(mdf-ui PRIVATE -Wl,--wrap=acosf -Wl,--wrap=atan2f
@@ -82,9 +123,15 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release")
     VERBATIM)
 endif()
 
-add_executable(mdf-image-tests EXCLUDE_FROM_ALL ../tests/image-decode.cpp images.cpp diagrams.cpp bundled-fonts.cpp image-pixels.c compat.c)
+add_executable(mdf-json-tests EXCLUDE_FROM_ALL ../tests/json.cpp)
+target_link_libraries(mdf-json-tests PRIVATE "${MDF_CORE_DIR}/libmdf-core.a" m dl pthread)
+set_property(TARGET mdf-json-tests APPEND PROPERTY LINK_DEPENDS "${MDF_CORE_DIR}/libmdf-core.a")
+target_compile_options(mdf-json-tests PRIVATE -UNDEBUG)
+
+add_executable(mdf-image-tests EXCLUDE_FROM_ALL ../tests/image-decode.cpp images.cpp diagrams.cpp bundled-fonts.cpp compat.c)
 target_include_directories(mdf-image-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../zig-pkg")
-target_link_libraries(mdf-image-tests PRIVATE "${MDF_CORE_DIR}/libmdf-core.a" fltk::images fltk::fltk fltk::z PkgConfig::NATIVE m dl pthread)
+target_link_libraries(mdf-image-tests PRIVATE "${MDF_CORE_DIR}/libmdf-core.a" "${MDF_IMAGE_LIBRARY}" fltk::images fltk::fltk fltk::z PkgConfig::NATIVE m dl pthread)
+set_property(TARGET mdf-image-tests APPEND PROPERTY LINK_DEPENDS "${MDF_IMAGE_LIBRARY}")
 target_compile_options(mdf-image-tests PRIVATE -UNDEBUG)
 target_link_options(mdf-image-tests PRIVATE -Wl,--wrap=acosf -Wl,--wrap=atan2f)
 mdf_embed_diagram(mdf-image-tests)
@@ -99,3 +146,12 @@ target_include_directories(mdf-startup-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR
 target_link_libraries(mdf-startup-tests PRIVATE "${MDF_CORE_DIR}/libmdf-core.a" fltk::fltk PkgConfig::NATIVE m dl pthread)
 target_compile_definitions(mdf-startup-tests PRIVATE MDF_ASYNC_INPUT=1)
 target_compile_options(mdf-startup-tests PRIVATE -UNDEBUG)
+
+add_executable(mdf-buffer-tests EXCLUDE_FROM_ALL ../tests/shared-buffer.cpp)
+target_link_libraries(mdf-buffer-tests PRIVATE fltk::fltk PkgConfig::NATIVE m dl pthread)
+target_compile_options(mdf-buffer-tests PRIVATE -UNDEBUG)
+
+add_executable(mdf-cairo-tests EXCLUDE_FROM_ALL ../tests/cairo.cpp)
+target_link_libraries(mdf-cairo-tests PRIVATE mdf-drawing)
+target_compile_definitions(mdf-cairo-tests PRIVATE MDF_BUNDLED_CAIRO=$<BOOL:${MDF_BUNDLED_CAIRO}>)
+target_compile_options(mdf-cairo-tests PRIVATE -UNDEBUG)

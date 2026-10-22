@@ -119,6 +119,36 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         svg_test_module.addAnonymousImport("svg-font-" ++ face, .{ .root_source_file = b.path("assets/fonts/open-sans/OpenSans-" ++ face ++ ".ttf") });
     }
     b.step("test-svg", "Check Zig SVG rasterization, resources, font styles and ABI ownership").dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = svg_test_module })).step);
+    const zignal = b.dependency("zignal", .{ .target = target, .optimize = optimize });
+    // Keep the pinned submodule pristine; use a checked build-cache copy for
+    // the two PNG compatibility corrections described in image-decoding.md.
+    const image_sources = b.addWriteFiles();
+    _ = image_sources.addCopyDirectory(b.path("modules/zignal/src"), "zignal", .{
+        .exclude_extensions = &.{ "codecs/png.zig", "root.zig" },
+    });
+    const fix_png = b.addSystemCommand(&.{"python3"});
+    fix_png.addFileArg(b.path("scripts/prepare-zignal.py"));
+    fix_png.addFileArg(b.path("modules/zignal/src/codecs/png.zig"));
+    _ = image_sources.addCopyFile(fix_png.addOutputFileArg("png.zig"), "zignal/codecs/png.zig");
+    zignal.module("zignal").root_source_file = image_sources.addCopyFile(b.path("modules/zignal/src/root.zig"), "zignal/root.zig");
+    const image_module = b.createModule(.{ .root_source_file = b.path("frontend/image-pixels.zig"), .target = target, .optimize = optimize, .link_libc = true, .pic = true });
+    image_module.addImport("zignal", zignal.module("zignal"));
+    const image_library = b.addLibrary(.{ .name = "mdf-image", .linkage = .static, .root_module = image_module });
+    image_library.bundle_compiler_rt = true;
+    image_library.bundle_ubsan_rt = !release;
+    if (release) {
+        var visited: std.AutoHashMapUnmanaged(*std.Build.Module, void) = .empty;
+        optimizeArtifact(b, image_library, &visited);
+    }
+    b.installArtifact(image_library);
+    const image_fixtures = b.addSystemCommand(&.{ "python3", "tests/image-fixtures.py" });
+    const fixture_directory = image_fixtures.addOutputDirectoryArg("image-fixtures");
+    const image_tests = b.createModule(.{ .root_source_file = b.path("frontend/image-pixels.zig"), .target = target, .optimize = optimize, .link_libc = true });
+    image_tests.addImport("zignal", zignal.module("zignal"));
+    inline for (.{ "png-4-8-0-0.png", "png-4-8-1-0.png", "png-2-16-1-1.png", "png-0-16-0-1.png", "bad-crc.bad", "huge-header.bad" }) |fixture| {
+        image_tests.addAnonymousImport(fixture, .{ .root_source_file = fixture_directory.path(b, fixture) });
+    }
+    b.step("test-codecs", "Check Zignal image ownership, limits and PNG compatibility").dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = image_tests, .filters = &.{"MDF image:"} })).step);
     const md4c = b.dependency("md4c", .{});
     const native = b.addTranslateC(.{
         .root_source_file = b.path("src/native.h"),
@@ -166,10 +196,22 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         var visited: std.AutoHashMapUnmanaged(*std.Build.Module, void) = .empty;
         optimizeArtifact(b, core, &visited);
     }
-    const tests_module = b.createModule(.{ .root_source_file = b.path("src/tests.zig"), .target = target, .optimize = optimize, .link_libc = true });
-    for (core.root_module.import_table.keys(), core.root_module.import_table.values()) |name, module| tests_module.addImport(name, module);
-    const tests = b.addTest(.{ .root_module = tests_module });
-    b.step("test", "Run parser, loader, settings, navigation and profiling tests").dependOn(&b.addRunArtifact(tests).step);
+    const tested_core = b.createModule(.{ .root_source_file = b.path("src/tests.zig"), .target = target, .optimize = optimize, .link_libc = true });
+    for (core.root_module.import_table.keys(), core.root_module.import_table.values()) |name, module| tested_core.addImport(name, module);
+    const tests_module = b.createModule(.{ .root_source_file = b.path("tests/unit.zig"), .target = target, .optimize = optimize, .link_libc = true });
+    tests_module.addImport("mdf", tested_core);
+    const unit_step = b.step("test", "Run application unit tests from tests/unit and the source modules");
+    // Zig discovers test declarations in the root module. Run the original
+    // source suite separately so importing its API cannot hide those tests.
+    for ([_]*std.Build.Step.Compile{
+        b.addTest(.{ .name = "mdf-core-tests", .root_module = tested_core }),
+        b.addTest(.{ .name = "mdf-unit-tests", .root_module = tests_module }),
+    }) |suite| {
+        const run_suite = b.addRunArtifact(suite);
+        // Reuse compiled artifacts, but execute the checks on every build.
+        run_suite.has_side_effects = true;
+        unit_step.dependOn(&run_suite.step);
+    }
     const startup_native = b.addTranslateC(.{ .root_source_file = b.path("frontend/launcher-native.h"), .target = target, .optimize = optimize, .link_libc = true });
     const launcher_module = b.createModule(.{ .root_source_file = b.path("frontend/launcher.zig"), .target = target, .optimize = optimize, .link_libc = true });
     launcher_module.addImport("startup_native", startup_native.createModule());

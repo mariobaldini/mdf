@@ -18,7 +18,7 @@ CACHE_FLAGS := --cache-dir build/.zig-cache
 TARGET_FLAGS := -Dtarget=$(MDF_TARGET) -Dcpu=baseline
 BUILD_FLAGS := -Doptimize=$(OPTIMIZE) $(TARGET_FLAGS)
 
-.PHONY: setup check-requirements check-package-tools check-profile-tools build clean install uninstall run run-sample profile profile-trace benchmark-launch test test-launcher test-gui test-images test-monospace test-startup test-patches test-mermaid test-svg test-render test-samples test-workflow test-install test-packages test-profile release
+.PHONY: setup check-requirements check-package-tools check-profile-tools build clean install uninstall run run-sample profile profile-trace benchmark-launch tests test test-suite test-unit test-core-Debug test-core-ReleaseSafe test-core-ReleaseFast test-core-ReleaseSmall test-json test-launcher test-gui test-images test-monospace test-startup test-patches test-mermaid test-svg test-render test-samples test-workflow test-install test-packages test-profile release
 
 setup:
 	@sh scripts/setup.sh
@@ -33,7 +33,7 @@ check-profile-tools:
 	@command -v python3 >/dev/null || { printf '%s\n' 'Profiling requires Python 3. Run make setup, or sudo dnf install python3.' >&2; exit 1; }
 	@test "$$(id -u)" = 0 || command -v sudo >/dev/null || { printf '%s\n' 'Cold profiling requires sudo for Linux cache resets. Run make setup.' >&2; exit 1; }
 
-build: check-requirements
+build: check-requirements test-unit
 	@sh scripts/build-frontend.sh "$(BUILD_PREFIX)"
 
 clean:
@@ -67,9 +67,17 @@ profile-trace: check-profile-tools
 benchmark-launch: check-profile-tools
 	@python3 scripts/benchmark-launch.py --zig "$(ZIG)" --runs "$(LAUNCH_RUNS)"
 
-test: check-requirements test-workflow test-install test-profile test-samples test-mermaid test-svg test-patches test-launcher
-	"$(ZIG)" build test $(OFFLINE_FLAGS) $(CACHE_FLAGS) $(TARGET_FLAGS) -Doptimize=Debug
-	"$(ZIG)" build test $(OFFLINE_FLAGS) $(CACHE_FLAGS) $(TARGET_FLAGS) -Doptimize=ReleaseSafe
+tests: test
+
+test:
+	@$(MAKE) --no-print-directory test-suite OPTIMIZE=ReleaseFast
+
+test-suite: check-requirements test-workflow test-install test-profile test-samples test-mermaid test-svg test-patches test-launcher test-codecs test-json test-images test-buffers test-cairo test-core-Debug test-core-ReleaseSafe test-core-ReleaseFast
+
+test-unit: test-core-$(OPTIMIZE)
+
+test-core-Debug test-core-ReleaseSafe test-core-ReleaseFast test-core-ReleaseSmall: check-requirements
+	@"$(ZIG)" build test $(OFFLINE_FLAGS) $(CACHE_FLAGS) $(TARGET_FLAGS) -Doptimize=$(patsubst test-core-%,%,$@) --summary all
 
 test-workflow:
 	@sh tests/workflow.sh
@@ -103,9 +111,20 @@ test-packages: check-package-tools
 	@bash tests/packages.sh
 
 test-images: build
+	@python3 tests/zignal-dependencies.py
 	@cmake --build "build/fltk-ui/$(OPTIMIZE)" --target mdf-image-tests --parallel 2
-	@"build/fltk-ui/$(OPTIMIZE)/mdf-image-tests" assets
+	@python3 tests/image-fixtures.py build/image-fixtures
+	@"build/fltk-ui/$(OPTIMIZE)/mdf-image-tests" assets build/image-fixtures
 	@python3 tests/diagram-module.py "build/fltk-ui/$(OPTIMIZE)/mdf-image-tests"
+
+.PHONY: test-codecs
+test-codecs: check-requirements
+	@python3 tests/zignal-dependencies.py
+	@"$(ZIG)" build test-codecs $(OFFLINE_FLAGS) $(CACHE_FLAGS) $(TARGET_FLAGS) -Doptimize=Debug
+
+test-json: build
+	@cmake --build "build/fltk-ui/$(OPTIMIZE)" --target mdf-json-tests --parallel 2
+	@python3 tests/json-boundary.py "build/fltk-ui/$(OPTIMIZE)/mdf-json-tests"
 
 test-monospace: build
 	@cmake --build "build/fltk-ui/$(OPTIMIZE)" --target mdf-monospace-tests --parallel 2
@@ -118,11 +137,21 @@ test-startup: build
 	@cmake --build "build/fltk-ui/$(OPTIMIZE)" --target mdf-startup-tests --parallel 2
 	@"build/fltk-ui/$(OPTIMIZE)/mdf-startup-tests"
 
+.PHONY: test-buffers
+test-buffers: build
+	@cmake --build "build/fltk-ui/$(OPTIMIZE)" --target mdf-buffer-tests --parallel 2
+	@"build/fltk-ui/$(OPTIMIZE)/mdf-buffer-tests"
+
+.PHONY: test-cairo
+test-cairo: build
+	@cmake --build "build/fltk-ui/$(OPTIMIZE)" --target mdf-cairo-tests --parallel 2
+	@"build/fltk-ui/$(OPTIMIZE)/mdf-cairo-tests"
+
 test-launcher: build
 	@python3 tests/launcher.py "$(BUILD_PREFIX)/bin/mdf"
 
 test-gui: test-images test-monospace test-startup test-launcher
-	@sh tests/gui.sh
+	@sh tests/gui.sh "$(BUILD_PREFIX)/bin/mdf"
 
 release: check-package-tools
 	@$(MAKE) --no-print-directory build OPTIMIZE=ReleaseFast BUILD_PREFIX=build

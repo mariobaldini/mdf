@@ -19,7 +19,7 @@ if [ "$ZIG" != zig ] && ! command -v "$ZIG" >/dev/null 2>&1; then
     exit 1
 fi
 rpm -q ca-certificates >/dev/null 2>&1 || set -- "$@" ca-certificates
-for mdf_package in cmake ninja-build gcc gcc-c++ libstdc++-static clang-tools-extra pkgconf-pkg-config pango-devel cairo-devel fontconfig-devel wayland-devel wayland-protocols-devel libxkbcommon-devel weston weston-devel git git-lfs; do
+for mdf_package in cmake ninja-build gcc gcc-c++ libstdc++-static clang-tools-extra pkgconf-pkg-config pango-devel cairo-devel fontconfig-devel pixman-devel glib2-devel fribidi-devel libthai-devel harfbuzz-devel freetype-devel wayland-devel wayland-protocols-devel libxkbcommon-devel weston weston-devel git git-lfs; do
     rpm -q "$mdf_package" >/dev/null 2>&1 || set -- "$@" "$mdf_package"
 done
 command -v rpmbuild >/dev/null 2>&1 || set -- "$@" rpm-build

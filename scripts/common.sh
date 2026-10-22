@@ -45,7 +45,7 @@ check_tools() {
         fi
     done
     if command -v pkg-config >/dev/null 2>&1; then
-        for mdf_library in pangocairo pangoft2 cairo fontconfig wayland-client wayland-cursor xkbcommon; do
+        for mdf_library in pangocairo pangoft2 cairo fontconfig pixman-1 wayland-client wayland-cursor xkbcommon gio-2.0 fribidi libthai harfbuzz freetype2; do
             if ! pkg-config --exists "$mdf_library"; then
                 printf 'Missing %s development files. Run make setup (Fedora: pango-devel cairo-devel fontconfig-devel wayland-devel libxkbcommon-devel).\n' "$mdf_library" >&2
                 mdf_errors=1
@@ -78,9 +78,12 @@ offline_graph_check() {
 }
 
 check_frontend_cache() {
-    test -f "$MDF_ROOT/zig-pkg/fltk/CMakeLists.txt" && test -f "$MDF_ROOT/zig-pkg/nlohmann/json.hpp" && \
-    test -f "$MDF_ROOT/modules/pozeiden/src/root.zig" && test -f "$MDF_ROOT/modules/zig-svg/src/root.zig" || {
-        printf '%s\n' 'Missing pinned FLTK/JSON/SVG sources or Pozeiden submodule. Run make setup (or git submodule update --init --recursive).' >&2
+    test -f "$MDF_ROOT/zig-pkg/fltk/CMakeLists.txt" && \
+    test -f "$MDF_ROOT/zig-pkg/pango/meson.build" && test -f "$MDF_ROOT/zig-pkg/meson/mesonbuild/mesonmain.py" && \
+    test -f "$MDF_ROOT/zig-pkg/cairo/meson.build" && \
+    test -f "$MDF_ROOT/modules/pozeiden/src/root.zig" && test -f "$MDF_ROOT/modules/zig-svg/src/root.zig" && \
+    test -f "$MDF_ROOT/modules/zignal/src/root.zig" || {
+        printf '%s\n' 'Missing pinned frontend or image-codec sources. Run make setup (or git submodule update --init --recursive).' >&2
         return 1
     }
 }

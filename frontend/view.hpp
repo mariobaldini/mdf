@@ -50,6 +50,7 @@ struct Run {
   Style style;
   float x = 0, y = 0, w = 0, h = 0;
   size_t pos = std::numeric_limits<size_t>::max();
+  float font_height = 0, font_descent = 0;
 };
 struct Rect {
   float x, y, w, h;
@@ -91,6 +92,14 @@ public:
   bool dragging = false;
   std::unordered_map<int, Measured> cache;
   mutable std::unordered_map<int, std::vector<float>> table_widths;
+  struct FontMeasurements {
+    float height, descent;
+    std::unordered_map<std::string, float> widths;
+  };
+  // GUI-owned, bounded word measurements. Layout invalidation also clears these
+  // because FLTK metrics depend on the drawing surface's scale and font map.
+  mutable std::map<std::pair<Fl_Font, int>, FontMeasurements> text_measurements;
+  mutable size_t cached_words = 0;
   mutable CodeFont code_font;
   mutable CodeFont fallback_font;
   const FcCharSet *bundled_coverage = nullptr;

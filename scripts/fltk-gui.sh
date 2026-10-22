@@ -23,6 +23,10 @@ env -u WAYLAND_SOCKET XDG_RUNTIME_DIR="$mdf_test/runtime" WAYLAND_DISPLAY=mdf-te
     strace -f -e trace=%file,memfd_create,prctl -o "$mdf_test/font-access.log" \
     "$mdf_binary" --self-test --capture "$mdf_test/sample.png" "$mdf_root/SAMPLE.md" >"$mdf_test/gui.log" 2>&1 || { cat "$mdf_test/gui.log" >&2;exit 1; }
 cat "$mdf_test/gui.log"
+if [ -n "${MDF_TEST_CURSOR_SHAPES:-}" ];then
+    grep -q 'PASS: standard, hidden and custom cursors with compositor shapes' "$mdf_test/gui.log"
+    grep -q 'MDF_CURSOR_SHAPE_REQUEST=' "$mdf_test/weston-output.log"
+fi
 grep -q 'PASS: deferred system monospace:' "$mdf_test/gui.log"
 grep -q 'PASS: Latin sample uses bundled glyphs without Sans fallback' "$mdf_test/gui.log"
 ! grep -q 'mdf-fallback' "$mdf_test/font-access.log"

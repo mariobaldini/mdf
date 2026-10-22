@@ -12,6 +12,7 @@ The current version is 0.2.0.
 - MD4C parses GitHub Markdown into blocks and spans.
 - The C++ frontend receives owned document models through a C ABI. Borrowed image and font bytes remain valid until their workers stop.
 - Typed block and span views keep bulk document data out of JSON. Repeated headings reuse their last anchor suffix to keep parsing linear.
+- Zig's `std.json` handles the remaining messages, settings, and profiler JSON through a C++ ownership binding.
 - The document widget measures visible blocks and draws them directly through FLTK. It caches text layouts rather than copying a viewport bitmap.
 - The minimap caches a small image surface and moves its viewport marker during scrolling.
 
@@ -33,7 +34,7 @@ TOC links reveal collapsed ancestors. The minimap supports clicking, dragging, a
 3. Publish the configuration before Pango font maps and FLTK font names. Then finalize the scaffold geometry.
 4. Accept ready Markdown before showing the window and start navigation preparation immediately.
 5. Measure and draw the visible Markdown blocks with the bundled Latin fonts in the first useful frame.
-6. Decode local PNG/JPEG images and render Mermaid diagrams on the image worker while the GUI processes window events.
+6. Decode local PNG/JPEG images with Zig/Zignal and render Mermaid diagrams on the image worker while the GUI processes window events.
 7. Apply TOC labels, minimap lines, image pixels, and diagram pixels. Already prepared results can share the first window frame.
 8. After the first frame, prepare system Sans fallback only for missing document glyphs and system monospace only for code blocks, using separate workers. Reflow affected text when ready.
 

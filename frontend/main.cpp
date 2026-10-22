@@ -2,6 +2,7 @@
 #include "bundled-fonts.hpp"
 #include "startup.hpp"
 #include "diagrams.hpp"
+#include "../tests/text-layout.hpp"
 #include <FL/Fl.H>
 #include <FL/Fl_BMP_Image.H>
 #include <FL/Fl_Box.H>
@@ -717,7 +718,7 @@ struct App {
             PHASE("Apply table of contents and preview");
             toc->clear();
             toc_indices.clear();
-            for (auto &h : nav["headings"]) {
+            for (auto h : nav.get("headings")) {
               int index = h.value("index", 0), level = h.value("level", 1);
               toc_indices.push_back(index);
               auto label = std::string(std::min(4, level - 1) * 2, ' ') +
@@ -725,9 +726,9 @@ struct App {
               toc->add(label.c_str());
             }
             reader->preview.clear();
-            for (auto &p : nav["preview"])
+            for (auto p : nav.get("preview"))
               reader->preview.push_back(
-                  p["lines"].get<std::vector<std::string>>());
+                  p.get("lines").as<std::vector<std::string>>());
             ++reader->preview_revision;
             ++reader->geometry_revision;
             navigation_ready = true;
@@ -736,8 +737,8 @@ struct App {
           }
           {
             PHASE("Decode remaining local image formats");
-            for (auto &idx : nav["images"]) {
-              int i = idx.get<int>();
+            for (auto idx : nav.get("images")) {
+              int i = idx.as<int>();
               auto bytes = core.image(i);
               if (!bytes.ptr || bytes.len < 4)
                 continue;
@@ -930,7 +931,7 @@ struct App {
         full_ready = submitted_at;
       if (profiling || benchmark || self_test) {
         startup_frames = frames;
-        startup_usage = core.profile()["usage"];
+        startup_usage = core.profile().get("usage");
         std::ifstream proc("/proc/self/status");
         std::string line;
         while (std::getline(proc, line))
@@ -938,7 +939,7 @@ struct App {
             std::istringstream values(line.substr(6));
             uint64_t rss;
             values >> rss;
-            startup_usage["rss_kib"] = rss;
+            startup_usage.set("rss_kib", rss);
           }
       }
       if (self_test) {
@@ -1152,85 +1153,96 @@ struct App {
   }
   void print_profile() {
     auto result = core.profile();
-    profile_wait_details(result["events"], origin);
+    Json events = result.get("events");
+    profile_wait_details(events, origin);
     auto metrics = startup_usage;
     auto ms = [this](uint64_t t) { return (t - origin) / 1e6; };
-    metrics["first_frame_ms"] = ms(full_ready);
-    metrics["full_ready_ms"] = ms(full_ready);
-    metrics["window_present_ms"] = ms(scaffold_ns);
-    metrics["scaffold_ms"] = ms(scaffold_ns);
-    metrics["first_document_ms"] = ms(first_document);
-    if (first_document_commit) metrics["first_document_commit_ms"] = ms(first_document_commit);
-    if (first_document_flush) metrics["first_document_flush_ms"] = ms(first_document_flush);
-    metrics["input_ready"] = bool(fl_mdf_wayland_input_ready());
-    metrics["backend_ms"] = ms(backend_ready);
-    metrics["window_ms"] = (scaffold_ns - backend_ready) / 1e6;
-    metrics["read_ms"] = read_ns / 1e6;
-    metrics["parse_ms"] = parse_ns / 1e6;
-    metrics["layout_ms"] = layout_ns / 1e6;
-    metrics["source_bytes"] = source_bytes;
-    metrics["blocks"] = reader->blocks.size();
-    metrics["document_frames"] = document_frames;
-    metrics["total_frames"] = startup_frames;
-    metrics["decoded_images"] = reader->images.size() - reader->diagram_sizes.size();
+    metrics.set("first_frame_ms", ms(full_ready));
+    metrics.set("full_ready_ms", ms(full_ready));
+    metrics.set("window_present_ms", ms(scaffold_ns));
+    metrics.set("scaffold_ms", ms(scaffold_ns));
+    metrics.set("first_document_ms", ms(first_document));
+    if (first_document_commit) metrics.set("first_document_commit_ms", ms(first_document_commit));
+    if (first_document_flush) metrics.set("first_document_flush_ms", ms(first_document_flush));
+    metrics.set("input_ready", bool(fl_mdf_wayland_input_ready()));
+    metrics.set("cursor_backend", fl_mdf_cursor_shape_supported() ? "compositor-shape" : "theme");
+    metrics.set("drawing_buffers", MDF_SHARED_DRAWING ? "shared-until-busy" : "private-copy");
+    metrics.set("library_read_ahead", true);
+    metrics.set("text_library", MDF_BUNDLED_PANGO ? "bundled-pango" : "system-pango");
+    metrics.set("text_library_version", pango_version_string());
+    metrics.set("drawing_library", MDF_BUNDLED_CAIRO ? "bundled-cairo" : "system-cairo");
+    metrics.set("drawing_library_version", cairo_version_string());
+    metrics.set("backend_ms", ms(backend_ready));
+    metrics.set("window_ms", (scaffold_ns - backend_ready) / 1e6);
+    metrics.set("read_ms", read_ns / 1e6);
+    metrics.set("parse_ms", parse_ns / 1e6);
+    metrics.set("layout_ms", layout_ns / 1e6);
+    metrics.set("source_bytes", source_bytes);
+    metrics.set("blocks", reader->blocks.size());
+    metrics.set("document_frames", document_frames);
+    metrics.set("total_frames", startup_frames);
+    metrics.set("decoded_images", reader->images.size() - reader->diagram_sizes.size());
     size_t mermaid_count = 0;
     for (const auto &[index, dimensions] : reader->diagram_sizes)
       if (reader->blocks[index].mermaid()) ++mermaid_count;
-    metrics["rendered_diagrams"] = mermaid_count;
-    metrics["rendered_svgs"] = reader->diagram_sizes.size() - mermaid_count;
-    metrics["diagram_errors"] = reader->diagram_errors.size();
-    metrics["diagram_module_loaded"] = diagram_renderer_loaded();
-    metrics["mermaid_engine"] = "pozeiden";
-    metrics["svg_engine"] = "zig-svg";
+    metrics.set("rendered_diagrams", mermaid_count);
+    metrics.set("rendered_svgs", reader->diagram_sizes.size() - mermaid_count);
+    metrics.set("diagram_errors", reader->diagram_errors.size());
+    metrics.set("diagram_module_loaded", diagram_renderer_loaded());
+    metrics.set("mermaid_engine", "pozeiden");
+    metrics.set("svg_engine", "zig-svg");
+    metrics.set("image_decoder", "zignal");
+    metrics.set("image_decoder_version", "0.11.0");
+    metrics.set("json_engine", "std.json");
     if (launch_context) {
-      metrics["ui_module_ready_ms"] = ms(launch_context->ui_ready_ns);
-      metrics["ui_module_bytes"] = launch_context->ui_module_bytes;
+      metrics.set("ui_module_ready_ms", ms(launch_context->ui_ready_ns));
+      metrics.set("ui_module_bytes", launch_context->ui_module_bytes);
     }
-    metrics["bundled_font_styles"] = fonts.styles;
-    metrics["bundled_font_data_styles"] = bundled_font_data_styles();
+    metrics.set("bundled_font_styles", fonts.styles);
+    metrics.set("bundled_font_data_styles", bundled_font_data_styles());
     for (auto kind : {DiagramModule::mermaid, DiagramModule::svg}) {
       const std::string prefix = kind == DiagramModule::svg ? "svg_module_" : "mermaid_module_";
-      metrics[prefix + "loaded"] = diagram_renderer_loaded(kind);
+      metrics.set(prefix + "loaded", diagram_renderer_loaded(kind));
       if (diagram_renderer_loaded(kind)) {
-        metrics[prefix + "ready_ms"] = ms(diagram_renderer_ready_ns(kind));
-        metrics[prefix + "compressed_bytes"] = diagram_renderer_packed_bytes(kind);
-        metrics[prefix + "expanded_bytes"] = diagram_renderer_expanded_bytes(kind);
+        metrics.set(prefix + "ready_ms", ms(diagram_renderer_ready_ns(kind)));
+        metrics.set(prefix + "compressed_bytes", diagram_renderer_packed_bytes(kind));
+        metrics.set(prefix + "expanded_bytes", diagram_renderer_expanded_bytes(kind));
       }
     }
-    if (first_diagram_ns) metrics["first_diagram_ms"] = ms(first_diagram_ns);
+    if (first_diagram_ns) metrics.set("first_diagram_ms", ms(first_diagram_ns));
     if (diagram_renderer_loaded()) {
-      metrics["diagram_module_ready_ms"] = ms(diagram_renderer_ready_ns());
-      metrics["diagram_module_compressed_bytes"] = diagram_renderer_packed_bytes();
-      metrics["diagram_module_expanded_bytes"] = diagram_renderer_expanded_bytes();
+      metrics.set("diagram_module_ready_ms", ms(diagram_renderer_ready_ns()));
+      metrics.set("diagram_module_compressed_bytes", diagram_renderer_packed_bytes());
+      metrics.set("diagram_module_expanded_bytes", diagram_renderer_expanded_bytes());
     }
-    metrics["first_viewport_monospace"] = first_viewport_monospace;
-    metrics["monospace_status"] = reader->code_font.ready() ? "ready" :
-                                    mono_requested ? (mono_finished ? "unavailable" : "loading") : "not-needed";
-    if (mono_request_ns) metrics["monospace_request_ms"] = ms(mono_request_ns);
-    if (mono_adopted_ns) metrics["monospace_adopted_ms"] = ms(mono_adopted_ns);
-    if (mono_frame_ns) metrics["monospace_frame_ms"] = ms(mono_frame_ns);
+    metrics.set("first_viewport_monospace", first_viewport_monospace);
+    metrics.set("monospace_status", reader->code_font.ready() ? "ready" :
+                                    mono_requested ? (mono_finished ? "unavailable" : "loading") : "not-needed");
+    if (mono_request_ns) metrics.set("monospace_request_ms", ms(mono_request_ns));
+    if (mono_adopted_ns) metrics.set("monospace_adopted_ms", ms(mono_adopted_ns));
+    if (mono_frame_ns) metrics.set("monospace_frame_ms", ms(mono_frame_ns));
     if (auto *mono = reader->code_font.info()) {
-      metrics["monospace_family"] = mono->family;
-      metrics["monospace_bytes"] = mono->bytes;
-      metrics["monospace_files"] = mono->sources;
+      metrics.set("monospace_family", mono->family);
+      metrics.set("monospace_bytes", mono->bytes);
+      metrics.set("monospace_files", mono->sources);
     }
-    if (!mono_error.empty()) metrics["monospace_error"] = mono_error;
-    metrics["first_viewport_fallback"] = first_viewport_fallback;
-    metrics["fallback_status"] = reader->fallback_font.ready() ? "ready" :
-                                 fallback_requested ? (fallback_finished ? "unavailable" : "loading") : "not-needed";
-    metrics["fallback_requested_glyphs"] = reader->required_glyphs;
+    if (!mono_error.empty()) metrics.set("monospace_error", mono_error);
+    metrics.set("first_viewport_fallback", first_viewport_fallback);
+    metrics.set("fallback_status", reader->fallback_font.ready() ? "ready" :
+                                 fallback_requested ? (fallback_finished ? "unavailable" : "loading") : "not-needed");
+    metrics.set("fallback_requested_glyphs", reader->required_glyphs);
     std::vector<FcChar32> unresolved;
     for (auto ch : reader->required_glyphs) if (!reader->fallback_font.has_character(ch)) unresolved.push_back(ch);
-    metrics["fallback_missing_glyphs"] = unresolved;
-    if (fallback_request_ns) metrics["fallback_request_ms"] = ms(fallback_request_ns);
-    if (fallback_adopted_ns) metrics["fallback_adopted_ms"] = ms(fallback_adopted_ns);
-    if (fallback_frame_ns) metrics["fallback_frame_ms"] = ms(fallback_frame_ns);
+    metrics.set("fallback_missing_glyphs", unresolved);
+    if (fallback_request_ns) metrics.set("fallback_request_ms", ms(fallback_request_ns));
+    if (fallback_adopted_ns) metrics.set("fallback_adopted_ms", ms(fallback_adopted_ns));
+    if (fallback_frame_ns) metrics.set("fallback_frame_ms", ms(fallback_frame_ns));
     if (auto *fallback = reader->fallback_font.info()) {
-      metrics["fallback_families"] = fallback->family;
-      metrics["fallback_bytes"] = fallback->bytes;
-      metrics["fallback_files"] = fallback->sources;
+      metrics.set("fallback_families", fallback->family);
+      metrics.set("fallback_bytes", fallback->bytes);
+      metrics.set("fallback_files", fallback->sources);
     }
-    if (!fallback_error.empty()) metrics["fallback_error"] = fallback_error;
+    if (!fallback_error.empty()) metrics.set("fallback_error", fallback_error);
     Json output = {{"profile_version", 1},
                    {"process_id", getpid()},
                    {"wayland_fd", wl_display_get_fd(fl_wl_display())},
@@ -1255,11 +1267,11 @@ struct App {
                    {"navigation_status", "ready"},
                    {"file", reader->path},
                    {"metrics", metrics},
-                   {"events", result["events"]},
-                   {"dropped_events", result["dropped_events"]}};
+                   {"events", events},
+                   {"dropped_events", result.get("dropped_events")}};
     if (!scroll_draw_ms.empty()) {
-      output["scroll_draw_ms"] = scroll_draw_ms;
-      output["scroll_frames"] = scroll_frames;
+      output.set("scroll_draw_ms", scroll_draw_ms);
+      output.set("scroll_frames", scroll_frames);
     }
     std::cout << output.dump() << std::endl;
   }
@@ -1272,6 +1284,16 @@ struct App {
                first_document_commit <= first_document_flush && first_document_flush <= first_document,
            "Markdown pixels are committed and flushed before viewport readiness");
     PHASE("Native FLTK integration checks");
+    for (auto cursor : {FL_CURSOR_ARROW, FL_CURSOR_INSERT, FL_CURSOR_HAND,
+                        FL_CURSOR_NS, FL_CURSOR_WE, FL_CURSOR_NONE})
+      window->cursor(cursor);
+    unsigned char cursor_pixel[] = {0x20, 0x80, 0xe0, 0xff};
+    Fl_RGB_Image custom_cursor(cursor_pixel, 1, 1, 4);
+    window->cursor(&custom_cursor, 0, 0);
+    window->cursor(FL_CURSOR_ARROW);
+    Fl::check();
+    std::cout << "PASS: standard, hidden and custom cursors with "
+              << (fl_mdf_cursor_shape_supported() ? "compositor shapes" : "theme fallback") << '\n';
     ensure(scaffold_ns <= first_document && first_document <= full_ready,
            "Startup staging order");
     ensure(!first_viewport_monospace && mono_requested && mono_finished && mono_request_ns > first_document,
@@ -1364,6 +1386,8 @@ struct App {
              "Bundled text remains proportional");
     }
     g_object_unref(context);
+    check_text_layout(*reader, [this](bool condition, const char *message) { ensure(condition, message); });
+    std::cout << "PASS: bounded text measurement cache, font invalidation and retained run metrics\n";
     if (reader->code_font.ready()) {
       Block block;
       block.kind = "code";
@@ -1692,6 +1716,9 @@ extern "C" int fl_mdf_defer_cursors() {
     return active_app->error.empty() && !active_app->images_started && !active_app->images_ready;
   // An empty window or an opening error still needs an interactive cursor.
   return !(active_app->scaffold_ns && (active_app->initial_path.empty() || !active_app->error.empty()));
+}
+extern "C" int fl_mdf_shared_drawing(void *window) {
+  return MDF_SHARED_DRAWING && active_app && window == active_app->window.get();
 }
 extern "C" void fl_mdf_input_changed() {
   if (!active_app) return;

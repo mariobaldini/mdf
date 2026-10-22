@@ -121,6 +121,14 @@ def symbol_family(name):
         return ("Application", "Diagram module loading")
     if "nlohmann" in name:
         return ("Bundled libraries", "nlohmann JSON")
+    if name.startswith(("mdf_json_", "json.", "std.json.")):
+        return ("Language runtimes", "Zig std.json")
+    if name.startswith(("pango_", "_pango_")):
+        return ("Bundled libraries", "Pango")
+    if name.startswith(("cairo_", "_cairo_")):
+        return ("Bundled libraries", "Cairo")
+    if name.startswith(("image-pixels.", "codecs.png.", "codecs.jpeg.", "png.", "jpeg.")) or name == "mdf_decode_pixels":
+        return ("Bundled libraries", "Zignal PNG/JPEG")
     if "mermaid_rs_renderer" in name or "mdf_mermaid" in name or name == "mdf_render_mermaid":
         return ("Bundled libraries", "Mermaid renderer")
     if any(crate in name for crate in ("resvg", "usvg", "tiny_skia", "rustybuzz", "fontdb", "ttf_parser", "svgtypes", "simplecss")):
@@ -321,6 +329,9 @@ def binary_breakdown(root, binary, ui_engine=False):
     if payload:
         with tempfile.TemporaryDirectory(prefix='mdf-ui-size-') as directory:
             path=Path(directory)/'mdf-ui';path.write_bytes(payload)
+            debug=binary.with_name(binary.name+'-ui.debug')
+            if debug.is_file():
+                shutil.copy2(debug,path.with_name(path.name+'.debug'))
             detail=binary_breakdown(root,path,ui_engine=True)
         node=next((node for node in children if node['name']=='Deferred UI engine'),None)
         if node and detail.get('available'):
@@ -333,6 +344,7 @@ def project_context(root, binary, document, run):
     """Keep build identity and actual library sizes, without source snapshots."""
     frontend = json.loads((root / "frontend/dependencies.json").read_text())
     direct = dependencies((root / "build.zig.zon").read_text())
+    compiler = command_output([os.environ.get("ZIG", "zig"), "version"])
     libraries = []
     sdk = root / "build/fltk/ReleaseFast/lib"
 
@@ -344,11 +356,23 @@ def project_context(root, binary, document, run):
 
     bundled("FLTK", frontend["fltk"]["version"], "Native Wayland UI and image wrappers",
             [sdk / "libfltk.a", sdk / "libfltk_images.a"], "static archives")
+    if run.get('metrics', {}).get('text_library') == 'bundled-pango':
+        bundled("Pango", run['metrics'].get('text_library_version', frontend['pango']['version']),
+                "Cairo/Fontconfig text layout; static code retained by LTO and dead-section removal")
+    if run.get('metrics', {}).get('drawing_library') == 'bundled-cairo':
+        bundled("Cairo", run['metrics'].get('drawing_library_version', frontend['cairo']['version']),
+                "Image surfaces and FreeType/Fontconfig fonts; no X11/XCB or export backends; system Pixman")
     md4c = root / "zig-pkg" / direct["md4c"]["hash"] / "CMakeLists.txt"
     match = re.search(r"project\s*\([^)]*?VERSION\s+([0-9.]+)", md4c.read_text(), re.I) if md4c.is_file() else None
     bundled("MD4C", match.group(1) if match else "pinned commit", "Markdown parser")
-    bundled("nlohmann JSON", frontend["nlohmann_json"]["version"], "Control messages",
-            [root / "zig-pkg/nlohmann/json.hpp"], "header file")
+    if run.get('metrics', {}).get('json_engine') == 'std.json':
+        bundled("Zig std.json", compiler, "Control messages, settings and profiler JSON; Zig standard library")
+    else:
+        # Preserve the identity of archived or before-migration binaries.
+        bundled("nlohmann JSON", frontend.get("nlohmann_json", {}).get("version", "3.12.0"), "Previous C++ JSON implementation")
+    zignal_decoder = run.get('metrics', {}).get('image_decoder') == 'zignal'
+    if zignal_decoder:
+        bundled('Zignal PNG/JPEG', frontend['zignal']['version'], 'Pure Zig PNG/JPEG decoding on the image worker')
     if "rendered_diagrams" in run.get("metrics", {}):
         pozeiden = run["metrics"].get("mermaid_engine") == "pozeiden"
         version = "Pozeiden " + frontend["pozeiden"]["version"] if pozeiden else frontend.get("mermaid", {}).get("version", "0.3.1 (previous Rust renderer)")
@@ -358,9 +382,9 @@ def project_context(root, binary, document, run):
         else:
             bundled("SVG rendering", "resvg/usvg 0.47.0", "Previous SVG rasterization and embedded-font shaping")
     for name, directory, filename, pattern, archive, role in (
-        ("libpng", "png", "png.h", r'#define PNG_LIBPNG_VER_STRING\s+"([^"]+)"', "png", "PNG decoding"),
-        ("IJG JPEG", "jpeg", "README", r"README for release (\S+)", "jpeg", "JPEG decoding"),
-        ("zlib", "zlib", "zlib.h", r'#define ZLIB_VERSION\s+"([^"]+)"', "z", "Image decompression"),
+        ("libpng", "png", "png.h", r'#define PNG_LIBPNG_VER_STRING\s+"([^"]+)"', "png", "PNG capture encoding" if zignal_decoder else "PNG decoding"),
+        ("IJG JPEG", "jpeg", "README", r"README for release (\S+)", "jpeg", "Reference test decoder; unused by document decoding" if zignal_decoder else "JPEG decoding"),
+        ("zlib", "zlib", "zlib.h", r'#define ZLIB_VERSION\s+"([^"]+)"', "z", "Compressed modules/fonts and PNG capture" if zignal_decoder else "Image decompression"),
         ("libdecor", "libdecor", "meson.build", r"version:\s*'([^']+)'", None, "Native title bar (48 logical pixels)"),
     ):
         source = root / "zig-pkg/fltk" / directory / filename
@@ -401,6 +425,7 @@ def project_context(root, binary, document, run):
         ("pangoft2", "libpangoft2-1.0.so.", "Pango font backend"),
         ("pango", "libpango-1.0.so.", "Text layout"),
         ("cairo", "libcairo.so.", "Drawing"),
+        ("pixman-1", "libpixman-1.so.", "CPU pixel compositing"),
         ("fontconfig", "libfontconfig.so.", "Private font configuration"),
         ("freetype2", "libfreetype.so.", "Font rasterization"),
         ("harfbuzz", "libharfbuzz.so.", "Text shaping"),
@@ -411,6 +436,10 @@ def project_context(root, binary, document, run):
     used = set()
     for package, prefix, role in primary:
         found = next(((name, path) for name, path in linked.items() if name.startswith(prefix)), None)
+        if package in ('pango', 'pangoft2', 'pangocairo') and not found and run.get('metrics', {}).get('text_library') == 'bundled-pango':
+            continue
+        if package == 'cairo' and not found and run.get('metrics', {}).get('drawing_library') == 'bundled-cairo':
+            continue
         path = found[1] if found else None
         if found:
             used.add(found[0])
@@ -434,12 +463,14 @@ def project_context(root, binary, document, run):
                 library["size_basis"] = "inside the shared compressed payload"
         bundled("Compressed diagram module", "ABI 1", "Mermaid, SVG and Rust support; loaded after the first viewport")
     retained = {item["name"]: item["bytes"] for item in groups.get("Bundled libraries", {}).get("children", [])}
+    runtimes = {item["name"]: item["bytes"] for item in groups.get("Language runtimes", {}).get("children", [])}
     if 'ui_module' in binary_size:
         bundled('UI engine','ABI 1','UI code loaded in parallel from an uncompressed embedded ELF',included='uncompressed embedded module')
     aliases = {"libpng": "PNG", "IJG JPEG": "JPEG", "zlib": "ZLIB"}
     for library in libraries:
         library["linked_bytes"] = (groups.get("Compressed diagram module", {}).get("bytes") if library["name"] == "Compressed diagram module"
                                    else groups.get("Fonts", {}).get("bytes") if library["name"] == "Open Sans"
+                                   else runtimes.get("Zig std.json") if library["name"] == "Zig std.json"
                                    else retained.get(aliases.get(library["name"], library["name"]))) if library["linkage"] == "bundled" else None
         module = next((item for item in binary_size.get("diagram_modules", []) if item["name"] == library["name"]), None)
         if module:
@@ -448,7 +479,7 @@ def project_context(root, binary, document, run):
         if library['name']=='UI engine':library['linked_bytes']=binary_size['ui_module']['bytes']
     return {"name": "Markdown FAST", "version": run["version"],
             "build": f'{run["mode"]} / {run.get("ui_mode", "Release")} · x86_64 baseline · LTO',
-            "compiler": command_output([os.environ.get("ZIG", "zig"), "version"]),
+            "compiler": compiler,
             "binaries": [file_info(binary, binary.name)],
             "input": file_info(document, document.name), "libraries": libraries, "indirect_libraries": indirect,
             "binary_size": binary_size}

@@ -128,11 +128,12 @@ extern "C" int __wrap_poll(pollfd *fds, nfds_t count, int timeout) {
 }
 
 void profile_wait_details(Json &events, uint64_t origin) {
-  for (auto &event : events) {
-    const uint64_t at = event["start_ns"].get<uint64_t>() + origin;
+  for (size_t event_index = 0; event_index < events.size(); ++event_index) {
+    Json event = events.at(event_index);
+    const uint64_t at = event.get("start_ns").as<uint64_t>() + origin;
     for (size_t i = 0; i < wait_count; ++i) {
       const auto &detail = wait_details[i];
-      if (detail.start != at || event["track"] != "gui") continue;
+      if (detail.start != at || event.get("track") != "gui") continue;
       Json watched = Json::array(), ready = Json::array();
       bool compositor = false;
       for (size_t j = 0; j < std::min(detail.watched_count, detail.watched.size()); ++j) watched.push_back(detail.watched[j]);
@@ -143,21 +144,22 @@ void profile_wait_details(Json &events, uint64_t origin) {
       const char *reason = detail.result == 0 ? "timeout" : detail.result < 0 ?
           (detail.error == EINTR ? "interrupted" : "error") : compositor ?
           (detail.compositor_writable && !detail.compositor_readable ? "compositor writable" : "compositor") : "other descriptor";
-      event["wait"] = {{"api", detail.poll ? "poll" : "select"}, {"result", detail.result},
+      event.set("wait", {{"api", detail.poll ? "poll" : "select"}, {"result", detail.result},
                        {"errno", detail.error}, {"timeout_ms", detail.timeout_ms},
                        {"watched_fds", watched}, {"ready_fds", ready}, {"reason", reason},
                        {"wayland_fd", detail.wayland_fd},
                        {"compositor_readable", detail.compositor_readable}, {"compositor_writable", detail.compositor_writable},
-                       {"descriptors_truncated", detail.watched_count > detail.watched.size() || detail.ready_count > detail.ready.size()}};
-      const bool blocking = event["kind"] == "wait";
-      event["name"] = event["name"].get<std::string>() + " — " +
+                       {"descriptors_truncated", detail.watched_count > detail.watched.size() || detail.ready_count > detail.ready.size()}});
+      const bool blocking = event.get("kind") == "wait";
+      event.set("name", event.get("name").as<std::string>() + " — " +
           (compositor ? (detail.compositor_writable && !detail.compositor_readable ? "compositor writable" : "compositor readable") : detail.result == 0 ? (blocking ? "timeout expired" : "no events") :
-           detail.result < 0 ? reason : "descriptor ready");
-      event["description"] = "Observed in this same optimized launch: " + std::string(detail.poll ? "poll" : "select") +
+           detail.result < 0 ? reason : "descriptor ready"));
+      event.set("description", "Observed in this same optimized launch: " + std::string(detail.poll ? "poll" : "select") +
           " returned " + std::to_string(detail.result) + "; ready descriptors " + ready.dump() +
           "; requested timeout " + (detail.timeout_ms < 0 ? "unlimited" : std::to_string(detail.timeout_ms) + " ms") + ". " +
           (compositor ? "The Wayland socket became ready for reading or writing, as recorded in the readiness flags. Readability alone does not identify a protocol event; use the separate Wayland/strace diagnostic for configure, frame and buffer callbacks. " : "") +
-          "Elapsed time includes kernel waiting and scheduling. Descriptor readiness does not identify a lock owner.";
+          "Elapsed time includes kernel waiting and scheduling. Descriptor readiness does not identify a lock owner.");
+      events.replace(event_index, event);
       break;
     }
   }

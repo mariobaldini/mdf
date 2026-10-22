@@ -15,6 +15,7 @@
 #include <chrono>
 #include <thread>
 #include <cairo.h>
+#include "jpeg-fixtures.hpp"
 
 static void save_diagram(const MdfPixels &image, const std::filesystem::path &path) {
   std::vector<unsigned char> argb(size_t(image.width) * image.height * 4);
@@ -33,7 +34,7 @@ static void save_diagram(const MdfPixels &image, const std::filesystem::path &pa
 }
 
 int main(int argc, char **argv) {
-  if (argc != 2) return 2;
+  if (argc != 2 && argc != 3) return 2;
   const std::string option = argv[1];
   if (option.rfind("--font-probe-", 0) == 0) {
     try {
@@ -71,25 +72,45 @@ int main(int argc, char **argv) {
     }
   }
   size_t count = 0;
+  jpeg_fixtures();
+  {
+    MdfPixels invalid{};
+    assert(!mdf_decode_pixels(nullptr, 0, SIZE_MAX, &invalid) && !invalid.data);
+    const unsigned char empty[1] = {};
+    assert(!mdf_decode_pixels(empty, 0, SIZE_MAX, &invalid) && !invalid.data);
+    assert(!mdf_decode_pixels(empty, sizeof(empty), SIZE_MAX, nullptr));
+  }
   std::vector<EncodedImage> inputs;
-  for (const auto &entry : std::filesystem::recursive_directory_iterator(argv[1])) {
-    const auto extension = entry.path().extension();
-    if (extension != ".png" && extension != ".jpg") continue;
-    std::ifstream stream(entry.path(), std::ios::binary);
+  std::vector<std::filesystem::path> files;
+  for (int argument = 1; argument < argc; ++argument)
+    for (const auto &entry : std::filesystem::recursive_directory_iterator(argv[argument]))
+      if (entry.is_regular_file()) files.push_back(entry.path());
+  for (const auto &path : files) {
+    const auto extension = path.extension();
+    if (extension != ".png" && extension != ".jpg" && extension != ".bad") continue;
+    std::ifstream stream(path, std::ios::binary);
     std::vector<unsigned char> bytes((std::istreambuf_iterator<char>(stream)), {});
+    if (extension == ".bad") {
+      MdfPixels invalid{};
+      assert(!mdf_decode_pixels(bytes.data(), bytes.size(), SIZE_MAX, &invalid) && !invalid.data);
+      continue;
+    }
     if (inputs.size() < 2) inputs.push_back({int(inputs.size()), bytes});
     MdfPixels image;
     if (!mdf_decode_pixels(bytes.data(), bytes.size(), SIZE_MAX, &image)) return 3;
     std::unique_ptr<Fl_RGB_Image> reference;
     if (extension == ".png") reference = std::make_unique<Fl_PNG_Image>(nullptr, bytes.data(), bytes.size());
     else reference = std::make_unique<Fl_JPEG_Image>(nullptr, bytes.data(), bytes.size());
-    if (reference->data_w() != image.width || reference->data_h() != image.height || reference->d() != image.channels ||
-        std::memcmp(image.data, reference->array, size_t(image.width) * image.height * image.channels)) {
-      std::cerr << "Pixel mismatch: " << entry.path() << '\n'; return 4;
+    if (!same_pixels(image, *reference, extension == ".png", path.string())) {
+      std::cerr << "Pixel mismatch: " << path << '\n'; return 4;
     }
     std::free(image.data);
     if (mdf_decode_pixels(bytes.data(), bytes.size(), 1, &image) || image.data) return 5;
     if (extension == ".png" && (mdf_decode_pixels(bytes.data(), 16, SIZE_MAX, &image) || image.data)) return 6;
+    if (extension == ".png" && bytes.size() < 4096) {
+      for (size_t prefix : {size_t(0),size_t(7),bytes.size()/2,bytes.size()-1})
+        assert(!mdf_decode_pixels(bytes.data(), prefix, SIZE_MAX, &image) && !image.data);
+    }
     ++count;
   }
   if (count < 100) return 7;
@@ -179,7 +200,7 @@ int main(int argc, char **argv) {
           std::filesystem::path(gallery) / (std::string(families[i]) + (dark ? "-dark.png" : "-light.png")));
     }
   }
-  std::cout << "PASS: " << count << " PNG/JPEG fixtures match FLTK pixels exactly; size limits and truncated PNGs fail cleanly\n";
+  std::cout << "PASS: " << count << " PNG/JPEG fixtures: exact PNG pixels, JPEG mean error <= 1/255 and PSNR >= 40 dB; size limits and truncated PNGs fail cleanly\n";
   std::cout << "PASS: image/diagram worker completion, cancellation, adopted pixel lifetimes and malformed Mermaid recovery\n";
   std::cout << "PASS: all 17 Pozeiden families produce real zig-svg pixels in light and dark modes\n";
 }

@@ -8,6 +8,9 @@ const loading = @import("loader.zig");
 const navigation = @import("navigation.zig");
 const settings = @import("settings.zig");
 const profiling = @import("profiling.zig");
+comptime {
+    _ = @import("json.zig");
+}
 const a = std.heap.c_allocator;
 
 pub const Buffer = extern struct { ptr: ?[*]const u8 = null, len: usize = 0 };

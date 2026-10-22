@@ -1,0 +1,263 @@
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -794,6 +794,29 @@
+   list(APPEND STATIC_FILES "text-input-protocol.c")
+   list(APPEND SHARED_FILES "text-input-protocol.c")
+ 
++  # MDF: optional compositor-owned cursor images. Older protocol SDKs keep
++  # the existing wl_cursor_theme fallback. Bind only version 1 at runtime.
++  set(MDF_CURSOR_XML ${PROTOCOLS}/staging/cursor-shape/cursor-shape-v1.xml)
++  set(MDF_TABLET_XML ${PROTOCOLS}/unstable/tablet/tablet-unstable-v2.xml)
++  if(EXISTS ${MDF_CURSOR_XML} AND EXISTS ${MDF_TABLET_XML})
++    foreach(MDF_PROTOCOL cursor-shape tablet-v2)
++      if(MDF_PROTOCOL STREQUAL "cursor-shape")
++        set(INFILE ${MDF_CURSOR_XML})
++      else()
++        set(INFILE ${MDF_TABLET_XML})
++      endif()
++      add_custom_command(
++        OUTPUT ${MDF_PROTOCOL}-protocol.c ${MDF_PROTOCOL}-client-protocol.h
++        COMMAND wayland-scanner private-code ${INFILE} ${MDF_PROTOCOL}-protocol.c
++        COMMAND wayland-scanner client-header ${INFILE} ${MDF_PROTOCOL}-client-protocol.h
++        DEPENDS ${INFILE} VERBATIM)
++      list(APPEND STATIC_FILES "${MDF_PROTOCOL}-protocol.c")
++      list(APPEND SHARED_FILES "${MDF_PROTOCOL}-protocol.c")
++    endforeach()
++    set_property(SOURCE drivers/Wayland/Fl_Wayland_Screen_Driver.cxx
++      APPEND PROPERTY COMPILE_DEFINITIONS MDF_HAVE_CURSOR_SHAPE=1)
++  endif()
++
+   if(STOP_REQUIRED)
+     message(FATAL_ERROR "*** Terminating: one or more required file(s) were not found. ***")
+   endif()
+--- a/src/drivers/Wayland/Fl_Wayland_Screen_Driver.H
++++ b/src/drivers/Wayland/Fl_Wayland_Screen_Driver.H
+@@ -28,6 +28,8 @@
+ 
+ class Fl_Window;
+ 
++struct wp_cursor_shape_device_v1;
++
+ class Fl_Wayland_Screen_Driver : public Fl_Unix_Screen_Driver
+ {
+ private:
+@@ -53,6 +55,8 @@
+     int pointer_scale;
+     uint32_t serial;
+     uint32_t pointer_enter_serial;
++    struct wp_cursor_shape_device_v1 *mdf_shape_device;
++    int mdf_cursor;
+     struct wl_data_device_manager *data_device_manager;
+     struct wl_data_device *data_device;
+     struct wl_data_source *data_source;
+--- a/src/drivers/Wayland/Fl_Wayland_Screen_Driver.cxx
++++ b/src/drivers/Wayland/Fl_Wayland_Screen_Driver.cxx
+@@ -19,6 +19,9 @@
+ #include "Fl_Wayland_Window_Driver.H"
+ #include "Fl_Wayland_Graphics_Driver.H"
+ #include <wayland-cursor.h>
++#ifdef MDF_HAVE_CURSOR_SHAPE
++#include "cursor-shape-client-protocol.h"
++#endif
+ #include "../../../libdecor/build/fl_libdecor.h"
+ #include "xdg-shell-client-protocol.h"
+ #include "../Posix/Fl_Posix_System_Driver.H"
+@@ -127,14 +130,18 @@
+ // end of extern additions workaround
+ 
+ 
++static void mdf_ensure_cursor_surface(struct Fl_Wayland_Screen_Driver::seat *);
++
+ void Fl_Wayland_Screen_Driver::do_set_cursor(
+     struct Fl_Wayland_Screen_Driver::seat *seat, struct wl_cursor *wl_cursor) {
+   struct wl_cursor_image *image;
+   struct wl_buffer *buffer;
+   const int scale = seat->pointer_scale;
+ 
+-  if (!seat->cursor_theme || !seat->wl_pointer)
+-    return;
++  if (!seat->wl_pointer) return;
++  if (!wl_cursor && fl_mdf_set_cursor_shape(seat->mdf_cursor)) return;
++  if (!wl_cursor && !seat->cursor_theme) return;
++  mdf_ensure_cursor_surface(seat);
+ 
+   if (!wl_cursor) wl_cursor = seat->default_cursor;
+   image = wl_cursor->images[0];
+@@ -389,6 +396,64 @@
+ 
+ 
+ static bool mdf_cursor_pending = false;
++#ifdef MDF_HAVE_CURSOR_SHAPE
++static wp_cursor_shape_manager_v1 *mdf_cursor_manager = NULL;
++static uint32_t mdf_cursor_manager_id = 0;
++#endif
++
++static void mdf_release_cursor_shape(struct Fl_Wayland_Screen_Driver::seat *seat) {
++#ifdef MDF_HAVE_CURSOR_SHAPE
++  if (seat && seat->mdf_shape_device) {
++    wp_cursor_shape_device_v1_destroy(seat->mdf_shape_device);
++    seat->mdf_shape_device = NULL;
++  }
++#endif
++}
++
++extern "C" int fl_mdf_cursor_shape_supported() {
++  auto *seat = ((Fl_Wayland_Screen_Driver *)Fl::screen_driver())->seat;
++  return seat && seat->mdf_shape_device;
++}
++extern "C" int fl_mdf_set_cursor_shape(int cursor) {
++#ifdef MDF_HAVE_CURSOR_SHAPE
++  auto *seat = ((Fl_Wayland_Screen_Driver *)Fl::screen_driver())->seat;
++  if (!seat || !seat->wl_pointer || !seat->mdf_shape_device) return 0;
++  uint32_t shape;
++  switch (cursor) {
++    case FL_CURSOR_DEFAULT: case FL_CURSOR_ARROW: shape = WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_DEFAULT; break;
++    case FL_CURSOR_CROSS: shape = WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_CROSSHAIR; break;
++    case FL_CURSOR_WAIT: shape = WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_WAIT; break;
++    case FL_CURSOR_INSERT: shape = WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_TEXT; break;
++    case FL_CURSOR_HAND: shape = WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_POINTER; break;
++    case FL_CURSOR_HELP: shape = WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_HELP; break;
++    case FL_CURSOR_MOVE: shape = WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_MOVE; break;
++    case FL_CURSOR_N: shape = WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_N_RESIZE; break;
++    case FL_CURSOR_S: shape = WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_S_RESIZE; break;
++    case FL_CURSOR_E: shape = WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_E_RESIZE; break;
++    case FL_CURSOR_W: shape = WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_W_RESIZE; break;
++    case FL_CURSOR_NS: shape = WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_NS_RESIZE; break;
++    case FL_CURSOR_WE: shape = WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_EW_RESIZE; break;
++    case FL_CURSOR_SW: shape = WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_SW_RESIZE; break;
++    case FL_CURSOR_SE: shape = WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_SE_RESIZE; break;
++    case FL_CURSOR_NE: shape = WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_NE_RESIZE; break;
++    case FL_CURSOR_NW: shape = WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_NW_RESIZE; break;
++    case FL_CURSOR_NESW: shape = WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_NESW_RESIZE; break;
++    case FL_CURSOR_NWSE: shape = WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_NWSE_RESIZE; break;
++    case FL_CURSOR_NONE: shape = 0; break;
++    default: return 0;
++  }
++  seat->mdf_cursor = cursor;
++  // A valid enter serial is required. Before enter, remember the selection;
++  // pointer_enter() calls do_set_cursor again with the compositor's serial.
++  if (seat->pointer_focus && seat->pointer_enter_serial) {
++    if (shape) wp_cursor_shape_device_v1_set_shape(seat->mdf_shape_device, seat->pointer_enter_serial, shape);
++    else wl_pointer_set_cursor(seat->wl_pointer, seat->pointer_enter_serial, NULL, 0, 0);
++  }
++  return 1;
++#else
++  return 0;
++#endif
++}
+ static void init_cursors(struct Fl_Wayland_Screen_Driver::seat *seat);
+ 
+ 
+@@ -471,6 +536,15 @@
+ 
+ 
+ static void init_cursors(struct Fl_Wayland_Screen_Driver::seat *seat) {
++#ifdef MDF_HAVE_CURSOR_SHAPE
++  if (mdf_cursor_manager && seat->wl_pointer) {
++    if (!seat->mdf_shape_device) {
++      seat->mdf_shape_device = wp_cursor_shape_manager_v1_get_pointer(mdf_cursor_manager, seat->wl_pointer);
++      if (seat->mdf_shape_device && fl_mdf_startup_mark) fl_mdf_startup_mark("Compositor cursor shapes ready");
++    }
++    if (seat->mdf_shape_device) { mdf_cursor_pending = false; return; }
++  }
++#endif
+   if (fl_mdf_defer_cursors && fl_mdf_defer_cursors()) {
+     mdf_cursor_pending = true;
+     return;
+@@ -502,6 +576,11 @@
+     seat->default_cursor = scr_driver->xc_cursor[Fl_Wayland_Screen_Driver::arrow] =
+       wl_cursor_theme_get_cursor(seat->cursor_theme, "left_ptr");
+   }
++  mdf_ensure_cursor_surface(seat);
++}
++
++static void mdf_ensure_cursor_surface(struct Fl_Wayland_Screen_Driver::seat *seat) {
++  auto *scr_driver = (Fl_Wayland_Screen_Driver *)Fl::screen_driver();
+   if (!seat->cursor_surface) {
+     seat->cursor_surface = wl_compositor_create_surface(scr_driver->wl_compositor);
+     wl_surface_add_listener(seat->cursor_surface, &cursor_surface_listener, seat);
+@@ -638,6 +717,12 @@
+           (mdf_input.has_map && !mdf_input.pending && mdf_input.events.empty())) && !mdf_cursor_pending;
+ }
+ extern "C" void fl_mdf_wayland_startup_shutdown() {
++  auto *shape_seat = ((Fl_Wayland_Screen_Driver *)Fl::screen_driver())->seat;
++  mdf_release_cursor_shape(shape_seat);
++#ifdef MDF_HAVE_CURSOR_SHAPE
++  if (mdf_cursor_manager) wp_cursor_shape_manager_v1_destroy(mdf_cursor_manager);
++  mdf_cursor_manager = NULL; mdf_cursor_manager_id = 0;
++#endif
+   Fl::remove_timeout(mdf_keyboard_tick);
+   mdf_input.tick_scheduled = false;
+   mdf_input.events.clear();
+@@ -1249,8 +1334,10 @@
+     seat->pointer_scale = 1;
+     init_cursors(seat);
+   } else if (!(capabilities & WL_SEAT_CAPABILITY_POINTER) && seat->wl_pointer) {
++    mdf_release_cursor_shape(seat);
+     wl_pointer_release(seat->wl_pointer);
+     seat->wl_pointer = NULL;
++    mdf_cursor_pending = false;
+   }
+ 
+   bool have_keyboard = seat->xkb_context && (capabilities & WL_SEAT_CAPABILITY_KEYBOARD);
+@@ -1382,6 +1469,16 @@
+   MDF_TRACE("Handle Wayland registry global");
+ //fprintf(stderr, "interface=%s version=%u\n", interface, version);
+   Fl_Wayland_Screen_Driver *scr_driver = (Fl_Wayland_Screen_Driver*)Fl::screen_driver();
++#ifdef MDF_HAVE_CURSOR_SHAPE
++  if (strcmp(interface, wp_cursor_shape_manager_v1_interface.name) == 0) {
++    if (!mdf_cursor_manager) {
++      mdf_cursor_manager = (wp_cursor_shape_manager_v1 *)wl_registry_bind(wl_registry, id, &wp_cursor_shape_manager_v1_interface, 1);
++      mdf_cursor_manager_id = id;
++      if (scr_driver->seat && scr_driver->seat->wl_pointer) init_cursors(scr_driver->seat);
++    }
++    return;
++  }
++#endif
+   if (strcmp(interface, "wl_compositor") == 0) {
+     if (version < 4) {
+       Fl::fatal("wl_compositor version >= 4 required");
+@@ -1508,6 +1605,18 @@
+   Fl_Wayland_Screen_Driver::output *output, *tmp;
+ //fprintf(stderr, "registry_handle_global_remove data=%p id=%u\n", data, name);
+   Fl_Wayland_Screen_Driver *scr_driver = (Fl_Wayland_Screen_Driver*)Fl::screen_driver();
++#ifdef MDF_HAVE_CURSOR_SHAPE
++  if (name == mdf_cursor_manager_id) {
++    mdf_release_cursor_shape(scr_driver->seat);
++    wp_cursor_shape_manager_v1_destroy(mdf_cursor_manager);
++    mdf_cursor_manager = NULL; mdf_cursor_manager_id = 0;
++    if (scr_driver->seat && scr_driver->seat->wl_pointer) {
++      init_cursors(scr_driver->seat);
++      if (!mdf_cursor_pending) fl_mdf_restore_cursors();
++    }
++    return;
++  }
++#endif
+   wl_list_for_each_safe(output, tmp, &(scr_driver->outputs), link) { // all screens
+     if (output->id == name) { // the screen being removed
+       again:
+--- a/src/drivers/Wayland/Fl_Wayland_Window_Driver.cxx
++++ b/src/drivers/Wayland/Fl_Wayland_Window_Driver.cxx
+@@ -1627,6 +1627,11 @@
+ int Fl_Wayland_Window_Driver::set_cursor(Fl_Cursor c) {
+   Fl_Wayland_Screen_Driver *scr_driver = (Fl_Wayland_Screen_Driver*)Fl::screen_driver();
+   struct wld_window *xid = (struct wld_window *)Fl_Window_Driver::xid(pWindow);
++  if (fl_mdf_set_cursor_shape(c)) {
++    if (xid->custom_cursor) { delete_cursor(xid->custom_cursor); xid->custom_cursor = NULL; }
++    standard_cursor_ = c;
++    return 1;
++  }
+   if (!scr_driver->seat->cursor_theme) { standard_cursor_ = c; return 1; }
+   // Cursor names are the files of directory /usr/share/icons/XXXX/cursors/
+   // where XXXX is the name of the current 'cursor theme'.
+--- a/src/drivers/Wayland/mdf_startup.h
++++ b/src/drivers/Wayland/mdf_startup.h
+@@ -59,6 +59,8 @@
+ int fl_mdf_prepare_window(void *);
+ double fl_mdf_window_scale(void *);
+ void fl_mdf_restore_cursors();
++int fl_mdf_set_cursor_shape(int);
++int fl_mdf_cursor_shape_supported();
+ }
+ class MdfTrace {
+   const char *name_, *file_;

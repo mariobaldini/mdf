@@ -5,6 +5,7 @@
     .minimum_zig_version = "0.17.0",
     .dependencies = .{
         .zig_svg = .{ .path = "modules/zig-svg" },
+        .zignal = .{ .path = "modules/zignal" },
         .mvzr = .{
             .url = "git+https://github.com/mnemnion/mvzr?ref=v0.3.9#dd0e1bd2d6b10f9650317b30baef7ab7bc9dd9ec",
             .hash = "mvzr-0.3.9-ZSOky8FzAQBQ9-GkQnaLjOZZHxrioD8NwY-QyZT6oAyR",

@@ -4,15 +4,23 @@
     "url": "https://codeload.github.com/fltk/fltk/tar.gz/refs/tags/release-1.4.5",
     "sha256": "7715e69ce081fa9ce6da48bb0dd3b07a4cf2cf937813814c04272f36fff593ea"
   },
-  "nlohmann_json": {
-    "version": "3.12.0",
-    "url": "https://raw.githubusercontent.com/nlohmann/json/v3.12.0/single_include/nlohmann/json.hpp",
-    "sha256": "aaf127c04cb31c406e5b04a63f1ae89369fccde6d8fa7cdda1ed4f32dfc5de63"
+  "pango": {
+    "version": "1.57.1",
+    "url": "https://codeload.github.com/GNOME/pango/tar.gz/refs/tags/1.57.1",
+    "sha256": "fefa79f2a6a37f744aefc1782b7241218b9f50bc1084415c1c73561150ca6665",
+    "license": "LGPL-2.1-or-later"
   },
-  "nlohmann_license": {
-    "version": "3.12.0",
-    "url": "https://raw.githubusercontent.com/nlohmann/json/v3.12.0/LICENSE.MIT",
-    "sha256": "46a65cffd1ea955132d95a8dd921640714a8d6b537d2e4e482d31145ae95b603"
+  "cairo": {
+    "version": "1.18.6",
+    "commit": "018b3424a10ecd37450360f21454ecf0f3007e17",
+    "url": "https://gitlab.freedesktop.org/cairo/cairo/-/archive/1.18.6/cairo-1.18.6.tar.gz",
+    "sha256": "a95ae4f522ef24312af7339563f65e0a03b1ad3d58a46df73d2ef690fe15ae7f",
+    "license": "LGPL-2.1-only OR MPL-1.1"
+  },
+  "meson": {
+    "version": "1.9.1",
+    "url": "https://files.pythonhosted.org/packages/9c/07/b48592d325cb86682829f05216e4efb2dc881762b8f1bafb48b57442307a/meson-1.9.1-py3-none-any.whl",
+    "sha256": "f824ab770c041a202f532f69e114c971918ed2daff7ea56583d80642564598d0"
   },
   "zig_svg": {
     "version": "0.2.0",
@@ -25,5 +33,11 @@
     "commit": "071fbbb85fb73a06994c163c6093123bd3ac11f6",
     "url": "https://github.com/sc2in/pozeiden.git",
     "license": "PolyForm-Noncommercial-1.0.0"
+  },
+  "zignal": {
+    "version": "0.11.0",
+    "commit": "1719dae43146b836f8382571300dcd84b3950072",
+    "url": "https://github.com/bfactory-ai/zignal.git",
+    "license": "MIT"
   }
 }

@@ -4,3 +4,6 @@
 [submodule "modules/zig-svg"]
 	path = modules/zig-svg
 	url = https://github.com/jcollie/zig-svg.git
+[submodule "modules/zignal"]
+	path = modules/zignal
+	url = https://github.com/bfactory-ai/zignal.git
