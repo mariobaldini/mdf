@@ -1028,7 +1028,7 @@ struct App {
     if (name == "about") {
       fl_message_title("About Markdown FAST");
       fl_message(
-          "Markdown FAST 0.2.0\n\nFLTK 1.4.5 · Wayland · Cairo/Pango\nZig 0.16 "
+          "Markdown FAST 0.2.0\n\nFLTK 1.4.5 · Wayland · Cairo/Pango\nZig 0.17 "
           "· MD4C\n\nhttps://github.com/mariobaldini/mdf");
       return;
     }
