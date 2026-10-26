@@ -5,15 +5,18 @@ The current version is 0.2.0.
 
 ## GUI and document processing
 
-- Zig/z2d provides native menus, buttons, window controls, TOC, minimap, and scrollbars over Wayland shared memory.
-- The default renderer contains no FLTK, Cairo, C++ runtime or OpenGL path.
-- Optional PangoFT2 system font support loads after the first viewport.
+- FLTK 1.4.5 provides native menus, buttons, window controls, TOC, minimap, and scrollbars over Wayland shared memory.
+- The production C++ frontend draws through Cairo and Pango. It uses neither X11 nor OpenGL.
+- Deferred workers prepare system Sans fallback and monospace fonts after the first viewport.
 - Zig 0.17.0 owns Markdown parsing, loading, settings, file watching, navigation, and the embedded Open Sans resources.
 - Zigmark parses CommonMark/GFM; Zig converts its AST into MDF blocks and spans.
-- The private Zig frontend borrows the launcher's document core through a checked ABI. Worker inputs remain valid until their workers stop.
+- The private FLTK frontend borrows the launcher's Zig document core through a checked C ABI. Worker inputs remain valid until their workers stop.
 - Typed block and span views keep bulk document data out of JSON. Repeated headings reuse their last anchor suffix to keep parsing linear.
 - Zig's `std.json` handles messages, settings, and profiler JSON.
-- The document widget measures visible blocks and draws them through z2d, with retained layout and glyph caches.
+- The FLTK document widget measures visible blocks with Pango and retains text runs and bounded word measurements.
+- Width changes retain word measurements. Font and display-scale changes clear those measurements. Painting resolves colors from the current palette.
+- Words span adjacent styles and links. Pango supplies grapheme boundaries for long-token wrapping and pointer selection through the private layout interface.
+- TOC jumps retain layout through open ancestors. Details changes invalidate their subtree and preserve the reader's scroll anchor.
 - The minimap caches a small image surface and moves its viewport marker during scrolling.
 
 The toolbar contains TOC, light/dark, and one width button that cycles between 80% and 100%.
@@ -156,8 +159,35 @@ Private font preparation took 1.89/2.06 ms. Wayland remained separate at 70.77/7
 
 `mdf --profile-scroll SAMPLE.md` separately records native draw times for 80 scroll positions.
 Every sample must paint the reader widget. This measures synchronous layout and drawing, excluding compositor latency.
+The original `scroll_draw_ms` and `scroll_frames` fields retain this series.
+The additive `interaction_profile` field contains repeated scroll, resize, and TOC series.
+Each series records handler and flush times, word-cache hits and misses, layout builds, and minimap builds.
+These timings start at programmatic handler calls and end after synchronous FLTK flush. They exclude event arrival and compositor scanout.
+`scripts/benchmark-interactions.py` compares alternating baseline and candidate launches on the same Wayland compositor, with two warmups per document.
+Its report includes executable hashes, raw samples, and guards for startup, scroll p95, resize, and TOC timings.
+For startup tails, `--startup-runs 60` adds a separate paired `--benchmark` series.
+The report also preserves startup samples from the interaction launches.
 Use `scripts/benchmark.py` for warm launches of generated document sizes.
 Do not use startup measurements alone to judge interaction speed or rendering quality.
+
+The 2026-10-26 ReleaseFast comparison used 24 interaction pairs and 60 separate warm startup pairs per text fixture.
+Each series included two warmups. Clients used CPU 2. The private headless Weston compositor used CPU 0.
+Both builds used identical FLTK patches, Pango 1.57.1, and Cairo 1.18.6.
+All fixtures passed the 5% startup median/p95 and scroll p95 guards.
+The table records medians from handler entry through synchronous FLTK flush.
+
+| Text fixture | Resize before/after (ms) | TOC before/after (ms) | Scroll p95 before/after (ms) |
+| --- | ---: | ---: | ---: |
+| Small | 6.030 / 5.695 | 1.419 / 0.821 | 1.554 / 1.524 |
+| Mid-sized | 12.157 / 11.974 | 1.777 / 0.787 | 4.075 / 4.088 |
+| Huge | 27.909 / 27.898 | 3.155 / 1.751 | 4.336 / 4.413 |
+
+Huge-text resize remained effectively unchanged. Core tests passed in Debug, ReleaseSafe, and ReleaseFast (226 each).
+The GUI suite and display-scale checks at 125% and 200% also passed.
+The local evidence remains in `build/latin-reflow/acceptance.json`, including raw samples, executable hashes, library versions, cache counters, and every guard result.
+
+The following milestone targets progressive image delivery and decoded-image memory.
+The prior huge-image probe used approximately 266 MiB at readiness. Decoded results currently wait for the entire batch.
 
 ## Upstream sources
 

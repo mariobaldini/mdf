@@ -7,6 +7,8 @@ It also runs native JSON, image, asynchronous keyboard, and system-font checks, 
 GUI and visual comparisons remain separate: use `make test-gui` or `make test-render`.
 The GUI suite also checks word-metric reuse against real FLTK fonts, bounded cache size,
 font invalidation, and retained painting metrics in `text-layout.hpp`.
+It covers styled words, decomposed accents, selection byte positions, color changes, TOC cache reuse, and details scroll anchors.
+The Latin cases use 480- and 1040-pixel widths and several font sizes.
 `make test-cairo OPTIMIZE=ReleaseFast` checks the minimal Cairo backend contract and image compositing.
 
 Every `make build` first runs the unit tests in the selected build mode.
@@ -27,6 +29,19 @@ The unit cases cover Markdown structures, malformed UTF-8, URL validation, prefe
 viewport lookup, wrapping, cancellation, filesystem limits, JSON ownership and conversion, and profiler accounting.
 Workflow tests also inject a unit failure and verify that the build stops.
 They check setup's dependency-cache selection, pinned checksums, and offline behavior.
+They also cover HTTP archive prefixes, repair of older wrapped caches, and preservation after a failed repair.
+`ci-workflow.py` checks branch gates and release publication with a local GitHub CLI stub.
+It covers exact commit targets, RPM/DEB checksums, draft retries, and Latest selection after builds finish out of order.
+These tests require PyYAML (`python3-pyyaml` on Fedora), which `make setup` installs.
 
 These commands use cached dependencies and perform no downloads or global disk-cache flushes.
 Run `make setup` first if dependencies are missing.
+
+On a Wayland compositor, run the matched interaction comparison with two ReleaseFast executables:
+
+```sh
+python3 scripts/benchmark-interactions.py --baseline build/baseline/bin/mdf --binary build/bin/mdf --runs 8 --startup-runs 60 --output build/interactions.json --enforce
+```
+
+The comparison retains all 80 original scroll positions and adds repeated scroll, resize, and TOC series.
+The report records cache and rebuild counters. These timings exclude compositor scanout.

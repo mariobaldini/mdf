@@ -11,6 +11,10 @@ pub const Span = extern struct {
         return if (self.text) |ptr| ptr[0..self.len] else "";
     }
 };
+// One byte per source byte plus the final position. Nonzero marks a cursor /
+// grapheme boundary in the concatenation of all spans. The renderer retains
+// this storage until layout returns; the core has no shaping dependency.
+pub const Boundaries = *const fn (?*anyopaque, [*]const Span, usize) callconv(.c) ?[*]const u8;
 pub const Spec = extern struct {
     left: f32,
     top: f32,
@@ -19,6 +23,7 @@ pub const Spec = extern struct {
     start: usize = 0,
     alignment: u32 = 0, // 0: left, 1: center, 2: right
     flags: u32 = 5, // 1: wrap, 2: retain leading code whitespace, 4: collect runs
+    boundaries: ?Boundaries = null,
 };
 pub const Metrics = extern struct { width: f32, height: f32, descent: f32 };
 pub const Measure = *const fn (?*anyopaque, usize, [*]const u8, usize) callconv(.c) Metrics;
@@ -117,6 +122,63 @@ fn measureText(callback: Measure, context: ?*anyopaque, span: usize, text: []con
     return result;
 }
 
+const Cursor = struct {
+    span: usize = 0,
+    offset: usize = 0,
+    position: usize = 0,
+
+    fn normalize(self: *Cursor, spans: []const Span) void {
+        while (self.span < spans.len and self.offset == spans[self.span].len) {
+            self.span += 1;
+            self.offset = 0;
+        }
+    }
+    fn advance(self: *Cursor, spans: []const Span, len: usize) void {
+        self.offset += len;
+        self.position += len;
+        self.normalize(spans);
+    }
+    fn pieceEnd(self: Cursor, spans: []const Span, end: Cursor) usize {
+        return if (self.span == end.span) end.offset else spans[self.span].len;
+    }
+};
+const RangeMetrics = struct { first: Metrics, width: f32 };
+fn measureRange(spans: []const Span, begin: Cursor, end: Cursor, callback: Measure, context: ?*anyopaque) !RangeMetrics {
+    var at = begin;
+    var result: RangeMetrics = undefined;
+    result.width = 0;
+    while (at.position < end.position) {
+        const len = at.pieceEnd(spans, end) - at.offset;
+        const metrics = try measureText(callback, context, at.span, spans[at.span].bytes()[at.offset..][0..len]);
+        if (at.position == begin.position) result.first = metrics;
+        result.width += metrics.width;
+        at.advance(spans, len);
+    }
+    if (!std.math.isFinite(result.width)) return error.InvalidMetrics;
+    return result;
+}
+fn emitRange(engine: *Engine, spans: []const Span, begin: Cursor, end: Cursor, first: Metrics, glyph: bool, callback: Measure, context: ?*anyopaque) !void {
+    var at = begin;
+    while (at.position < end.position) {
+        const len = at.pieceEnd(spans, end) - at.offset;
+        const metrics = if (at.position == begin.position) first else
+            try measureText(callback, context, at.span, spans[at.span].bytes()[at.offset..][0..len]);
+        try engine.emit(at.span, at.offset, len, metrics, metrics.width, glyph);
+        at.advance(spans, len);
+    }
+}
+
+fn needsBoundaries(spans: []const Span, begin: Cursor, end: Cursor) bool {
+    var at = begin;
+    while (at.position < end.position) {
+        const len = at.pieceEnd(spans, end) - at.offset;
+        for (spans[at.span].bytes()[at.offset..][0..len]) |byte|
+            if (byte >= 128) return true;
+        at.advance(spans, len);
+    }
+    return false;
+}
+
 pub fn layout(allocator: std.mem.Allocator, spans: []const Span, spec: Spec, callback: Measure, context: ?*anyopaque) !Result {
     if (!std.math.isFinite(spec.left) or !std.math.isFinite(spec.top) or
         !std.math.isFinite(spec.width) or spec.width <= 0 or spec.size <= 0)
@@ -136,51 +198,87 @@ pub fn layout(allocator: std.mem.Allocator, spans: []const Span, spec: Spec, cal
     };
     errdefer engine.runs.deinit(allocator);
     const wrap = spec.flags & 1 != 0;
-    for (spans, 0..) |span, index| {
+    var at = Cursor{ .position = spec.start };
+    at.normalize(spans);
+    var boundaries: ?[*]const u8 = null;
+    while (at.span < spans.len) {
+        const span = spans[at.span];
         const text = span.bytes();
-        var at: usize = 0;
-        while (at < text.len) {
-            if (text[at] == '\n') {
-                engine.nextLine();
-                at += 1;
-                engine.position += 1;
-                continue;
-            }
-            if (span.flags & 1 != 0 and text[at] == '\t') {
-                const metrics = try measureText(callback, context, index, " ");
-                const stop = @max(1, metrics.width * 4);
-                var gap = stop - @rem(@max(0, engine.x - spec.left), stop);
-                if (gap < 0.01) gap = stop;
-                try engine.emit(index, at, 1, metrics, gap, true);
-                at += 1;
-                continue;
-            }
-            var end = at;
-            const space = std.ascii.isWhitespace(text[at]);
-            while (end < text.len and text[end] != '\n' and
-                !(span.flags & 1 != 0 and text[end] == '\t') and
-                std.ascii.isWhitespace(text[end]) == space)
-                end += sequenceLength(text, end);
-            const word = text[at..end];
-            const metrics = try measureText(callback, context, index, word);
-            if (wrap and engine.x > spec.left and engine.x + metrics.width > spec.left + spec.width and !space)
-                engine.nextLine();
-            if (!wrap or metrics.width <= spec.width or space) {
-                if (space and engine.x == spec.left and spec.flags & 2 == 0) {
-                    engine.position += word.len;
-                } else try engine.emit(index, at, word.len, metrics, metrics.width, false);
-            } else {
-                var p = at;
-                while (p < end) {
-                    const len = sequenceLength(text, p);
-                    const glyph = try measureText(callback, context, index, text[p..][0..len]);
-                    if (engine.x > spec.left and engine.x + glyph.width > spec.left + spec.width)
-                        engine.nextLine();
-                    try engine.emit(index, p, len, glyph, glyph.width, true);
-                    p += len;
-                }
-            }
+        if (text[at.offset] == '\n') {
+            engine.nextLine();
+            engine.position += 1;
+            at.advance(spans, 1);
+            continue;
+        }
+        if (span.flags & 1 != 0 and text[at.offset] == '\t') {
+            const metrics = try measureText(callback, context, at.span, " ");
+            const stop = @max(1, metrics.width * 4);
+            var gap = stop - @rem(@max(0, engine.x - spec.left), stop);
+            if (gap < 0.01) gap = stop;
+            try engine.emit(at.span, at.offset, 1, metrics, gap, true);
+            at.advance(spans, 1);
+            continue;
+        }
+        // Style boundaries are not word boundaries. Scan and measure the
+        // complete token before deciding whether it belongs on this line.
+        const space = std.ascii.isWhitespace(text[at.offset]);
+        var end = at;
+        while (end.span < spans.len) {
+            const part = spans[end.span];
+            const bytes = part.bytes();
+            var offset = end.offset;
+            while (offset < bytes.len and bytes[offset] != '\n' and
+                !(part.flags & 1 != 0 and bytes[offset] == '\t') and
+                std.ascii.isWhitespace(bytes[offset]) == space) : (offset += 1) {}
+            if (offset == end.offset) break;
+            const finished = offset < bytes.len;
+            end.advance(spans, offset - end.offset);
+            if (finished) break;
+        }
+        const len = end.position - at.position;
+        const single_span = len <= span.len - at.offset;
+        // Most words stay in one span. Keep that path to one measurement and
+        // one emission; cross-span lookahead must not penalize ordinary prose.
+        const metrics: RangeMetrics = if (single_span) single: {
+            const first = try measureText(callback, context, at.span, text[at.offset..][0..len]);
+            break :single .{ .first = first, .width = first.width };
+        } else try measureRange(spans, at, end, callback, context);
+        if (wrap and !space and engine.x > spec.left and engine.x + metrics.width > spec.left + spec.width)
+            engine.nextLine();
+        if (!wrap or metrics.width <= spec.width or space) {
+            if (space and engine.x == spec.left and spec.flags & 2 == 0)
+                engine.position += len
+            else if (single_span)
+                try engine.emit(at.span, at.offset, len, metrics.first, metrics.width, false)
+            else
+                try emitRange(&engine, spans, at, end, metrics.first, false, callback, context);
             at = end;
+        } else {
+            if (boundaries == null and spec.boundaries != null and needsBoundaries(spans, at, end)) {
+                if (spec.boundaries) |get|
+                    boundaries = get(context, spans.ptr, spans.len) orelse return error.InvalidBoundaries;
+            }
+            while (at.position < end.position) {
+                var next = at;
+                if (boundaries) |mask| {
+                    next.advance(spans, 1);
+                    while (next.position < end.position and mask[next.position - spec.start] == 0)
+                        next.advance(spans, 1);
+                } else next.advance(spans, sequenceLength(spans[at.span].bytes(), at.offset));
+                const glyph_len = next.position - at.position;
+                const single_glyph = glyph_len <= spans[at.span].len - at.offset;
+                const glyph: RangeMetrics = if (single_glyph) single: {
+                    const first = try measureText(callback, context, at.span, spans[at.span].bytes()[at.offset..][0..glyph_len]);
+                    break :single .{ .first = first, .width = first.width };
+                } else try measureRange(spans, at, next, callback, context);
+                if (engine.x > spec.left and engine.x + glyph.width > spec.left + spec.width)
+                    engine.nextLine();
+                if (single_glyph)
+                    try engine.emit(at.span, at.offset, glyph_len, glyph.first, glyph.width, true)
+                else
+                    try emitRange(&engine, spans, at, next, glyph.first, true, callback, context);
+                at = next;
+            }
         }
     }
     engine.endLine();

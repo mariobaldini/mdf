@@ -19,7 +19,7 @@ if [ "$ZIG" != zig ] && ! command -v "$ZIG" >/dev/null 2>&1; then
     exit 1
 fi
 rpm -q ca-certificates >/dev/null 2>&1 || set -- "$@" ca-certificates
-mdf_packages='pkgconf-pkg-config binutils pango-devel fontconfig-devel wayland-devel wayland-protocols-devel libxkbcommon-devel weston weston-devel git git-lfs'
+mdf_packages='pkgconf-pkg-config binutils pango-devel fontconfig-devel wayland-devel wayland-protocols-devel libxkbcommon-devel weston weston-devel git git-lfs python3-pyyaml'
 if [ "${MDF_REFERENCE:-0}" = 1 ];then
     mdf_packages="$mdf_packages cmake ninja-build gcc gcc-c++ libstdc++-static clang-tools-extra cairo-devel pixman-devel glib2-devel fribidi-devel harfbuzz-devel freetype-devel"
 fi

@@ -113,9 +113,11 @@ The build requires Git LFS, GNU Make, Zig 0.17.0, GCC/G++, CMake, Ninja, Python,
 `make setup` prepares the FLTK frontend and pinned Zig modules. Builds then run offline.
 `make reference` is an isolated FLTK build in `build/reference`; `make setup-reference` remains an alias for the same dependencies.
 `make setup-native` prepares the minimal dependencies for the optional experimental Zig UI.
+
 On Fedora 44, `make setup` installs missing requirements and downloads the pinned sources.
 If the default compiler has another version, setup caches the exact official compiler in `zig-pkg/zig-0.17.0/`.
 Make uses that cached compiler automatically. An explicit `ZIG=/path/to/zig` overrides this choice.
+Setup extracts dependency archives at their package root. It also repairs source caches from earlier setup runs.
 
 ```sh
 git clone --recurse-submodules https://github.com/mariobaldini/mdf.git
@@ -388,7 +390,17 @@ For a short check under the current powersave mode and ordinary CPU scheduling, 
 It checks unchanged preferences, matching workloads, empty executable page caches, and identical pixels for covered Latin text.
 Greek/Cyrillic rendering is measured separately because subsetting removes those glyphs.
 
-Version tags such as `v0.2.0` publish a GitHub release after all build and test checks pass.
+GitHub Actions tests and builds pushes to `main` and `dev`, pull requests, and manual runs.
+Successful `main` pushes also build and check RPM/DEB packages, then publish a release with the executable, packages, checksums, and build information.
+The `dev`, pull-request, and manual runs retain no build artifacts and create no release packages.
+Each branch uses its own workflow file. The `dev` branch must include this workflow change.
+
+For example, workflow run 123 for version `0.2.0` creates tag `v0.2.0-123` at the exact source commit.
+Its RPM release is `123`, and its DEB version is `0.2.0-123`. Package managers can update between builds of the same application version.
+Each main build publishes its own release. A separate step selects the newest published version as Latest, regardless of build completion order.
+
+Version-tag pushes such as `v0.2.1` retain the existing release behavior and must match the application version.
+Local `make release` keeps the original package names. Set `MDF_PACKAGE_RELEASE=123` to create packages with a numbered revision.
 
 FLTK is built with Wayland enabled, X11 and OpenGL disabled, and its bundled Cairo title-bar plugin.
 The Markdown pane draws visible blocks directly through FLTK. It caches text layouts and the small minimap image.

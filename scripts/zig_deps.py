@@ -10,6 +10,34 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGES = ROOT/'zig-pkg'
 
+def package_root(directory):
+    """Zig's cached HTTP archives can retain the upstream top directory."""
+    original = directory
+    while not (directory/'build.zig.zon').is_file():
+        entries = list(directory.iterdir())
+        if len(entries) != 1 or entries[0].is_symlink() or not entries[0].is_dir():
+            return original  # Source-only packages need no manifest.
+        directory = entries[0]
+    return directory
+
+
+def repair_wrapped_package(directory, fetch):
+    source = package_root(directory)
+    if source == directory:
+        return
+    if not fetch:
+        raise ValueError('Wrapped Zig source cache '+directory.name+'; run make setup')
+    relative = source.relative_to(directory)
+    with tempfile.TemporaryDirectory(prefix='.source-', dir=PACKAGES) as temporary:
+        saved = Path(temporary)/'wrapped'
+        directory.rename(saved)
+        try:
+            (saved/relative).rename(directory)
+        except BaseException:
+            saved.rename(directory)
+            raise
+
+
 def records(manifest):
     text = manifest.read_text()
     section = text.split('.dependencies = .{', 1)
@@ -53,7 +81,8 @@ def cached_packages(manifests, fetch=False):
                 with tempfile.TemporaryDirectory(prefix='.source-',dir=PACKAGES) as temporary:
                     with tarfile.open(cache/'p'/(expected+'.tar.gz')) as archive:
                         archive.extractall(temporary,filter='data')
-                    shutil.move(Path(temporary)/expected,destination)
+                    shutil.move(package_root(Path(temporary)/expected),destination)
+            repair_wrapped_package(destination, fetch)
             packages[expected] = {**record,'directory':destination}
             walk(destination/'build.zig.zon')
     for manifest in manifests:

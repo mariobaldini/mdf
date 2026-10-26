@@ -54,6 +54,29 @@ if data.get('frame_preparation')=='preconfigure':
 print('PASS: Latin text and inline code never start system font discovery')
 PY
 
+# Keep the original scroll contract and exercise the production interaction
+# paths after warm layout, including their additive cache/rebuild accounting.
+env -u WAYLAND_SOCKET XDG_RUNTIME_DIR="$mdf_test/runtime" WAYLAND_DISPLAY=mdf-test \
+    "$mdf_binary" --profile-scroll "$mdf_root/SAMPLE-SMALL-TEXT.md" >"$mdf_test/interactions.json" 2>"$mdf_test/interactions.err"
+python3 - "$mdf_test/interactions.json" <<'PY'
+import json, math, sys
+data = json.load(open(sys.argv[1]))
+assert data['scroll_frames'] == len(data['scroll_draw_ms']) == 80
+profile = data['interaction_profile']
+for name, count in [('repeated_scroll', 120), ('resize', 24), ('toc', None)]:
+    series = profile[name]
+    assert len(series['handler_ms']) == len(series['to_flush_ms']) > 0
+    if count is not None:
+        assert len(series['handler_ms']) == count
+    assert all(math.isfinite(a) and 0 <= a <= b for a, b in zip(series['handler_ms'], series['to_flush_ms']))
+    assert all(isinstance(value, int) and value >= 0 for value in series['counters'].values())
+assert profile['resize']['counters']['measurement_hits'] > 0
+assert profile['resize']['counters']['font_invalidations'] == 0
+assert profile['toc']['counters']['layout_invalidations'] == 0
+assert profile['repeated_scroll']['counters']['layout_builds'] == 0
+print('PASS: original 80-position scroll profile and repeated interaction cache/rebuild counters')
+PY
+
 # The extended sample owns the fallback workload. Inline code alone must not
 # trigger a monospace scan; fenced code remains in the regular sample.
 env -u WAYLAND_SOCKET XDG_RUNTIME_DIR="$mdf_test/runtime" WAYLAND_DISPLAY=mdf-test \

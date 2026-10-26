@@ -35,6 +35,8 @@ printf '%s\n' 'PASS: install copies one executable and removes the old companion
 
 printf 'rpm payload\n' > "$mdf_test_scratch/release/mdf-0.2.0-1.x86_64.rpm"
 printf 'deb payload\n' > "$mdf_test_scratch/release/mdf_0.2.0_amd64.deb"
+printf 'main rpm payload\n' > "$mdf_test_scratch/release/mdf-0.2.0-42.x86_64.rpm"
+printf 'main deb payload\n' > "$mdf_test_scratch/release/mdf_0.2.0-42_amd64.deb"
 (cd "$mdf_test_scratch/release" && sha256sum ./*.rpm ./*.deb > mdf.sha256)
 # Release manifests use bare asset names, as the real release script does.
 sed -i 's@  ./@  @' "$mdf_test_scratch/release/mdf.sha256"
@@ -55,11 +57,11 @@ done
 printf '%s\n' "$mdf_url" >> "$MDF_TEST_CURL_LOG"
 if [[ ${MDF_TEST_DOWNLOAD_FAIL:-0} == 1 ]]; then exit 22; fi
 if [[ $mdf_url == https://github.com/mariobaldini/mdf/releases/latest ]]; then
-    printf 'https://github.com/mariobaldini/mdf/releases/tag/v0.2.0'
+    printf 'https://github.com/mariobaldini/mdf/releases/tag/%s' "${MDF_TEST_TAG:-v0.2.0}"
     exit 0
 fi
 case "$mdf_url" in
-    https://github.com/mariobaldini/mdf/releases/download/v0.2.0/*) ;;
+    https://github.com/mariobaldini/mdf/releases/download/"${MDF_TEST_TAG:-v0.2.0}"/*) ;;
     *) exit 22 ;;
 esac
 mdf_asset=${mdf_url##*/}
@@ -142,6 +144,16 @@ cmp "$mdf_test_scratch/release/mdf_0.2.0_amd64.deb" "$mdf_test_scratch/installed
 grep -q '^sudo$' "$mdf_test_scratch/manager.log"
 grep -q '^apt-get install -y ' "$mdf_test_scratch/manager.log"
 printf '%s\n' 'PASS: OS and architecture checks reject unsupported hosts; Ubuntu uses the DEB and sudo'
+export MDF_TEST_TAG=v0.2.0-42
+run_installer
+cmp "$mdf_test_scratch/release/mdf_0.2.0-42_amd64.deb" "$mdf_test_scratch/installed package"
+printf 'ID=fedora\n' > "$mdf_test_scratch/os-release"
+run_installer
+cmp "$mdf_test_scratch/release/mdf-0.2.0-42.x86_64.rpm" "$mdf_test_scratch/installed package"
+export MDF_TEST_TAG=v0.2.0-invalid
+if run_installer; then printf '%s\n' 'Invalid release revision was accepted.' >&2; exit 1; fi
+unset MDF_TEST_TAG
+printf '%s\n' 'PASS: main build revisions select matching RPM/DEB assets and reject invalid tags'
 mkdir -p "$mdf_test_scratch/config/mdf"
 printf 'settings\n' > "$mdf_test_scratch/config/mdf/settings.json"
 : > "$mdf_test_scratch/curl.log"

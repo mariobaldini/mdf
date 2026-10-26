@@ -2,7 +2,7 @@ name: Build, test, and release
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
     tags: ['v*']
   pull_request:
   workflow_dispatch:
@@ -19,9 +19,11 @@ jobs:
     runs-on: ubuntu-latest
     container: fedora:44
     timeout-minutes: 60
+    outputs:
+      release_tag: ${{ steps.release.outputs.tag }}
     steps:
       - name: Install build tools
-        run: dnf install -y make git git-lfs ca-certificates curl tar xz python3 strace cmake ninja-build gcc gcc-c++ libstdc++-static pkgconf-pkg-config pango-devel cairo-devel fontconfig-devel wayland-devel wayland-protocols-devel libxkbcommon-devel weston weston-devel dejavu-sans-mono-fonts rpm-build dpkg cpio
+        run: dnf install -y make git git-lfs ca-certificates curl tar xz python3 python3-pyyaml strace cmake ninja-build gcc gcc-c++ libstdc++-static pkgconf-pkg-config pango-devel cairo-devel fontconfig-devel wayland-devel wayland-protocols-devel libxkbcommon-devel weston weston-devel dejavu-sans-mono-fonts rpm-build dpkg cpio
 
       - uses: actions/checkout@v7
         with:
@@ -31,15 +33,8 @@ jobs:
 
       - name: Install the pinned Zig compiler
         run: |
-          mdf_zig_version=$(cat .zig-version)
-          curl -fsSL https://ziglang.org/download/index.json |
-            python3 -c 'import json, sys; p = json.load(sys.stdin)[sys.argv[1]]["x86_64-linux"]; print(p["tarball"]); print(p["shasum"])' "$mdf_zig_version" > "$RUNNER_TEMP/zig-download"
-          mapfile -t mdf_package < "$RUNNER_TEMP/zig-download"
-          curl -fsSL "${mdf_package[0]}" -o "$RUNNER_TEMP/zig.tar.xz"
-          printf '%s  %s\n' "${mdf_package[1]}" "$RUNNER_TEMP/zig.tar.xz" | sha256sum --check -
-          mkdir -p "$RUNNER_TEMP/zig"
-          tar -xJf "$RUNNER_TEMP/zig.tar.xz" --strip-components=1 -C "$RUNNER_TEMP/zig"
-          printf '%s\n' "$RUNNER_TEMP/zig" >> "$GITHUB_PATH"
+          mdf_zig=$(python3 scripts/fetch-zig.py)
+          printf '%s\n' "${mdf_zig%/zig}" >> "$GITHUB_PATH"
 
       - name: Fetch FLTK and Zig dependencies
         run: make setup
@@ -53,19 +48,38 @@ jobs:
       - name: Run FLTK GUI tests without a desktop
         run: make test-gui OPTIMIZE=ReleaseFast
 
+      - name: Set the main package revision
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: printf 'MDF_PACKAGE_RELEASE=%s\n' "$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
+
       - name: Build release executable
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
         run: make release
 
       - name: Check RPM and DEB packages
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
         run: make test-packages
 
       - name: Check the release version
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         run: |
           test "$(build/mdf --version)" = "mdf ${GITHUB_REF_NAME#v}"
           grep -Fq ".version = \"${GITHUB_REF_NAME#v}\"" build.zig.zon
 
-      - uses: actions/upload-artifact@v7
+      - name: Prepare release tag
+        id: release
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+        run: |
+          mdf_tag=$GITHUB_REF_NAME
+          if [ "$GITHUB_REF" = refs/heads/main ]; then
+            mdf_version=$(build/mdf --version)
+            mdf_tag="v${mdf_version#mdf }-$GITHUB_RUN_NUMBER"
+          fi
+          printf 'tag=%s\n' "$mdf_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Transfer release files
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+        uses: actions/upload-artifact@v7
         with:
           name: mdf-linux-x86_64
           path: |
@@ -75,14 +89,20 @@ jobs:
             build/*.rpm
             build/*.deb
           if-no-files-found: error
+          retention-days: 1
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
       - uses: actions/download-artifact@v8
         with:
           name: mdf-linux-x86_64
@@ -92,7 +112,26 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        run: |
-          gh release create "$GITHUB_REF_NAME" --verify-tag \
-            --title "Markdown FAST ${GITHUB_REF_NAME#v}" --generate-notes \
-            build/mdf build/mdf.sha256 build/build-info.txt build/*.rpm build/*.deb
+          RELEASE_TAG: ${{ needs.build.outputs.release_tag }}
+        run: bash scripts/publish-release.sh "$RELEASE_TAG"
+
+  promote:
+    if: needs.release.result == 'success'
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: release-latest
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Select the newest published release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: bash scripts/publish-release.sh --promote

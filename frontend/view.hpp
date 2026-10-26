@@ -3,6 +3,7 @@
 #include "images.hpp"
 #include "monospace.hpp"
 #include "body-fonts.h"
+#include "text-boundaries.hpp"
 #include <FL/Fl_RGB_Image.H>
 #include <FL/Fl_Scrollbar.H>
 #include <FL/Fl_Widget.H>
@@ -47,7 +48,7 @@ struct Style {
   int size;
   bool strike = false, underline = false, code = false, highlight = false;
   std::string link;
-  Fl_Color color = 0;
+  int color_role = 0;
   bool monospace = false;
 };
 struct Run {
@@ -114,10 +115,14 @@ public:
     float height, descent;
     std::unordered_map<std::string, float> widths;
   };
-  // GUI-owned, bounded word measurements. Layout invalidation also clears these
-  // because FLTK metrics depend on the drawing surface's scale and font map.
+  // Font measurements survive width and color changes. Font/scale adoption
+  // invalidates them separately from width-dependent block and table geometry.
   mutable std::map<std::pair<Fl_Font, int>, FontMeasurements> text_measurements;
   mutable size_t cached_words = 0;
+  mutable uint64_t measurement_hits = 0, measurement_misses = 0, layout_builds = 0;
+  uint64_t layout_invalidations = 0, font_invalidations = 0;
+  mutable TextBoundaries hit_boundaries;
+  mutable int hit_boundary_block = -1;
   mutable CodeFont code_font;
   mutable CodeFont fallback_font;
   const FcCharSet *bundled_coverage = nullptr;
@@ -159,6 +164,8 @@ public:
   float body_size() const { return settings.size * 1.4f; }
   float character_width() const;
   void invalidate();
+  void invalidate_fonts();
+  void invalidate_visibility(int first, int end);
   void reindex();
   void prepare_visible();
   void jump(int index);
@@ -186,6 +193,7 @@ public:
        const std::string &align = "left", bool collect_runs = true) const;
   float estimate(int index) const;
   Fl_Color role(int r) const;
+  Fl_Color text_color(const Style &s) const;
 };
 class Minimap : public Fl_Widget {
   DocumentView &doc;
@@ -207,6 +215,7 @@ class Minimap : public Fl_Widget {
   Fl_Color overlay_color = 0;
 
 public:
+  uint64_t atlas_builds = 0, layout_builds = 0;
   Minimap(int x, int y, int w, int h, DocumentView &doc,
           Fl_Scrollbar &scrollbar)
       : Fl_Widget(x, y, w, h), doc(doc), scrollbar(scrollbar) {}

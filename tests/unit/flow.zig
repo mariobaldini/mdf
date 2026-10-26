@@ -87,6 +87,69 @@ test "flow: alignment shifts each line including styled spans" {
     try std.testing.expectEqual(@as(f32, 40), right.right);
 }
 
+test "flow: a word spanning styles wraps as a whole and retains source slices" {
+    const output = try flow.layout(a, &.{ span("one ab"), span(""), span("cd"), span("ef x") }, spec(40), measure, null);
+    defer output.deinit(a);
+    try std.testing.expectEqual(@as(usize, 7), output.runs.len);
+    const word = output.runs[2..5];
+    for (word, 0..) |run, i| {
+        try std.testing.expectEqual(@as(f32, 25.5), run.y);
+        try std.testing.expectEqual(@as(f32, @floatFromInt(i * 10)), run.x);
+        try std.testing.expectEqual(@as(usize, 4) + i * 2, run.position);
+        try std.testing.expectEqual(@as(usize, 2), run.len);
+    }
+    try std.testing.expectEqual(@as(usize, 0), word[0].span);
+    try std.testing.expectEqual(@as(usize, 4), word[0].offset);
+    try std.testing.expectEqual(@as(usize, 2), word[1].span);
+    try std.testing.expectEqual(@as(usize, 3), word[2].span);
+}
+
+test "flow: an oversized styled token fills lines across span boundaries" {
+    const output = try flow.layout(a, &.{ span("abc"), span("defgh") }, spec(20), measure, null);
+    defer output.deinit(a);
+    try std.testing.expectEqual(@as(f32, 30), output.height);
+    for (output.runs) |run| {
+        const line: f32 = if (run.position < 4) 10.5 else 25.5;
+        try std.testing.expectEqual(line, run.y);
+        try std.testing.expect(run.x + run.width <= 20);
+    }
+}
+
+fn accentBoundaries(_: ?*anyopaque, _: [*]const flow.Span, _: usize) callconv(.c) ?[*]const u8 {
+    // e + combining acute + x + e + combining acute, expressed as UTF-8 bytes.
+    return &.{ 1, 0, 0, 1, 1, 0, 0, 1 };
+}
+test "flow: supplied graphemes survive wrapping even across style boundaries" {
+    var options = spec(10);
+    options.boundaries = accentBoundaries;
+    options.start = 80;
+    const output = try flow.layout(a, &.{ span("e"), span("\xcc\x81xe\xcc\x81") }, options, measure, null);
+    defer output.deinit(a);
+    try std.testing.expectEqual(@as(f32, 45), output.height);
+    try std.testing.expectEqual(@as(usize, 4), output.runs.len);
+    try std.testing.expectEqual(output.runs[0].y, output.runs[1].y);
+    try std.testing.expectEqual(@as(usize, 80), output.runs[0].position);
+    try std.testing.expectEqual(@as(usize, 81), output.runs[1].position);
+    try std.testing.expectEqual(@as(usize, 2), output.runs[1].len);
+    try std.testing.expectEqual(@as(usize, 84), output.runs[3].position);
+    try std.testing.expectEqual(@as(usize, 3), output.runs[3].len);
+    options.flags = 1;
+    const dimensions = try flow.layout(std.testing.failing_allocator, &.{ span("e"), span("\xcc\x81xe\xcc\x81") }, options, measure, null);
+    defer dimensions.deinit(std.testing.failing_allocator);
+    try std.testing.expectEqual(output.height, dimensions.height);
+    try std.testing.expectEqual(output.right, dimensions.right);
+}
+test "flow: a grapheme wider than the column still advances without splitting" {
+    var options = spec(1);
+    options.boundaries = accentBoundaries;
+    const output = try flow.layout(a, &.{span("e\xcc\x81xe\xcc\x81")}, options, measure, null);
+    defer output.deinit(a);
+    try std.testing.expectEqual(@as(usize, 3), output.runs.len);
+    try std.testing.expectEqual(@as(usize, 3), output.runs[0].len);
+    try std.testing.expectEqual(@as(usize, 3), output.runs[2].len);
+    try std.testing.expectEqual(@as(f32, 45), output.height);
+}
+
 test "flow: measuring without collecting runs performs no allocations" {
     var options = spec(20);
     options.flags = 1;
@@ -119,6 +182,14 @@ test "flow: invalid geometry text and callback metrics are rejected" {
         }
     };
     try std.testing.expectError(error.InvalidMetrics, flow.layout(a, &.{span("a")}, spec(10), bad.measure, null));
+    const unavailable = struct {
+        fn get(_: ?*anyopaque, _: [*]const flow.Span, _: usize) callconv(.c) ?[*]const u8 {
+            return null;
+        }
+    };
+    options = spec(1);
+    options.boundaries = unavailable.get;
+    try std.testing.expectError(error.InvalidBoundaries, flow.layout(a, &.{span("e\xcc\x81")}, options, measure, null));
     const truncated = try flow.layout(a, &.{span("\xf0\x9f")}, spec(1), measure, null);
     defer truncated.deinit(a);
     try std.testing.expectEqual(@as(usize, 2), truncated.runs[0].len);

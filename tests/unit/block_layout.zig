@@ -15,6 +15,52 @@ fn columns(_: ?*anyopaque, _: usize, _: f32, count: *usize) callconv(.c) ?[*]con
     return widths.ptr;
 }
 
+test "block layout: bold and linked word fragments share a wrapped line and source positions" {
+    var doc = try document.Document.parse(a, "one ab**cd**[ef](#target) x\n", "");
+    defer doc.deinit();
+    var opts = options;
+    opts.content_width = 70;
+    var result = try engine.measure(a, doc.blocks[0], 0, 100, opts, metrics, columns, null);
+    defer result.deinit();
+    const first = try bodyRun(result, 104);
+    const bold = try bodyRun(result, 106);
+    const link = try bodyRun(result, 108);
+    try std.testing.expectEqual(first.y, bold.y);
+    try std.testing.expectEqual(first.y, link.y);
+    try std.testing.expect(first.y > result.runs.items[0].y);
+    try std.testing.expectEqualStrings("ab", first.text.slice());
+    try std.testing.expect(bold.flags & 1 != 0);
+    try std.testing.expectEqualStrings("#target", link.link.slice());
+}
+
+test "block layout: renderer boundaries reach paragraph and table flows" {
+    const boundaries = struct {
+        fn get(_: ?*anyopaque, _: [*]const flow.Span, _: usize) callconv(.c) ?[*]const u8 {
+            return &.{ 1, 0, 0, 1, 1, 0, 0, 1 };
+        }
+        fn columns(_: ?*anyopaque, _: usize, _: f32, count: *usize) callconv(.c) ?[*]const f32 {
+            count.* = 1;
+            return &.{20};
+        }
+    };
+    const spans: []const document.Span = &.{.{ .text = "e\xcc\x81xe\xcc\x81" }};
+    for ([_]document.Block{
+        .{ .spans = spans },
+        .{ .kind = .table_row, .cells = &.{.{ .spans = spans }} },
+    }) |block| {
+        var opts = options;
+        opts.content_width = 20;
+        opts.boundaries = boundaries.get;
+        var result = try engine.measure(a, block, 0, 100, opts, metrics, boundaries.columns, null);
+        defer result.deinit();
+        try std.testing.expectEqual(@as(usize, 3), result.runs.items.len);
+        try std.testing.expectEqual(@as(usize, 100), result.runs.items[0].position);
+        try std.testing.expectEqual(@as(usize, 3), result.runs.items[0].text.len);
+        try std.testing.expectEqual(@as(usize, 104), result.runs.items[2].position);
+        try std.testing.expectEqual(@as(usize, 3), result.runs.items[2].text.len);
+    }
+}
+
 fn bodyRun(result: engine.Result, start: usize) !engine.Run {
     for (result.runs.items) |run| if (run.position == start) return run;
     return error.MissingBodyRun;

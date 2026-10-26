@@ -35,6 +35,7 @@ pub const Options = extern struct {
     failure: Bytes = .{},
     diagram_scale: f32 = 0, // Zero preserves the reference frontend's fit policy.
     diagram_controls_height: f32 = 0,
+    boundaries: ?flow.Boundaries = null,
 };
 pub const Columns = *const fn (?*anyopaque, usize, f32, *usize) callconv(.c) ?[*]const f32;
 pub const Rect = extern struct { x: f32, y: f32, width: f32, height: f32, role: u32 };
@@ -149,11 +150,16 @@ const Engine = struct {
                 const state: *@This() = @ptrCast(@alignCast(userdata.?));
                 return state.engine.callback(state.engine.context, state.fonts[index], text, len);
             }
+            fn boundaries(userdata: ?*anyopaque, text: [*]const flow.Span, count: usize) callconv(.c) ?[*]const u8 {
+                const state: *@This() = @ptrCast(@alignCast(userdata.?));
+                return state.engine.options.boundaries.?(state.engine.context, text, count);
+            }
         };
         var context = Context{ .engine = self, .fonts = fonts };
         const flowing = try flow.layout(a, inputs, .{ .left = left, .top = top, .width = width, .size = self.size,
             .start = start, .alignment = switch (alignment) { .left => 0, .center => 1, .right => 2 },
             .flags = @as(u32, @intFromBool(self.options.wrap)) | (if (self.block.kind == .code) @as(u32, 2) else 0) | (if (self.options.collect) @as(u32, 4) else 0),
+            .boundaries = if (self.options.boundaries != null) Context.boundaries else null,
         }, Context.measure, &context);
         defer flowing.deinit(a);
         for (flowing.runs) |run| {

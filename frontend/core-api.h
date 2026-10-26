@@ -69,11 +69,15 @@ float mdf_document_width(float viewport, uint32_t mode, float character_width);
 bool mdf_table_widths(const float *minimum, const float *preferred, size_t count,
                       float width, float padding, bool wrap, float *output);
 struct MdfFlowSpan { const unsigned char *text; size_t len; uint32_t flags; };
+// Borrowed byte mask over concatenated spans, including the final position.
+// Nonzero permits a cursor / grapheme break. Valid until layout returns.
+typedef const unsigned char *(*MdfTextBoundaries)(void *, const MdfFlowSpan *, size_t);
 struct MdfFlowSpec {
   float left, top, width;
   int32_t size;
   size_t start;
   uint32_t alignment, flags;
+  MdfTextBoundaries boundaries MDF_API_DEFAULT(nullptr);
 };
 struct MdfFlowMetrics { float width, height, descent; };
 struct MdfLayoutFont { uint32_t face; int32_t size; uint32_t flags; };
@@ -88,6 +92,7 @@ struct MdfLayoutOptions {
   Buffer failure;
   float diagram_scale MDF_API_DEFAULT(0);
   float diagram_controls_height MDF_API_DEFAULT(0);
+  MdfTextBoundaries boundaries MDF_API_DEFAULT(nullptr);
 };
 struct MdfLayoutRun {
   Buffer text, link;

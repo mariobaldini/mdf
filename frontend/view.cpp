@@ -12,6 +12,12 @@ struct LayoutMeasurements {
   const DocumentView *view;
   int face = -1, size = -1;
   std::exception_ptr failed;
+  TextBoundaries text_boundaries;
+  static const unsigned char *boundaries(void *opaque, const MdfFlowSpan *spans, size_t count) noexcept {
+    auto &ctx = *static_cast<LayoutMeasurements *>(opaque);
+    try { return ctx.text_boundaries.spans(spans, count); }
+    catch (...) { ctx.failed = std::current_exception(); return nullptr; }
+  }
   static MdfFlowMetrics measure(void *opaque, MdfLayoutFont font, const unsigned char *text, size_t len) noexcept {
     auto &ctx = *static_cast<LayoutMeasurements *>(opaque);
     try {
@@ -173,6 +179,7 @@ void DocumentView::document(const Json &j, Core &core, FontStore &fonts) {
   preview.clear();
   ++preview_revision;
   selection.reset();
+  hit_boundary_block = -1;
   revision = j.value("revision", 0ull);
   path = text(j, "path");
   const size_t count = j.value("block_count", size_t(0));
@@ -193,7 +200,7 @@ void DocumentView::document(const Json &j, Core &core, FontStore &fonts) {
   }
   scroll = 0;
   if (!automatic) horizontal_scroll = 0;
-  invalidate();
+  invalidate_fonts();
   if (automatic && !blocks.empty())
     scroll = offsets[std::min(anchor, (int)blocks.size() - 1)] + delta;
   redraw();
@@ -211,6 +218,7 @@ void DocumentView::adopt_fallback_font(std::unique_ptr<PreparedFont> font) {
   reflow_fonts(true);
 }
 void DocumentView::reflow_fonts(bool fallback) {
+  ++font_invalidations;
   text_measurements.clear();
   cached_words = 0;
   horizontal_dirty = true;
@@ -249,15 +257,14 @@ void DocumentView::reflow_fonts(bool fallback) {
   redraw();
 }
 void DocumentView::configure(const Settings &s) {
+  const bool fonts = settings.size != s.size;
   bool layout = settings.size != s.size || settings.width != s.width || settings.line_wrap != s.line_wrap;
-  bool colors = settings.dark != s.dark || settings.theme != s.theme;
   settings = s;
   palette = Palette::get(s);
-  ++geometry_revision;
-  if (layout)
+  if (fonts)
+    invalidate_fonts();
+  else if (layout)
     invalidate();
-  else if (colors)
-    cache.clear();
   redraw();
 }
 bool DocumentView::visible(int index) const {
@@ -284,8 +291,7 @@ void DocumentView::reindex() {
   borrow_geometry();
 }
 void DocumentView::invalidate() {
-  text_measurements.clear();
-  cached_words = 0;
+  ++layout_invalidations;
   int anchor = index_at(scroll);
   float delta = scroll - (offsets.empty() ? 0 : offsets[anchor]);
   const uint32_t mode = settings.width == "characters_100" ? 0 : settings.width == "percent_100" ? 2 : 1;
@@ -302,6 +308,12 @@ void DocumentView::invalidate() {
                : offsets[std::min(anchor, (int)blocks.size())] + delta;
   scroll = std::clamp(scroll, 0.f, max_scroll());
 }
+void DocumentView::invalidate_fonts() {
+  ++font_invalidations;
+  text_measurements.clear();
+  cached_words = 0;
+  invalidate();
+}
 Style DocumentView::style(const Span &s, const Block &b) const {
   const uint32_t flags = uint32_t(s.bold) | uint32_t(s.italic) << 1 | uint32_t(s.small) << 6;
   const auto numeric = mdf_text_style(b.kind == "heading" ? 1 : b.kind == "code" ? 2 : 0,
@@ -312,7 +324,7 @@ Style DocumentView::style(const Span &s, const Block &b) const {
           s.code,
           s.highlight,
           s.link,
-          s.link.empty() ? palette.fg : palette.link,
+          0,
           code_font.ready() && (b.kind == "code" || s.code)};
 }
 TextMetrics DocumentView::text_metrics(const Style &s, const char *text, size_t length) const {
@@ -329,15 +341,16 @@ TextMetrics DocumentView::text_metrics(const Style &s, const char *text, size_t 
     if (length <= 128) {
       std::string word(text, length);
       auto found = metrics.widths.find(word);
-      if (found != metrics.widths.end()) width = found->second;
+      if (found != metrics.widths.end()) { width = found->second; ++measurement_hits; }
       else {
+        ++measurement_misses;
         width = float(fl_width(text, length));
         if (cached_words < 2048) {
           metrics.widths.emplace(std::move(word), width);
           ++cached_words;
         }
       }
-    } else width = float(fl_width(text, length));
+    } else { width = float(fl_width(text, length)); ++measurement_misses; }
   }
   return {width, metrics.height, metrics.descent};
 }
@@ -351,9 +364,6 @@ float DocumentView::estimate(int index) const {
   auto &b = blocks[index];
   return mdf_estimate_block(b.kind == "rule" ? 3 : b.kind == "heading" ? 1 : 0,
       b.bytes, b.lines, b.indent, b.quote, style(Span{}, b).size, zoom(), content_width, settings.line_wrap);
-}
-static size_t utf8_len(unsigned char c) {
-  return c < 0x80 ? 1 : c < 0xe0 ? 2 : c < 0xf0 ? 3 : 4;
 }
 Flow
 DocumentView::flow(const std::vector<Span> &ss, const Block &b, float left,
@@ -375,6 +385,7 @@ DocumentView::flow(const std::vector<Span> &ss, const Block &b, float left,
     const std::vector<Style> *styles;
     size_t current = std::numeric_limits<size_t>::max();
     std::exception_ptr failed;
+    TextBoundaries text_boundaries;
   } context{this, &styles};
   auto measure = [](void *opaque, size_t span, const unsigned char *text, size_t len) noexcept -> MdfFlowMetrics {
     auto &ctx = *static_cast<Context *>(opaque);
@@ -391,9 +402,14 @@ DocumentView::flow(const std::vector<Span> &ss, const Block &b, float left,
       return {std::numeric_limits<float>::quiet_NaN(), 0, 0};
     }
   };
+  auto boundaries = [](void *opaque, const MdfFlowSpan *spans, size_t count) noexcept -> const unsigned char * {
+    auto &ctx = *static_cast<Context *>(opaque);
+    try { return ctx.text_boundaries.spans(spans, count); }
+    catch (...) { ctx.failed = std::current_exception(); return nullptr; }
+  };
   const MdfFlowSpec spec{left, top, width, sz, start,
     align == "right" ? 2u : align == "center" ? 1u : 0u,
-    uint32_t(settings.line_wrap) | (b.kind == "code" ? 2u : 0u) | (collect_runs ? 4u : 0u)};
+    uint32_t(settings.line_wrap) | (b.kind == "code" ? 2u : 0u) | (collect_runs ? 4u : 0u), boundaries};
   MdfFlowResult result;
   if (!mdf_text_flow(spans.data(), spans.size(), spec, measure, &context, &result)) {
     if (context.failed) std::rethrow_exception(context.failed);
@@ -476,6 +492,7 @@ const std::vector<float> &DocumentView::table_columns(int index, float width) co
   return table_widths.emplace(index, std::move(widths)).first->second;
 }
 Measured DocumentView::measure(int index, bool collect_runs) const {
+  ++layout_builds;
   if (!model) return measure_reference(index, collect_runs);
   const auto image = images.find(index);
   const auto dimensions = diagram_sizes.find(index);
@@ -487,7 +504,8 @@ Measured DocumentView::measure(int index, bool collect_runs) const {
       dimensions != diagram_sizes.end() ? dimensions->second.second : image != images.end() ? float(image->second->data_h()) : 0,
       {reinterpret_cast<const unsigned char *>(message.data()), message.size()},
       blocks[index].mermaid() && image != images.end() ? diagram_scale(index) : 0,
-      blocks[index].mermaid() && image != images.end() ? diagram_controls(index, 0).height : 0};
+      blocks[index].mermaid() && image != images.end() ? diagram_controls(index, 0).height : 0,
+      LayoutMeasurements::boundaries};
   LayoutMeasurements context{this};
   auto *layout = mdf_core_layout_block(model, index, &options, LayoutMeasurements::measure, LayoutMeasurements::columns, &context);
   if (!layout) {
@@ -504,7 +522,7 @@ Measured DocumentView::measure(int index, bool collect_runs) const {
     const auto &run = view.runs[i];
     auto link = view_text(run.link);
     Style style{FL_FREE_FONT + int(run.font.face), run.font.size, bool(run.flags & 8), bool(run.flags & 16),
-      bool(run.flags & 4), bool(run.flags & 32), link, run.role ? role(run.role) : link.empty() ? palette.fg : palette.link,
+      bool(run.flags & 4), bool(run.flags & 32), link, int(run.role),
       bool(run.font.flags & 1)};
     result.runs.push_back({view_text(run.text), std::move(style), run.x, run.y, run.width, run.height,
                             run.position, run.font_height, run.font_descent});
@@ -544,7 +562,7 @@ Measured DocumentView::measure_reference(int index, bool collect_runs) const {
     for (auto &v : r) {
       v.pos = std::numeric_limits<size_t>::max();
       if (role)
-        v.style.color = this->role(role);
+        v.style.color_role = role;
     }
     m.runs.insert(m.runs.end(), r.begin(), r.end());
     return h;
@@ -765,6 +783,11 @@ Fl_Color DocumentView::role(int r) const {
     return palette.bg;
   }
 }
+Fl_Color DocumentView::text_color(const Style &s) const {
+  if (s.highlight) return palette.fg;
+  if (s.color_role) return role(s.color_role);
+  return s.link.empty() ? palette.fg : palette.link;
+}
 void DocumentView::prepare_visible() {
   PHASE("Measure visible Markdown blocks");
   for (int pass = 0; pass < 8; ++pass) {
@@ -867,7 +890,7 @@ void DocumentView::draw() {
             fl_rectf(xx + sx, top, sw, r.font_height + 2);
           }
         }
-        fl_color(r.style.highlight ? palette.fg : r.style.color);
+        fl_color(text_color(r.style));
         if (r.style.monospace)
           code_font.draw(r.text.data(), r.text.size(), r.style.size,
                           (r.style.face - FL_FREE_FONT) & 3, xx, base);
@@ -907,9 +930,18 @@ void DocumentView::move_horizontal(float value) {
 void DocumentView::jump(int index) {
   if (index < 0 || index >= (int)blocks.size())
     return;
-  for (int p = blocks[index].parent; p >= 0; p = blocks[p].parent)
-    blocks[p].details_open = true;
-  invalidate();
+  int first = index;
+  size_t limit = blocks.size();
+  for (int p = blocks[index].parent; p >= 0 && p < int(blocks.size()) && limit--; p = blocks[p].parent)
+    if (!blocks[p].details_open) {
+      blocks[p].details_open = true;
+      first = p;
+    }
+  if (first != index) {
+    int end = first + 1;
+    while (end < int(blocks.size()) && blocks[end].parent >= first) ++end;
+    invalidate_visibility(first, end);
+  }
   scroll = std::min(offsets[index], max_scroll());
   redraw();
   if (changed)
@@ -919,8 +951,25 @@ void DocumentView::toggle(int i) {
   if (i < 0 || i >= (int)blocks.size() || blocks[i].kind != "details")
     return;
   blocks[i].details_open = !blocks[i].details_open;
-  invalidate();
+  int end = i + 1;
+  while (end < int(blocks.size()) && blocks[end].parent >= i) ++end;
+  invalidate_visibility(i, end);
   redraw();
+}
+void DocumentView::invalidate_visibility(int first, int end) {
+  ++layout_invalidations;
+  int anchor = index_at(scroll);
+  float delta = offsets.empty() ? 0 : scroll - offsets[anchor];
+  if (!visible(anchor)) { anchor = first; delta = 0; }
+  // Disclosure triangles use the live block state. The summary and content
+  // outside this subtree keep their measured runs and intrinsic table widths.
+  for (int i = first + 1; i < end; ++i) {
+    cache.erase(i);
+    heights[i] = estimate(i);
+  }
+  horizontal_dirty = true;
+  reindex();
+  scroll = std::clamp(offsets[anchor] + delta, 0.f, max_scroll());
 }
 std::optional<Hit> DocumentView::hit(float xx, float yy) const {
   if (blocks.empty())
@@ -932,6 +981,12 @@ std::optional<Hit> DocumentView::hit(float xx, float yy) const {
     return {};
   float py = yy + scroll - offsets[index], dist = 1e30;
   std::optional<Hit> best;
+  const size_t start = std::min(starts[index], plain.size());
+  if (hit_boundary_block != index) {
+    const size_t end = index + 1 < int(starts.size()) ? std::min(starts[index + 1], plain.size()) : plain.size();
+    hit_boundaries.assign(plain.substr(start, end - start));
+    hit_boundary_block = index;
+  }
   for (auto &r : it->second.runs) {
     if (r.pos == std::numeric_limits<size_t>::max())
       continue;
@@ -943,16 +998,18 @@ std::optional<Hit> DocumentView::hit(float xx, float yy) const {
     if (d < dist) {
       dist = d;
       fl_font(r.style.face, r.style.size);
-      size_t at = 0;
-      while (at < r.text.size()) {
-        size_t next = at + utf8_len((unsigned char)r.text[at]);
+      size_t at = hit_boundaries.before(r.pos - start);
+      const size_t end = std::min(r.pos - start + r.text.size(), hit_boundaries.positions.size() - 1);
+      while (at < end) {
+        const size_t next = hit_boundaries.after(at + 1);
+        auto prefix = [&](size_t p) { return p + start <= r.pos ? 0 : std::min(p + start - r.pos, r.text.size()); };
         float mid =
-            (prefix_width(r, at) + prefix_width(r, next)) / 2;
+            (prefix_width(r, prefix(at)) + prefix_width(r, prefix(next))) / 2;
         if (xx < r.x + mid)
           break;
         at = next;
       }
-      best = Hit{r.pos + at, dy < r.style.size && dx < 3 ? r.style.link : "",
+      best = Hit{start + at, dy < r.style.size && dx < 3 ? r.style.link : "",
                  index};
     }
   }
@@ -1161,6 +1218,7 @@ void Minimap::draw() {
       atlas_font_size != fs || atlas_w != w() || atlas_limit != limit ||
       atlas_bg != p.panel || atlas_fg != p.muted) {
     PHASE("Rasterize cached minimap text");
+    ++atlas_builds;
     size_t count = 0;
     for (auto &block : doc.preview)
       count += block.size();
@@ -1200,6 +1258,7 @@ void Minimap::draw() {
       cached_h != h()) {
     {
       PHASE("Build cached FLTK preview");
+      ++layout_builds;
       unsigned char r, g, b;
       Fl::get_color(p.panel, r, g, b);
       auto *pixels = new unsigned char[size_t(w()) * h() * 3];

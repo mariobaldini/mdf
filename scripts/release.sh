@@ -12,9 +12,13 @@ mdf_version=$("$mdf_stage/mdf" --version)
 mdf_version=${mdf_version#mdf }
 printf '%s\n' "$mdf_version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'
 sh scripts/packages.sh "$mdf_stage" "$mdf_version"
-(cd "$mdf_stage" && sha256sum mdf "mdf-$mdf_version-1.x86_64.rpm" "mdf_${mdf_version}_amd64.deb" > mdf.sha256)
+mdf_package_release=${MDF_PACKAGE_RELEASE:-1}
+mdf_deb_version=$mdf_version
+if [ -n "${MDF_PACKAGE_RELEASE:-}" ]; then mdf_deb_version="$mdf_version-$mdf_package_release"; fi
+(cd "$mdf_stage" && sha256sum mdf "mdf-$mdf_version-$mdf_package_release.x86_64.rpm" "mdf_${mdf_deb_version}_amd64.deb" > mdf.sha256)
 {
     "$mdf_stage/mdf" --version
+    printf 'package_release: %s\n' "$mdf_package_release"
     printf 'compiler: Zig %s\n' "$("$ZIG" version)"
     printf 'target: %s, baseline CPU\nmode: ReleaseFast\n' "$MDF_TARGET"
     printf '%s\n' 'lto: full' 'dead_sections: removed' 'debug_symbols: stripped' 'frame_pointers: omitted' 'zig_unwind_tables: none' 'cpp_unwind_tables: retained for exceptions'
@@ -56,6 +60,6 @@ mv "$mdf_stage/mdf" build/mdf
 rm -f build/libmdf-extra.so
 mv "$mdf_stage/mdf.sha256" build/mdf.sha256
 mv "$mdf_stage/build-info.txt" build/build-info.txt
-mv "$mdf_stage/mdf-$mdf_version-1.x86_64.rpm" build/
-mv "$mdf_stage/mdf_${mdf_version}_amd64.deb" build/
+mv "$mdf_stage/mdf-$mdf_version-$mdf_package_release.x86_64.rpm" build/
+mv "$mdf_stage/mdf_${mdf_deb_version}_amd64.deb" build/
 printf '%s\n' 'Release files: executable, RPM, DEB, checksums, and build metadata in build/'

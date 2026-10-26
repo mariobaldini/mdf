@@ -149,7 +149,8 @@ pub const Reader = struct {
             .image_height = if (image) |value| (if (value.diagram) value.logical_height else @floatFromInt(value.pixels.height)) else 0,
             .failure = .{ .ptr = message.ptr, .len = message.len },
             .diagram_scale = if (diagram) |value| self.diagramState(index).factor(box.width, value.logical_width * self.zoom) else 0,
-            .diagram_controls_height = if (diagram != null) diagrams.Controls.init(box.left, 0, box.width).height else 0 };
+            .diagram_controls_height = if (diagram != null) diagrams.Controls.init(box.left, 0, box.width).height else 0,
+            .boundaries = null };
     }
     fn mermaid(self: *Reader, index: usize) ?*const @import("image-store.zig").Image {
         const images = self.images orelse return null;

@@ -5,8 +5,11 @@ mdf_test_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$mdf_test_root"
 mdf_version=$(build/mdf --version)
 mdf_version=${mdf_version#mdf }
-mdf_rpm="$mdf_test_root/build/mdf-$mdf_version-1.x86_64.rpm"
-mdf_deb="$mdf_test_root/build/mdf_${mdf_version}_amd64.deb"
+mdf_package_release=${MDF_PACKAGE_RELEASE:-1}
+mdf_deb_version=$mdf_version
+if [[ -n ${MDF_PACKAGE_RELEASE:-} ]]; then mdf_deb_version="$mdf_version-$mdf_package_release"; fi
+mdf_rpm="$mdf_test_root/build/mdf-$mdf_version-$mdf_package_release.x86_64.rpm"
+mdf_deb="$mdf_test_root/build/mdf_${mdf_deb_version}_amd64.deb"
 mdf_scratch=$(mktemp -d)
 trap 'rm -rf "$mdf_scratch"' EXIT
 (cd build && sha256sum --check mdf.sha256)
@@ -48,8 +51,9 @@ for name in ('.mdf_mermaid','.mdf_svg','.mdf_image'):
 print('PASS: three independent payloads, private ABIs, and GLIBC requirements stay within glibc 2.38')
 PY
 test "$(rpm -qp --queryformat '%{NAME} %{VERSION} %{ARCH}' "$mdf_rpm")" = "mdf $mdf_version x86_64"
+test "$(rpm -qp --queryformat '%{RELEASE}' "$mdf_rpm")" = "$mdf_package_release"
 test "$(dpkg-deb --field "$mdf_deb" Package)" = mdf
-test "$(dpkg-deb --field "$mdf_deb" Version)" = "$mdf_version"
+test "$(dpkg-deb --field "$mdf_deb" Version)" = "$mdf_deb_version"
 test "$(dpkg-deb --field "$mdf_deb" Architecture)" = amd64
 mdf_requires=$(rpm -qp --requires "$mdf_rpm")
 mdf_depends=$(dpkg-deb --field "$mdf_deb" Depends)

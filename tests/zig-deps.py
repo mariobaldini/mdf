@@ -70,6 +70,64 @@ class DependencyFetchTests(unittest.TestCase):
                 zig_deps.cached_packages([self.manifest])
             process.assert_not_called()
 
+    def test_fetch_normalizes_http_archive_prefix(self):
+        def fetch(command, *, env, text):
+            archive_path = self.root/'build/.zig-cache/package-fetch/p/pinned-source.tar.gz'
+            archive_path.parent.mkdir(parents=True)
+            with tarfile.open(archive_path, 'w:gz') as archive:
+                for name, content in [('build.zig.zon', b'.{ .dependencies = .{} }'),
+                                      ('build.zig', b'// exported module\n'),
+                                      ('src/root.zig', b'// pinned payload\n')]:
+                    member = tarfile.TarInfo('pinned-source/upstream-name/'+name)
+                    member.size = len(content)
+                    archive.addfile(member, io.BytesIO(content))
+            return 'pinned-source\n'
+        with patch.object(zig_deps.subprocess, 'check_output', side_effect=fetch):
+            packages = zig_deps.cached_packages([self.manifest], fetch=True)
+        directory = packages['pinned-source']['directory']
+        self.assertTrue((directory/'build.zig').is_file())
+        self.assertEqual((directory/'src/root.zig').read_bytes(), b'// pinned payload\n')
+        self.assertFalse((directory/'upstream-name').exists())
+
+    def test_setup_repairs_existing_wrapped_cache_without_downloading(self):
+        directory = self.packages/'pinned-source'
+        source = directory/'upstream-name'/'another-wrapper'
+        source.mkdir(parents=True)
+        (source/'build.zig.zon').write_text('.{ .dependencies = .{} }')
+        (source/'build.zig').write_bytes(b'// exported module\n')
+        with patch.object(zig_deps.subprocess, 'check_output') as process:
+            with self.assertRaisesRegex(ValueError, 'Wrapped Zig source cache.*make setup'):
+                zig_deps.cached_packages([self.manifest])
+            self.assertTrue((source/'build.zig').exists())
+            zig_deps.cached_packages([self.manifest], fetch=True)
+            self.assertEqual((directory/'build.zig').read_bytes(), b'// exported module\n')
+            process.assert_not_called()
+
+    def test_source_only_package_keeps_its_directory_layout(self):
+        directory = self.packages/'pinned-source'
+        source = directory/'include'
+        source.mkdir(parents=True)
+        (source/'library.h').write_text('// source-only package\n')
+        packages = zig_deps.cached_packages([self.manifest])
+        self.assertEqual(packages['pinned-source']['directory'], directory)
+        self.assertTrue((source/'library.h').is_file())
+
+    def test_failed_cache_repair_restores_the_original_files(self):
+        directory = self.packages/'pinned-source'
+        source = directory/'upstream-name'
+        source.mkdir(parents=True)
+        (source/'build.zig.zon').write_text('.{ .dependencies = .{} }')
+        (source/'build.zig').write_bytes(b'// preserve this source\n')
+        rename = Path.rename
+        def fail_payload(path, target):
+            if path.name == 'upstream-name' and path.parent.name == 'wrapped':
+                raise OSError('injected rename failure')
+            return rename(path, target)
+        with patch.object(Path, 'rename', autospec=True, side_effect=fail_payload):
+            with self.assertRaisesRegex(OSError, 'injected rename failure'):
+                zig_deps.cached_packages([self.manifest], fetch=True)
+        self.assertEqual((source/'build.zig').read_bytes(), b'// preserve this source\n')
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -128,6 +128,7 @@ test-core-Debug test-core-ReleaseSafe test-core-ReleaseFast test-core-ReleaseSma
 
 test-workflow:
 	@python3 tests/zig-deps.py
+	@python3 tests/ci-workflow.py
 	@sh tests/workflow.sh
 
 test-install:

@@ -58,13 +58,14 @@ mdf_repository=https://github.com/mariobaldini/mdf
 mdf_latest=$(curl --fail --silent --show-error --location --retry 3 \
     --output /dev/null --write-out '%{url_effective}' "$mdf_repository/releases/latest")
 mdf_tag=${mdf_latest##*/}
-mdf_version=${mdf_tag#v}
-if [[ ! $mdf_version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+if [[ ! $mdf_tag =~ ^v([0-9]+\.[0-9]+\.[0-9]+)(-([1-9][0-9]*))?$ ]]; then
     printf '%s\n' 'The latest release has an unsupported version tag.' >&2
     exit 1
 fi
-if [[ $mdf_format == deb ]]; then mdf_package="mdf_${mdf_version}_amd64.deb"
-else mdf_package="mdf-${mdf_version}-1.x86_64.rpm"
+mdf_version=${BASH_REMATCH[1]}
+mdf_revision=${BASH_REMATCH[3]:-}
+if [[ $mdf_format == deb ]]; then mdf_package="mdf_${mdf_version}${mdf_revision:+-$mdf_revision}_amd64.deb"
+else mdf_package="mdf-${mdf_version}-${mdf_revision:-1}.x86_64.rpm"
 fi
 mdf_download=$(mktemp -d)
 trap 'rm -rf "$mdf_download"' EXIT

@@ -179,6 +179,7 @@ struct App {
   float navigation_width = 0, navigation_zoom = 0;
   std::string capture, capture_anchor, initial_path, error;
   std::vector<double> scroll_draw_ms;
+  Json interaction_profile;
   Json startup_usage;
   uint64_t startup_frames = 0, scroll_frames = 0;
   bool drop_pending = false;
@@ -556,7 +557,8 @@ struct App {
     }
     apply_chrome();
     layout();
-    if (first_document && navigation)
+    if (first_document && navigation && (!navigation_started ||
+        std::abs(navigation_width - reader->content_width) >= 1 || navigation_zoom != reader->zoom()))
       start_navigation();
   }
   void open(const std::string &path) {
@@ -1135,6 +1137,53 @@ struct App {
     reader->move_scroll(old);
     Fl::flush();
     scroll_frames = scroll_draw_ms.size();
+    measure_interactions();
+  }
+  void measure_interactions() {
+    PHASE("Measure repeated reader interactions");
+    interaction_profile.set("timing", "Programmatic handler through synchronous FLTK flush; excludes event arrival and compositor scanout");
+    auto counters = [&]() {
+      return std::array<uint64_t, 7>{reader->measurement_hits, reader->measurement_misses,
+        reader->layout_builds, reader->layout_invalidations, reader->font_invalidations,
+        minimap->atlas_builds, minimap->layout_builds};
+    };
+    auto series = [&](const char *name, int count, auto action) {
+      const auto before = counters();
+      std::vector<double> handler, flush;
+      for (int i = 0; i < count; ++i) {
+        const auto start = mdf_now_ns();
+        const auto paints = reader->paints;
+        action(i);
+        handler.push_back((mdf_now_ns() - start) / 1e6);
+        Fl::check();
+        Fl::flush();
+        ensure(reader->paints > paints, "Profiled interaction must paint the reader");
+        flush.push_back((mdf_now_ns() - start) / 1e6);
+      }
+      const auto after = counters();
+      Json counts;
+      const char *keys[] = {"measurement_hits", "measurement_misses", "layout_builds",
+        "layout_invalidations", "font_invalidations", "minimap_atlas_builds", "minimap_layout_builds"};
+      for (size_t i = 0; i < before.size(); ++i) counts.set(keys[i], after[i] - before[i]);
+      interaction_profile.set(name, {{"handler_ms", handler}, {"to_flush_ms", flush}, {"counters", counts}});
+    };
+    const float old_scroll = reader->scroll;
+    series("repeated_scroll", 120, [&](int i) {
+      const int step = i % 40;
+      reader->move_scroll(reader->max_scroll() * ((i / 40) % 2 ? 39 - step : step) / 39);
+    });
+    const int old_width = window->w(), old_height = window->h();
+    series("resize", 24, [&](int i) { window->size(i % 2 ? 1040 : 480, old_height); });
+    window->size(old_width, old_height);
+    Fl::check();
+    Fl::flush();
+    std::vector<int> headings;
+    for (int i = 0; i < int(reader->blocks.size()) && headings.size() < 12; ++i)
+      if (reader->blocks[i].kind == "heading" && reader->visible(i)) headings.push_back(i);
+    if (headings.empty() && !reader->blocks.empty()) headings.push_back(0);
+    series("toc", int(headings.size()) * 3, [&](int i) { reader->jump(headings[i % headings.size()]); });
+    reader->move_scroll(old_scroll);
+    Fl::flush();
   }
   void print_profile() {
     auto result = core.profile();
@@ -1269,6 +1318,7 @@ struct App {
     if (!scroll_draw_ms.empty()) {
       output.set("scroll_draw_ms", scroll_draw_ms);
       output.set("scroll_frames", scroll_frames);
+      output.set("interaction_profile", interaction_profile);
     }
     std::cout << output.dump() << std::endl;
   }
@@ -1437,6 +1487,8 @@ struct App {
     }
     g_object_unref(context);
     check_text_layout(*reader, [this](bool condition, const char *message) { ensure(condition, message); });
+    check_latin_boundaries(*reader, [this](bool condition, const char *message) { ensure(condition, message); });
+    check_reflow_caches(*reader, [this](bool condition, const char *message) { ensure(condition, message); });
     std::cout << "PASS: bounded text measurement cache, font invalidation and retained run metrics\n";
     if (reader->code_font.ready()) {
       Block block;
@@ -1656,8 +1708,8 @@ struct App {
     ensure(settings.dark, "Dark mode");
     reader->jump(0);
     reader->prepare_visible();
-    ensure(reader->cache.at(0).runs.front().style.color == reader->palette.fg,
-           "Dark text cache recolored");
+    ensure(reader->text_color(reader->cache.at(0).runs.front().style) == reader->palette.fg,
+           "Retained text resolves the current palette while painting");
     capture_quotes("dark");
     action("dark");
     reader->jump(0);
@@ -1842,7 +1894,7 @@ void MainWindow::draw() {
   PHASE("Draw FLTK window and scaffold");
   if (app) {
     const double scale = fl_mdf_window_scale(this);
-    if (app->measured_window_scale && app->measured_window_scale != scale) app->reader->invalidate();
+    if (app->measured_window_scale && app->measured_window_scale != scale) app->reader->invalidate_fonts();
     app->measured_window_scale = scale;
   }
   auto started = mdf_now_ns();
