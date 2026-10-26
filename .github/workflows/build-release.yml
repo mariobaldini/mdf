@@ -16,20 +16,42 @@ defaults:
 
 jobs:
   build:
+    name: ${{ matrix.distro }} build and test
     runs-on: ubuntu-latest
-    container: fedora:44
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - distro: fedora
+            image: fedora:44
+          - distro: ubuntu
+            image: ubuntu:26.04
+    container:
+      image: ${{ matrix.image }}
     timeout-minutes: 60
     outputs:
       release_tag: ${{ steps.release.outputs.tag }}
     steps:
-      - name: Install build tools
-        run: dnf install -y make git git-lfs ca-certificates curl tar xz python3 python3-pyyaml strace cmake ninja-build gcc gcc-c++ libstdc++-static pkgconf-pkg-config pango-devel cairo-devel fontconfig-devel wayland-devel wayland-protocols-devel libxkbcommon-devel weston weston-devel dejavu-sans-mono-fonts rpm-build dpkg cpio
+      - name: Install checkout and setup tools
+        run: |
+          if command -v dnf >/dev/null; then
+            dnf install -y make git git-lfs ca-certificates curl tar xz python3
+          else
+            apt-get update
+            apt-get install -y --no-install-recommends make git git-lfs ca-certificates curl tar xz-utils python3
+          fi
 
       - uses: actions/checkout@v7
         with:
           lfs: true
           submodules: recursive
           persist-credentials: false
+
+      - name: Trust the container checkout and submodules
+        id: trust
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git submodule foreach --recursive 'git config --global --add safe.directory "$PWD"'
 
       - name: Install the pinned Zig compiler
         run: |
@@ -81,7 +103,7 @@ jobs:
         if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
         uses: actions/upload-artifact@v7
         with:
-          name: mdf-linux-x86_64
+          name: mdf-linux-x86_64-${{ matrix.distro }}
           path: |
             build/mdf
             build/mdf.sha256
@@ -92,11 +114,13 @@ jobs:
           retention-days: 1
 
   release:
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    if: needs.build.result == 'success' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      RELEASE_TAG: ${{ needs.build.outputs.release_tag }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -105,33 +129,21 @@ jobs:
 
       - uses: actions/download-artifact@v8
         with:
-          name: mdf-linux-x86_64
-          path: build
+          name: mdf-linux-x86_64-fedora
+          path: build/fedora
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: mdf-linux-x86_64-ubuntu
+          path: build/ubuntu
+
+      - name: Verify both builds and select native packages
+        run: python3 scripts/assemble-release.py "$RELEASE_TAG"
 
       - name: Publish the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ needs.build.outputs.release_tag }}
-        run: bash scripts/publish-release.sh "$RELEASE_TAG"
-
-  promote:
-    if: needs.release.result == 'success'
-    needs: release
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    concurrency:
-      group: release-latest
-      cancel-in-progress: false
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-
-      - name: Select the newest published release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: bash scripts/publish-release.sh --promote
+        run: |
+          bash scripts/publish-release.sh "$RELEASE_TAG"
+          bash scripts/publish-release.sh --promote

@@ -5,6 +5,7 @@ The suite builds the ReleaseFast executable and checks the core in Debug, Releas
 The launcher checks apply the strict production startup requirements to that optimized executable.
 It also runs native JSON, image, asynchronous keyboard, and system-font checks, renderer checks, and Python and shell regression tests.
 GUI and visual comparisons remain separate: use `make test-gui` or `make test-render`.
+Production GUI tests support Weston 14 on Ubuntu 26.04 and Weston 15 on Fedora 44.
 The GUI suite also checks word-metric reuse against real FLTK fonts, bounded cache size,
 font invalidation, and retained painting metrics in `text-layout.hpp`.
 It covers styled words, decomposed accents, selection byte positions, color changes, TOC cache reuse, and details scroll anchors.
@@ -31,8 +32,8 @@ Workflow tests also inject a unit failure and verify that the build stops.
 They check setup's dependency-cache selection, pinned checksums, and offline behavior.
 They also cover HTTP archive prefixes, repair of older wrapped caches, and preservation after a failed repair.
 `ci-workflow.py` checks branch gates and release publication with a local GitHub CLI stub.
-It covers exact commit targets, RPM/DEB checksums, draft retries, and Latest selection after builds finish out of order.
-These tests require PyYAML (`python3-pyyaml` on Fedora), which `make setup` installs.
+It covers checkout ownership, the two-build publication gate, native package selection, checksums, draft retries, and Latest selection.
+These tests require PyYAML (`python3-pyyaml` on Fedora or `python3-yaml` on Ubuntu), which `make setup` installs.
 
 These commands use cached dependencies and perform no downloads or global disk-cache flushes.
 Run `make setup` first if dependencies are missing.

@@ -1,6 +1,6 @@
 # Markdown FAST
 
-A fast, minimal Markdown viewer for Linux with Wayland, including Fedora 44.
+A fast, minimal Markdown viewer for Linux with Wayland, including Fedora 44 and Ubuntu 26.04.
 The default UI uses FLTK 1.4.5 with Cairo/Pango drawing and standard FLTK menus and controls.
 Zigmark/Mecha parse Markdown, Zignal handles images, and Zig owns the document core, JSON, decompression, and diagram renderers.
 FLTK and its C++ frontend are bundled into the single executable. Rust is not required.
@@ -114,7 +114,7 @@ The build requires Git LFS, GNU Make, Zig 0.17.0, GCC/G++, CMake, Ninja, Python,
 `make reference` is an isolated FLTK build in `build/reference`; `make setup-reference` remains an alias for the same dependencies.
 `make setup-native` prepares the minimal dependencies for the optional experimental Zig UI.
 
-On Fedora 44, `make setup` installs missing requirements and downloads the pinned sources.
+On Fedora 44 and Ubuntu 26.04, `make setup` installs missing requirements and downloads the pinned sources.
 If the default compiler has another version, setup caches the exact official compiler in `zig-pkg/zig-0.17.0/`.
 Make uses that cached compiler automatically. An explicit `ZIG=/path/to/zig` overrides this choice.
 Setup extracts dependency archives at their package root. It also repairs source caches from earlier setup runs.
@@ -390,14 +390,19 @@ For a short check under the current powersave mode and ordinary CPU scheduling, 
 It checks unchanged preferences, matching workloads, empty executable page caches, and identical pixels for covered Latin text.
 Greek/Cyrillic rendering is measured separately because subsetting removes those glyphs.
 
-GitHub Actions tests and builds pushes to `main` and `dev`, pull requests, and manual runs.
-Successful `main` pushes also build and check RPM/DEB packages, then publish a release with the executable, packages, checksums, and build information.
+One GitHub Actions workflow starts independent Fedora 44 and Ubuntu 26.04 build jobs for pushes, pull requests, and manual runs.
+Both jobs run the Debug build, full test suite, and ReleaseFast GUI checks.
+A final publishing job requires both builds to pass and a qualifying push to `main` or a version tag.
 The `dev`, pull-request, and manual runs retain no build artifacts and create no release packages.
 Each branch uses its own workflow file. The `dev` branch must include this workflow change.
 
+The publishing job verifies both build manifests, selects Fedora's RPM and Ubuntu's DEB, and generates a combined checksum manifest.
+The release includes Ubuntu's executable as `mdf` and Fedora's executable as `mdf-fedora`.
+The corresponding build information appears in `build-info.txt` and `build-info-fedora.txt`.
+
 For example, workflow run 123 for version `0.2.0` creates tag `v0.2.0-123` at the exact source commit.
 Its RPM release is `123`, and its DEB version is `0.2.0-123`. Package managers can update between builds of the same application version.
-Each main build publishes its own release. A separate step selects the newest published version as Latest, regardless of build completion order.
+Each main build publishes its own release. The publishing job rechecks completed versions to keep Latest on the newest successful build.
 
 Version-tag pushes such as `v0.2.1` retain the existing release behavior and must match the application version.
 Local `make release` keeps the original package names. Set `MDF_PACKAGE_RELEASE=123` to create packages with a numbered revision.

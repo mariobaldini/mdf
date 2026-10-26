@@ -4,7 +4,9 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$root"
 mdf_binary=$(realpath "${1:-build/bin/mdf}")
 printf '%s\n' 'Checking the native FLTK GUI in an isolated Wayland compositor...'
-command -v weston >/dev/null && pkg-config --exists libweston-15 || { printf '%s\n' 'GUI tests require Weston 15 and weston-devel. Run make setup.' >&2;exit 1; }
+mdf_weston_pc=libweston-15
+if ! pkg-config --exists "$mdf_weston_pc"; then mdf_weston_pc=libweston-14; fi
+command -v weston >/dev/null && pkg-config --exists "$mdf_weston_pc" || { printf '%s\n' 'GUI tests require Weston 14 or 15 development files. Run make setup.' >&2;exit 1; }
 command -v strace >/dev/null || { printf '%s\n' 'GUI font-access tests require strace. Run make setup.' >&2;exit 1; }
 mkdir -p build/fltk-tests
 mdf_protocols=$(pkg-config --variable=pkgdatadir wayland-protocols)
@@ -16,10 +18,10 @@ if [ -f "$mdf_protocols/staging/cursor-shape/cursor-shape-v1.xml" ];then
     wayland-scanner private-code "$mdf_protocols/unstable/tablet/tablet-unstable-v2.xml" build/fltk-tests/protocols/tablet.c
     /usr/bin/gcc -shared -fPIC -Wno-attributes -DMDF_TEST_CURSOR_SHAPE_PROTOCOL -Ibuild/fltk-tests/protocols \
         tests/fltk-seat.c build/fltk-tests/protocols/cursor-shape.c build/fltk-tests/protocols/tablet.c \
-        -o build/fltk-tests/virtual-seat.so $(pkg-config --cflags --libs libweston-15 wayland-server)
+        -o build/fltk-tests/virtual-seat.so $(pkg-config --cflags --libs "$mdf_weston_pc" wayland-server)
     mdf_shapes=1
 else
-    /usr/bin/gcc -shared -fPIC -Wno-attributes tests/fltk-seat.c -o build/fltk-tests/virtual-seat.so $(pkg-config --cflags --libs libweston-15 wayland-server)
+    /usr/bin/gcc -shared -fPIC -Wno-attributes tests/fltk-seat.c -o build/fltk-tests/virtual-seat.so $(pkg-config --cflags --libs "$mdf_weston_pc" wayland-server)
 fi
 mdf_test=$(mktemp -d "$root/build/fltk-tests/bundle.XXXXXX")
 mdf_app="$mdf_test/app with spaces"

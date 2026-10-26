@@ -36,8 +36,8 @@ check_tools() {
             mdf_errors=1
         fi
     fi
-    if command -v rpm >/dev/null 2>&1 && ! rpm -q ca-certificates >/dev/null 2>&1; then
-        printf '%s\n' 'Missing certificates. Fedora 44: sudo dnf install ca-certificates' >&2
+    if [ ! -r /etc/ssl/certs/ca-certificates.crt ] && [ ! -r /etc/pki/tls/certs/ca-bundle.crt ]; then
+        printf '%s\n' 'Missing CA certificates. Run make setup.' >&2
         mdf_errors=1
     fi
     mdf_required_tools='pkg-config python3 wayland-scanner objcopy strip'

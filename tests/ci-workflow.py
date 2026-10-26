@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exercise branch gates, release metadata, and publishing without GitHub writes."""
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -14,14 +15,17 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = yaml.load((ROOT / '.github/workflows/build-release.yml').read_text(), Loader=yaml.BaseLoader)
+SPEC = importlib.util.spec_from_file_location('assemble_release', ROOT / 'scripts/assemble-release.py')
+ASSEMBLER = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(ASSEMBLER)
 
 
-def enabled(entry, event, ref, release='skipped'):
+def enabled(entry, event, ref, build='success'):
     expression = entry.get('if', 'True').removeprefix('${{').removesuffix('}}').strip()
     expression = expression.replace('&&', ' and ').replace('||', ' or ')
     return bool(eval(expression, {'__builtins__': {}}, {
         'True': True, 'github': SimpleNamespace(event_name=event, ref=ref),
-        'needs': SimpleNamespace(release=SimpleNamespace(result=release)),
+        'needs': SimpleNamespace(build=SimpleNamespace(result=build)),
         'startsWith': str.startswith,
     }))
 
@@ -44,16 +48,77 @@ class WorkflowTests(unittest.TestCase):
                 self.assertEqual('make test-packages' in commands, publish)
                 self.assertEqual(any(step.get('uses', '').startswith('actions/upload-artifact@') for step in steps), publish)
                 self.assertEqual(enabled(WORKFLOW['jobs']['release'], event, ref), publish)
-                self.assertEqual(enabled(WORKFLOW['jobs']['promote'], event, ref, 'success' if publish else 'skipped'), publish)
+
+    def test_two_independent_builds_must_both_succeed_before_publication(self):
+        build = WORKFLOW['jobs']['build']
+        self.assertEqual(build['strategy']['fail-fast'], 'false')
+        matrix = build['strategy']['matrix']['include']
+        self.assertEqual({row['distro']: row['image'] for row in matrix},
+                         {'fedora': 'fedora:44', 'ubuntu': 'ubuntu:26.04'})
+        self.assertNotIn('continue-on-error', build)
+        for result in ('failure', 'cancelled', 'skipped'):
+            self.assertFalse(enabled(WORKFLOW['jobs']['release'], 'push', 'refs/heads/main', result))
+        self.assertEqual(set(WORKFLOW['jobs']), {'build', 'release'})
 
     def test_permissions_and_build_dependencies(self):
         self.assertEqual(WORKFLOW['permissions']['contents'], 'read')
         self.assertEqual(WORKFLOW['jobs']['release']['needs'], 'build')
-        self.assertEqual(WORKFLOW['jobs']['promote']['needs'], 'release')
-        for job in ('release', 'promote'):
-            self.assertEqual(WORKFLOW['jobs'][job]['permissions']['contents'], 'write')
+        self.assertEqual(WORKFLOW['jobs']['release']['permissions']['contents'], 'write')
         self.assertNotIn('concurrency', WORKFLOW['jobs']['release'])
-        self.assertEqual(WORKFLOW['jobs']['promote']['concurrency']['cancel-in-progress'], 'false')
+
+    def test_publication_downloads_and_verifies_both_artifacts(self):
+        steps = WORKFLOW['jobs']['release']['steps']
+        downloads = [step['with'] for step in steps if step.get('uses', '').startswith('actions/download-artifact@')]
+        self.assertEqual({item['name']: item['path'] for item in downloads},
+                         {'mdf-linux-x86_64-fedora': 'build/fedora', 'mdf-linux-x86_64-ubuntu': 'build/ubuntu'})
+        assemble = next(step for step in steps if 'assemble-release.py' in step.get('run', ''))
+        publish = next(step for step in steps if 'publish-release.sh' in step.get('run', ''))
+        self.assertLess(steps.index(assemble), steps.index(publish))
+
+    def test_container_trust_allows_checkout_and_nested_submodules_only(self):
+        steps = WORKFLOW['jobs']['build']['steps']
+        trust = next(step for step in steps if step.get('id') == 'trust')
+        checkout = next(step for step in steps if step.get('uses', '').startswith('actions/checkout@'))
+        setup = next(step for step in steps if step.get('run') == 'make setup')
+        self.assertLess(steps.index(checkout), steps.index(trust))
+        self.assertLess(steps.index(trust), steps.index(setup))
+        with tempfile.TemporaryDirectory(prefix='mdf-ci-ownership-') as directory:
+            root = Path(directory)
+            env = {**os.environ, 'GIT_CONFIG_GLOBAL': str(root / 'gitconfig'), 'GIT_CONFIG_NOSYSTEM': '1',
+                   'GIT_AUTHOR_NAME': 'MDF CI test', 'GIT_AUTHOR_EMAIL': 'ci@example.invalid',
+                   'GIT_COMMITTER_NAME': 'MDF CI test', 'GIT_COMMITTER_EMAIL': 'ci@example.invalid',
+                   'GIT_TEST_ASSUME_DIFFERENT_OWNER': '0'}
+            def git(path, *args):
+                return subprocess.run(['git', '-C', str(path), *args], env=env,
+                                      capture_output=True, text=True, check=True)
+            def repository(name):
+                path = root / name
+                subprocess.run(['git', 'init', '-q', str(path)], env=env, check=True)
+                (path / 'fixture').write_text('fixture\n')
+                git(path, 'add', 'fixture')
+                git(path, 'commit', '-qm', 'fixture')
+                return path
+            leaf = repository('leaf source')
+            parent = repository('parent source')
+            git(parent, '-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', str(leaf), 'nested leaf')
+            git(parent, 'commit', '-qm', 'nested submodule')
+            workspace = repository('checkout with spaces')
+            git(workspace, '-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', str(parent), 'modules/parent module')
+            git(workspace, '-c', 'protocol.file.allow=always', 'submodule', 'update', '--init', '--recursive')
+            env.update({'GIT_TEST_ASSUME_DIFFERENT_OWNER': '1', 'GITHUB_WORKSPACE': str(workspace)})
+            def status(path):
+                return subprocess.run(['git', '-C', str(path), 'ls-files', '--stage'], env=env,
+                                      capture_output=True, text=True)
+            before = status(workspace)
+            self.assertNotEqual(before.returncode, 0)
+            self.assertIn('dubious ownership', before.stderr)
+            result = subprocess.run(['bash', '-euo', 'pipefail', '-c', trust['run']], cwd=workspace,
+                                    env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            for path in [workspace, workspace / 'modules/parent module', workspace / 'modules/parent module/nested leaf']:
+                result = status(path)
+                self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('dubious ownership', status(leaf).stderr)
 
     def test_main_tag_is_unique_and_tag_releases_keep_their_version(self):
         code = next(step['run'] for step in WORKFLOW['jobs']['build']['steps'] if step.get('id') == 'release')
@@ -82,6 +147,52 @@ class WorkflowTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn('must be a positive integer', result.stderr)
                 self.assertEqual(list(Path(directory).iterdir()), [])
+
+
+class AssemblyTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix='mdf-ci-assembly-')
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.rpm = 'mdf-0.2.0-42.x86_64.rpm'
+        self.deb = 'mdf_0.2.0-42_amd64.deb'
+        for distro in ('fedora', 'ubuntu'):
+            folder = self.root / distro
+            folder.mkdir()
+            for name in ('mdf', self.rpm, self.deb, 'build-info.txt'):
+                (folder / name).write_bytes(f'{distro} {name}'.encode())
+            (folder / 'mdf.sha256').write_text(''.join(
+                hashlib.sha256((folder / name).read_bytes()).hexdigest() + '  ' + name + '\n'
+                for name in ('mdf', self.rpm, self.deb)))
+
+    def test_release_uses_native_packages_and_keeps_both_binaries(self):
+        ASSEMBLER.assemble(self.root, 'v0.2.0-42')
+        for output, distro, original in [(self.rpm, 'fedora', self.rpm), (self.deb, 'ubuntu', self.deb),
+                                           ('mdf', 'ubuntu', 'mdf'), ('mdf-fedora', 'fedora', 'mdf'),
+                                           ('build-info.txt', 'ubuntu', 'build-info.txt'),
+                                           ('build-info-fedora.txt', 'fedora', 'build-info.txt')]:
+            self.assertEqual((self.root / output).read_bytes(), (self.root / distro / original).read_bytes())
+        for line in (self.root / 'mdf.sha256').read_text().splitlines():
+            digest, name = line.split('  ')
+            self.assertEqual(hashlib.sha256((self.root / name).read_bytes()).hexdigest(), digest)
+
+    def test_corrupt_or_missing_native_bundle_prevents_assembly(self):
+        for distro in ('fedora', 'ubuntu'):
+            binary = self.root / distro / 'mdf'
+            original = binary.read_bytes()
+            binary.write_bytes(b'corrupted')
+            with self.assertRaisesRegex(ValueError, distro):
+                ASSEMBLER.assemble(self.root, 'v0.2.0-42')
+            self.assertFalse((self.root / 'mdf').exists())
+            binary.write_bytes(original)
+        (self.root / 'ubuntu' / self.deb).unlink()
+        with self.assertRaisesRegex(ValueError, 'ubuntu'):
+            ASSEMBLER.assemble(self.root, 'v0.2.0-42')
+
+    def test_version_mismatch_cannot_be_published(self):
+        with self.assertRaises(ValueError):
+            ASSEMBLER.assemble(self.root, 'v0.2.1-42')
+        self.assertFalse((self.root / 'mdf.sha256').exists())
 
 
 class PublishTests(unittest.TestCase):
@@ -113,7 +224,10 @@ if args[:2] == ['release', 'view']:
     if value == 'missing': raise SystemExit(1)
     print(value)
 elif args[0] == 'api':
-    print(os.environ.get('MDF_TEST_TAGS', 'v0.2.0-42'))
+    with open(os.environ['MDF_TEST_GH_LOG']) as log:
+        reads = sum(json.loads(line)[0] == 'api' for line in log)
+    print(os.environ.get('MDF_TEST_TAGS_AFTER', os.environ.get('MDF_TEST_TAGS', 'v0.2.0-42'))
+          if reads > 1 else os.environ.get('MDF_TEST_TAGS', 'v0.2.0-42'))
 if len(args) > 1 and args[1] == os.environ.get('MDF_TEST_GH_FAIL'):
     raise SystemExit(1)
 ''')
@@ -188,7 +302,16 @@ if len(args) > 1 and args[1] == os.environ.get('MDF_TEST_GH_FAIL'):
             self.env['MDF_TEST_TAGS'] = tags
             result = self.run_publish('--promote')
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(self.calls()[-1], ['release', 'edit', expected, '--latest'])
+            edits = [call for call in self.calls() if call[:2] == ['release', 'edit']]
+            self.assertEqual(edits[-1], ['release', 'edit', expected, '--latest'])
+
+    def test_latest_rechecks_a_new_release_during_promotion(self):
+        self.env['MDF_TEST_TAGS'] = 'v0.2.0-41'
+        self.env['MDF_TEST_TAGS_AFTER'] = 'v0.2.0-41\nv0.2.0-42'
+        result = self.run_publish('--promote')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        edits = [call[2] for call in self.calls() if call[:2] == ['release', 'edit']]
+        self.assertEqual(edits, ['v0.2.0-41', 'v0.2.0-42'])
 
 
 if __name__ == '__main__':

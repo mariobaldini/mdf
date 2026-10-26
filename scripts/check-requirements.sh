@@ -4,7 +4,7 @@
 printf '%s\n' 'Checking build requirements (the first run after make clean can take a while)...'
 
 if ! check_tools; then
-    printf '%s\n' 'Run make setup after installing Make, or use the Fedora commands above.' >&2
+    printf '%s\n' 'Run make setup after installing Make.' >&2
     exit 1
 fi
 offline_graph_check

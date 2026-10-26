@@ -59,7 +59,7 @@ The first Markdown frame reads no system fonts, Fontconfig files, or font caches
 
 | Command | Behavior |
 | --- | --- |
-| `make setup` | Install missing Fedora 44 tools and fetch checksum-pinned sources. |
+| `make setup` | Install missing Fedora 44 or Ubuntu 26.04 tools and fetch checksum-pinned sources. |
 | `make build` | Build the Zig core and FLTK frontend in Debug mode, offline. |
 | `make release` | Build optimized runtime files, RPM/DEB packages, checksums, and build metadata. |
 | `make install` | Copy the built executable into the user's bin folder without sudo. Remove the retired companion library on upgrade. |
