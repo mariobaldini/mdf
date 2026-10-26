@@ -46,6 +46,7 @@ class WorkflowTests(unittest.TestCase):
                 self.assertIn('make test-gui OPTIMIZE=ReleaseFast', commands)
                 self.assertEqual('make release' in commands, publish)
                 self.assertEqual('make test-packages' in commands, publish)
+                self.assertEqual('bash tests/package-desktop.sh' in commands, publish)
                 self.assertEqual(any(step.get('uses', '').startswith('actions/upload-artifact@') for step in steps), publish)
                 self.assertEqual(enabled(WORKFLOW['jobs']['release'], event, ref), publish)
 
@@ -165,13 +166,12 @@ class AssemblyTests(unittest.TestCase):
                 hashlib.sha256((folder / name).read_bytes()).hexdigest() + '  ' + name + '\n'
                 for name in ('mdf', self.rpm, self.deb)))
 
-    def test_release_uses_native_packages_and_keeps_both_binaries(self):
+    def test_release_contains_only_native_packages_and_internal_checksums(self):
         ASSEMBLER.assemble(self.root, 'v0.2.0-42')
-        for output, distro, original in [(self.rpm, 'fedora', self.rpm), (self.deb, 'ubuntu', self.deb),
-                                           ('mdf', 'ubuntu', 'mdf'), ('mdf-fedora', 'fedora', 'mdf'),
-                                           ('build-info.txt', 'ubuntu', 'build-info.txt'),
-                                           ('build-info-fedora.txt', 'fedora', 'build-info.txt')]:
+        for output, distro, original in [(self.rpm, 'fedora', self.rpm), (self.deb, 'ubuntu', self.deb)]:
             self.assertEqual((self.root / output).read_bytes(), (self.root / distro / original).read_bytes())
+        self.assertEqual({path.name for path in self.root.iterdir() if path.is_file()},
+                         {self.rpm, self.deb, 'mdf.sha256'})
         for line in (self.root / 'mdf.sha256').read_text().splitlines():
             digest, name = line.split('  ')
             self.assertEqual(hashlib.sha256((self.root / name).read_bytes()).hexdigest(), digest)
@@ -250,8 +250,8 @@ if len(args) > 1 and args[1] == os.environ.get('MDF_TEST_GH_FAIL'):
         self.assertEqual(create[:3], ['release', 'create', 'v0.2.0-42'])
         self.assertIn('--draft', create)
         self.assertEqual(create[create.index('--target') + 1], 'a' * 40)
-        for name in self.files + ['mdf.sha256', 'build-info.txt']:
-            self.assertIn('build/' + name, create)
+        self.assertEqual({item for item in create if item.startswith('build/')},
+                         {'build/mdf-0.2.0-42.x86_64.rpm', 'build/mdf_0.2.0-42_amd64.deb'})
         self.assertEqual(publish, ['release', 'edit', 'v0.2.0-42', '--draft=false', '--latest=false'])
 
     def test_tag_release_verifies_the_existing_tag(self):

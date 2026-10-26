@@ -56,17 +56,24 @@ while (( $# )); do
 done
 printf '%s\n' "$mdf_url" >> "$MDF_TEST_CURL_LOG"
 if [[ ${MDF_TEST_DOWNLOAD_FAIL:-0} == 1 ]]; then exit 22; fi
-if [[ $mdf_url == https://github.com/mariobaldini/mdf/releases/latest ]]; then
-    printf 'https://github.com/mariobaldini/mdf/releases/tag/%s' "${MDF_TEST_TAG:-v0.2.0}"
-    exit 0
-fi
-case "$mdf_url" in
-    https://github.com/mariobaldini/mdf/releases/download/"${MDF_TEST_TAG:-v0.2.0}"/*) ;;
-    *) exit 22 ;;
-esac
-mdf_asset=${mdf_url##*/}
-cp "$MDF_TEST_RELEASE/$mdf_asset" "$mdf_output"
-if [[ ${MDF_TEST_CORRUPT:-0} == 1 && $mdf_asset != mdf.sha256 ]]; then printf 'corrupt' >> "$mdf_output"; fi
+python3 - "$mdf_url" "$mdf_output" <<'PY'
+import hashlib,json,os,shutil,sys
+from pathlib import Path
+files=sorted([*Path(os.environ['MDF_TEST_RELEASE']).glob('*.rpm'),*Path(os.environ['MDF_TEST_RELEASE']).glob('*.deb')])
+api='https://api.github.com/repos/mariobaldini/mdf'
+if sys.argv[1]==api+'/releases/latest':
+    assets=[{'id':index,'name':path.name,'state':'uploaded',
+             'digest':None if os.environ.get('MDF_TEST_NO_DIGEST')=='1' else 'sha256:'+hashlib.sha256(path.read_bytes()).hexdigest()}
+            for index,path in enumerate(files,1)]
+    print(json.dumps({'tag_name':os.environ.get('MDF_TEST_TAG','v0.2.0'),'assets':assets}))
+elif sys.argv[1].startswith(api+'/releases/assets/'):
+    source=files[int(sys.argv[1].rsplit('/',1)[1])-1]
+    shutil.copyfile(source,sys.argv[2])
+    if os.environ.get('MDF_TEST_CORRUPT')=='1':
+        with open(sys.argv[2],'ab') as target:target.write(b'corrupt')
+else:
+    raise SystemExit(22)
+PY
 STUB
 cat > "$mdf_test_scratch/bin/uname" <<'STUB'
 #!/bin/sh
@@ -114,6 +121,12 @@ run_installer
 cmp "$mdf_test_scratch/release/mdf-0.2.0-1.x86_64.rpm" "$mdf_test_scratch/installed package"
 grep -q '^dnf install -y ' "$mdf_test_scratch/manager.log"
 printf '%s\n' 'PASS: the piped installer selects and verifies the Fedora RPM'
+if grep -q 'mdf.sha256' "$mdf_test_scratch/curl.log"; then
+    printf '%s\n' 'Installer still requires a release checksum file.' >&2; exit 1
+fi
+export MDF_TEST_NO_DIGEST=1
+if run_installer; then printf '%s\n' 'Missing release digest was accepted.' >&2; exit 1; fi
+unset MDF_TEST_NO_DIGEST
 
 export MDF_TEST_CORRUPT=1
 if run_installer; then printf '%s\n' 'Corrupt download was accepted.' >&2; exit 1; fi

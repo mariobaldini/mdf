@@ -104,7 +104,10 @@ curl -fsSL https://raw.githubusercontent.com/mariobaldini/mdf/main/tools/install
 ```
 
 The script checks the OS and architecture, then installs the matching RPM or DEB through the system package manager.
-Each package installs one executable at `/usr/bin/mdf`.
+The installer requires curl and Python 3 and verifies the package against GitHub's SHA-256 asset digest.
+It accepts `GH_TOKEN` for access to private releases.
+Packages install `/usr/bin/mdf` and a Markdown desktop entry for the **Open With** menu.
+Installation preserves the current default Markdown application.
 Package installation requires administrator access.
 
 ### From source
@@ -396,9 +399,8 @@ A final publishing job requires both builds to pass and a qualifying push to `ma
 The `dev`, pull-request, and manual runs retain no build artifacts and create no release packages.
 Each branch uses its own workflow file. The `dev` branch must include this workflow change.
 
-The publishing job verifies both build manifests, selects Fedora's RPM and Ubuntu's DEB, and generates a combined checksum manifest.
-The release includes Ubuntu's executable as `mdf` and Fedora's executable as `mdf-fedora`.
-The corresponding build information appears in `build-info.txt` and `build-info-fedora.txt`.
+The publishing job verifies both build manifests and uploads only Fedora's RPM and Ubuntu's DEB.
+Checksums and build information remain internal CI inputs. GitHub also displays its automatically generated source archive links.
 
 For example, workflow run 123 for version `0.2.0` creates tag `v0.2.0-123` at the exact source commit.
 Its RPM release is `123`, and its DEB version is `0.2.0-123`. Package managers can update between builds of the same application version.

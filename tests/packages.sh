@@ -70,10 +70,20 @@ mkdir -p "$mdf_scratch/rpm" "$mdf_scratch/deb"
 dpkg-deb --extract "$mdf_deb" "$mdf_scratch/deb"
 for mdf_format in rpm deb; do
     mdf_bundle="$mdf_scratch/$mdf_format"
-    test "$(find "$mdf_bundle/usr" -type f | wc -l)" -eq 1
+    test "$(find "$mdf_bundle/usr" -type f | wc -l)" -eq 2
     test ! -L "$mdf_bundle/usr/bin/mdf"
     test ! -e "$mdf_bundle/usr/libexec/mdf"
     cmp build/mdf "$mdf_bundle/usr/bin/mdf"
+    cmp assets/mdf.desktop "$mdf_bundle/usr/share/applications/mdf.desktop"
+    desktop-file-validate "$mdf_bundle/usr/share/applications/mdf.desktop"
+    update-desktop-database "$mdf_bundle/usr/share/applications"
+    python3 - "$mdf_bundle/usr/share/applications/mimeinfo.cache" <<'PY'
+import configparser, sys
+cache=configparser.ConfigParser();cache.read(sys.argv[1])
+for mime in ('text/markdown','text/x-markdown'):
+    assert 'mdf.desktop' in cache['MIME Cache'][mime].split(';')
+print('PASS: Markdown MIME cache lists MDF as a compatible application')
+PY
     test "$("$mdf_bundle/usr/bin/mdf" --version)" = "mdf $mdf_version"
-    printf 'PASS: %s package metadata, single executable at /usr/bin/mdf, exact bytes, and version\n' "$mdf_format"
+    printf 'PASS: %s package metadata, executable, Markdown desktop entry, exact bytes, and version\n' "$mdf_format"
 done

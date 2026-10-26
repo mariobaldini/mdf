@@ -40,21 +40,15 @@ if (( ${#mdf_rpms[@]} != 1 || ${#mdf_debs[@]} != 1 )); then
     printf '%s\n' 'A release must contain exactly one RPM and one DEB.' >&2
     exit 1
 fi
-test -s build/mdf
-test -s build/build-info.txt
 (cd build && sha256sum --check mdf.sha256)
-mdf_extras=()
-for mdf_file in build/mdf-fedora build/build-info-fedora.txt; do
-    if [[ -f $mdf_file ]]; then mdf_extras+=("$mdf_file"); fi
-done
-for mdf_file in build/mdf "${mdf_rpms[@]}" "${mdf_debs[@]}" "${mdf_extras[@]}"; do
+for mdf_file in "${mdf_rpms[@]}" "${mdf_debs[@]}"; do
     mdf_checksum=$(cd build && sha256sum "${mdf_file#build/}")
     if ! grep -Fxq -- "$mdf_checksum" build/mdf.sha256; then
         printf 'Release manifest does not cover %s.\n' "$mdf_file" >&2
         exit 1
     fi
 done
-mdf_assets=(build/mdf build/mdf.sha256 build/build-info.txt "${mdf_rpms[@]}" "${mdf_debs[@]}" "${mdf_extras[@]}")
+mdf_assets=("${mdf_rpms[@]}" "${mdf_debs[@]}")
 mdf_draft=$(gh release view "$mdf_tag" --json isDraft --jq .isDraft 2>/dev/null || true)
 if [[ $mdf_draft == false ]]; then
     printf 'Release %s is already published.\n' "$mdf_tag"

@@ -32,8 +32,11 @@ Workflow tests also inject a unit failure and verify that the build stops.
 They check setup's dependency-cache selection, pinned checksums, and offline behavior.
 They also cover HTTP archive prefixes, repair of older wrapped caches, and preservation after a failed repair.
 `ci-workflow.py` checks branch gates and release publication with a local GitHub CLI stub.
-It covers checkout ownership, the two-build publication gate, native package selection, checksums, draft retries, and Latest selection.
+It covers checkout ownership, the two-build publication gate, package-only release assets, checksums, draft retries, and Latest selection.
 These tests require PyYAML (`python3-pyyaml` on Fedora or `python3-yaml` on Ubuntu), which `make setup` installs.
+
+The release jobs also install the native package in their disposable containers.
+`package-desktop.sh` checks Open With registration, preservation of an existing Markdown default, and removal of the handler after uninstall.
 
 These commands use cached dependencies and perform no downloads or global disk-cache flushes.
 Run `make setup` first if dependencies are missing.

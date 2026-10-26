@@ -44,6 +44,7 @@ check-native-requirements:
 
 check-package-tools:
 	@command -v rpmbuild >/dev/null && command -v dpkg-deb >/dev/null || { printf '%s\n' 'Release packaging requires rpmbuild and dpkg-deb. Fedora: sudo dnf install rpm-build dpkg' >&2; exit 1; }
+	@command -v desktop-file-validate >/dev/null || { printf '%s\n' 'Release packaging requires desktop-file-utils. Run make setup.' >&2; exit 1; }
 
 check-profile-tools:
 	@command -v python3 >/dev/null || { printf '%s\n' 'Profiling requires Python 3. Run make setup, or sudo dnf install python3.' >&2; exit 1; }

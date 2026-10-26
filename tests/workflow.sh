@@ -28,7 +28,7 @@ cp "$root/scripts/common.sh" "$root/scripts/check-requirements.sh" "$root/script
 export MDF_TEST_LOG="$scratch/commands" MDF_TEST_STDLIB="$scratch/libstdc++.a"
 for utility in sh bash dirname cat head grep rm mktemp id mkdir cp mv chmod cmp env;do ln -s "$(command -v "$utility")" "$scratch/bin/$utility";done
 ln -s "$real_make" "$scratch/bin/make"
-for name in ninja gcc pkg-config rpm sudo rpmbuild dpkg-deb strace objcopy strip wayland-scanner;do printf '#!/bin/sh\nexit 0\n' > "$scratch/bin/$name";chmod +x "$scratch/bin/$name";done
+for name in ninja gcc pkg-config rpm sudo rpmbuild dpkg-deb desktop-file-validate strace objcopy strip wayland-scanner;do printf '#!/bin/sh\nexit 0\n' > "$scratch/bin/$name";chmod +x "$scratch/bin/$name";done
 cat > "$scratch/bin/g++" <<'STUB'
 #!/bin/sh
 printf '%s\n' "$MDF_TEST_STDLIB"

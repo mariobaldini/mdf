@@ -34,20 +34,14 @@ def assemble(directory, tag):
         if not (source / 'build-info.txt').is_file():
             raise ValueError(f'{distro}: missing build information')
     selected = {
-        'mdf': directory / 'ubuntu/mdf',
-        'mdf-fedora': directory / 'fedora/mdf',
         rpm: directory / 'fedora' / rpm,
         deb: directory / 'ubuntu' / deb,
-        'build-info.txt': directory / 'ubuntu/build-info.txt',
-        'build-info-fedora.txt': directory / 'fedora/build-info.txt',
     }
     # Validate both inputs before replacing any release files.
     with tempfile.TemporaryDirectory(prefix='.assemble-', dir=directory) as temporary:
         stage = Path(temporary)
         for name, source in selected.items():
             shutil.copy2(source, stage / name)
-        for name in ('mdf', 'mdf-fedora'):
-            (stage / name).chmod(0o755)
         (stage / 'mdf.sha256').write_text(''.join(
             checksum(stage / name) + '  ' + name + '\n' for name in selected))
         for path in stage.iterdir():

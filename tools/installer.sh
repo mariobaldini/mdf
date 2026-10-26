@@ -54,26 +54,44 @@ if [[ ${1:-} == --uninstall ]]; then
     exit 0
 fi
 
-mdf_repository=https://github.com/mariobaldini/mdf
-mdf_latest=$(curl --fail --silent --show-error --location --retry 3 \
-    --output /dev/null --write-out '%{url_effective}' "$mdf_repository/releases/latest")
-mdf_tag=${mdf_latest##*/}
-if [[ ! $mdf_tag =~ ^v([0-9]+\.[0-9]+\.[0-9]+)(-([1-9][0-9]*))?$ ]]; then
-    printf '%s\n' 'The latest release has an unsupported version tag.' >&2
+if ! command -v python3 >/dev/null; then
+    printf '%s\n' 'Python 3 is required to read and verify GitHub release metadata.' >&2
     exit 1
 fi
-mdf_version=${BASH_REMATCH[1]}
-mdf_revision=${BASH_REMATCH[3]:-}
-if [[ $mdf_format == deb ]]; then mdf_package="mdf_${mdf_version}${mdf_revision:+-$mdf_revision}_amd64.deb"
-else mdf_package="mdf-${mdf_version}-${mdf_revision:-1}.x86_64.rpm"
-fi
+mdf_api=https://api.github.com/repos/mariobaldini/mdf
+mdf_curl=(curl --fail --silent --show-error --location --retry 3 --header 'X-GitHub-Api-Version: 2026-03-10')
+if [[ -n ${GH_TOKEN:-} ]]; then mdf_curl+=(--header "Authorization: Bearer $GH_TOKEN"); fi
+mdf_release=$("${mdf_curl[@]}" --header 'Accept: application/vnd.github+json' "$mdf_api/releases/latest")
+mdf_asset=$(printf '%s\n' "$mdf_release" | python3 -c '
+import json, re, sys
+release = json.load(sys.stdin)
+match = re.fullmatch(r"v([0-9]+\.[0-9]+\.[0-9]+)(?:-([1-9][0-9]*))?", release.get("tag_name", ""))
+if not match:
+    raise SystemExit("The latest release has an unsupported version tag.")
+version, revision = match.groups()
+suffix = "-" + revision if revision else ""
+name = (f"mdf_{version}{suffix}_amd64.deb" if sys.argv[1] == "deb"
+        else f"mdf-{version}-{revision or 1}.x86_64.rpm")
+assets = [asset for asset in release.get("assets", []) if asset.get("name") == name and asset.get("state") == "uploaded"]
+if len(assets) != 1:
+    raise SystemExit("The release does not contain the expected package: " + name)
+asset = assets[0]
+digest = re.fullmatch(r"sha256:([0-9a-f]{64})", str(asset.get("digest", "")))
+if not digest or type(asset.get("id")) is not int or asset["id"] <= 0:
+    raise SystemExit("The release package has no valid SHA-256 digest or asset ID.")
+print(name)
+print(digest[1])
+print(asset["id"])
+' "$mdf_format")
+mapfile -t mdf_fields <<< "$mdf_asset"
+mdf_package=${mdf_fields[0]}
+mdf_digest=${mdf_fields[1]}
+mdf_asset_id=${mdf_fields[2]}
 mdf_download=$(mktemp -d)
 trap 'rm -rf "$mdf_download"' EXIT
-for mdf_file in "$mdf_package" mdf.sha256; do
-    curl --fail --silent --show-error --location --retry 3 \
-        "$mdf_repository/releases/download/$mdf_tag/$mdf_file" --output "$mdf_download/$mdf_file"
-done
-(cd "$mdf_download" && sha256sum --check --ignore-missing mdf.sha256)
+"${mdf_curl[@]}" --header 'Accept: application/octet-stream' \
+    "$mdf_api/releases/assets/$mdf_asset_id" --output "$mdf_download/$mdf_package"
+(cd "$mdf_download" && printf '%s  %s\n' "$mdf_digest" "$mdf_package" | sha256sum --check)
 # APT's download sandbox must be able to read the local package.
 chmod 755 "$mdf_download"
 chmod 644 "$mdf_download/$mdf_package"
