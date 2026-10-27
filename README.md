@@ -38,6 +38,8 @@ mdf document.md
 
 Use **Ctrl+O** to open a file.
 Use **Ctrl+C** to copy selected text.
+The viewer starts with wrapped text. **View > Line wrap** can disable wrapping for the current session.
+The vertical scrollbar appears only when the document is taller than the reading area.
 To keep settings, enable **Settings > Save settings across sessions**.
 
 For unsupported Mermaid types, MDF shows the source text and an error message.
@@ -65,6 +67,21 @@ The executable is in `build/bin/`.
 A source installation places `mdf` in `~/.local/bin`.
 This folder must be in your `PATH`.
 For source installations, `make uninstall` removes the executable and saved settings.
+
+## Version changes
+
+[`VERSION`](VERSION) stores the application version as `MAJOR.MINOR`, such as `0.3`.
+Increase the second integer once for every completed change, including documentation changes:
+
+```sh
+make version-bump
+make version-check
+```
+
+The next version after `0.9` is `0.10`. Build and test runs do not increase the version.
+The helper also updates `build.zig.zon`. The executable and package tools use the compatible form `MAJOR.MINOR.0`.
+The CLI, About dialog, and profiler read this version through the build.
+The agent rules in [AGENTS.md](AGENTS.md) require the version increase.
 
 ## Tests and packages
 

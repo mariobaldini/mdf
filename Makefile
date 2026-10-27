@@ -31,15 +31,15 @@ setup-reference:
 setup-native:
 	@MDF_REFERENCE=0 sh scripts/setup.sh
 
-check-requirements:
+check-requirements: version-check
 	@MDF_REFERENCE=1 sh scripts/check-requirements.sh
 
 .PHONY: check-reference-requirements
-check-reference-requirements:
+check-reference-requirements: version-check
 	@MDF_REFERENCE=1 sh scripts/check-requirements.sh
 
 .PHONY: check-native-requirements
-check-native-requirements:
+check-native-requirements: version-check
 	@MDF_REFERENCE=0 sh scripts/check-requirements.sh
 
 check-package-tools:
@@ -128,6 +128,7 @@ test-core-Debug test-core-ReleaseSafe test-core-ReleaseFast test-core-ReleaseSma
 	@"$(ZIG)" build test $(OFFLINE_FLAGS) $(CACHE_FLAGS) $(TARGET_FLAGS) -Doptimize=$(patsubst test-core-%,%,$@) --summary all
 
 test-workflow:
+	@python3 tests/version.py
 	@python3 tests/zig-deps.py
 	@python3 tests/ci-workflow.py
 	@sh tests/workflow.sh
@@ -210,3 +211,11 @@ test-reference-gui: test-images test-monospace test-startup
 release: check-package-tools
 	@$(MAKE) --no-print-directory build OPTIMIZE=ReleaseFast BUILD_PREFIX=build
 	@OPTIMIZE=ReleaseFast sh scripts/release.sh
+
+.PHONY: version version-check version-bump
+version:
+	@python3 scripts/version.py show
+version-check:
+	@python3 scripts/version.py check
+version-bump:
+	@python3 scripts/version.py bump

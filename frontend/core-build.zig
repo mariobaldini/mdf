@@ -1,6 +1,12 @@
 const std = @import("std");
 pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) void {
     const release = optimize == .fast;
+    const version = b.fmt("{s}.0", .{std.mem.trim(u8, @embedFile("../VERSION"), " \t\r\n")});
+    _ = std.SemanticVersion.parse(version) catch @panic("VERSION must contain MAJOR.MINOR, such as 0.3");
+    if (!std.mem.eql(u8, version, @import("../build.zig.zon").version))
+        @panic("VERSION and build.zig.zon disagree; run make version-check for the required version");
+    const app_version = b.addOptions();
+    app_version.addOption([]const u8, "value", version);
     if(b.option(bool,"reference","Build the FLTK comparison worker library") orelse false) {
     const ui_native = b.addTranslateC(.{ .root_source_file = b.path("frontend/ui-native.h"), .target = target, .optimize = optimize });
     ui_native.addSystemIncludePath(.{ .cwd_relative = "/usr/include" });
@@ -366,6 +372,7 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     const startup_native = b.addTranslateC(.{ .root_source_file = b.path("frontend/launcher-native.h"), .target = target, .optimize = optimize, .link_libc = true });
     const launcher_module = b.createModule(.{ .root_source_file = b.path("frontend/launcher.zig"), .target = target, .optimize = optimize, .link_libc = true });
     launcher_module.addImport("startup_native", startup_native.createModule());
+    launcher_module.addOptions("app_version", app_version);
     launcher_module.linkLibrary(core);
     const launcher = b.addExecutable(.{ .name = "mdf-launcher", .root_module = launcher_module });
     launcher.use_llvm=true;
@@ -422,6 +429,7 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     native_window_module.addImport("native", c_module);
     native_window_module.addImport("ui_profile",native_profile);
     native_window_module.addImport("settings", native_preferences);
+    native_window_module.addOptions("app_version", app_version);
     native_window_module.addImport("wayland", wayland_native.createModule());
     const input_native = b.addTranslateC(.{ .root_source_file = b.path("frontend/native/input.h"),
         .target = target, .optimize = optimize, .link_libc = true });
@@ -482,6 +490,7 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     native_shell_module.addImport("native", c_module);
     native_shell_module.addImport("ui_profile",native_profile);
     native_shell_module.addImport("settings", native_preferences);
+    native_shell_module.addOptions("app_version", app_version);
     native_shell_module.addImport("z2d", svg_dependency.module("svg").import_table.get("z2d").?);
     const native_shell_tests = b.createModule(.{ .root_source_file = b.path("tests/native-shell.zig"),
         .target = target, .optimize = optimize, .link_libc = true });

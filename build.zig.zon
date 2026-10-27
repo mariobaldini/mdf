@@ -1,7 +1,7 @@
 .{
     .name = .mdf,
     .fingerprint = 0x1a0eebaf571cb338,
-    .version = "0.2.0",
+    .version = "0.3.0",
     .minimum_zig_version = "0.17.0",
     .dependencies = .{
         .zig_svg = .{ .path = "modules/zig-svg" },
@@ -11,5 +11,5 @@
             .hash = "mvzr-0.3.9-ZSOky8FzAQBQ9-GkQnaLjOZZHxrioD8NwY-QyZT6oAyR",
         },
     },
-    .paths = .{ "build.zig", "build.zig.zon", "src", "frontend", "assets", "tests", "modules", "scripts", ".zig-version" },
+    .paths = .{ "build.zig", "build.zig.zon", "src", "frontend", "assets", "tests", "modules", "scripts", ".zig-version", "VERSION" },
 }

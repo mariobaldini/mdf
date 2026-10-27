@@ -1,7 +1,7 @@
 # Markdown FAST implementation
 
 Markdown FAST is a read-only Markdown viewer for Linux x86_64 with Wayland.
-The current version is 0.2.0.
+The current application version comes from [`VERSION`](../VERSION). Zig and package tools append `.0`.
 
 ## GUI and document processing
 
@@ -23,6 +23,9 @@ The toolbar contains TOC, light/dark, and one width button that cycles between 8
 The −, reset, and + buttons decrease, reset, and increase the font size. Reset uses the current theme's default size.
 The Preview toggle sits on the right. Its visibility is included in saved settings.
 Size controls remain in the Font menu. The initial width is 80%.
+Every launch starts with line wrapping enabled, including when saved settings contain no-wrap.
+No-wrap remains available for the current session. Other saved preferences are restored normally.
+The vertical scrollbar stays hidden when the document fits. Resizing clamps the scroll position to the current document range.
 Classic, Paper, and Terminal use Open Sans at sizes 12, 14, and 11.
 Theme selection preserves light/dark mode. The toolbar button switches that mode.
 Native FLTK drawings provide the TOC, reset, sun/moon, and disclosure icons.

@@ -343,8 +343,9 @@ def main():
                     cwd=ROOT, env=preferences_env, capture_output=True, text=True, timeout=35)
                 assert restored.returncode == 0, restored.stderr
                 restored_values = json.loads(restored.stdout)
-                assert restored_values['preferences'] == saved_values, (restored_values, saved_values)
-                assert restored_values['ui']['points'] == 18 and not restored_values['ui']['wrap'], restored_values
+                expected_preferences = {**saved_values, 'line_wrap': True}
+                assert restored_values['preferences'] == expected_preferences, (restored_values, saved_values)
+                assert restored_values['ui']['points'] == 18 and restored_values['ui']['wrap'], restored_values
                 (output/'preferences.json').write_text(json.dumps(restored_values, indent=2)+'\n')
                 watched_document = work/'watched.md'
                 watched_document.write_text('# Original watched file\n\nBefore the edit.\n')

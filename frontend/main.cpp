@@ -240,6 +240,7 @@ struct App {
     scrollbar = new Fl_Scrollbar(window->w() - 150, 74, scrollbar_width,
                                  window->h() - 98);
     scrollbar->type(FL_VERTICAL);
+    scrollbar->hide();
     scrollbar->callback(
         [](Fl_Widget *w, void *p) {
           auto &a = *(App *)p;
@@ -526,6 +527,8 @@ struct App {
         std::max({reader->h(), int(reader->total()), position + reader->h()});
     scrollbar->bounds(0, total - reader->h());
     scrollbar->value(position);
+    if (total > reader->h()) scrollbar->show();
+    else scrollbar->hide();
     // A fixed 10% handle keeps preview navigation usable on large documents.
     scrollbar->slider_size(.1);
     if (horizontal_scrollbar->visible()) {
@@ -1030,7 +1033,7 @@ struct App {
     if (name == "about") {
       fl_message_title("About Markdown FAST");
       fl_message(
-          "Markdown FAST 0.2.0\n\nFLTK 1.4.5 · Wayland · Cairo/Pango\nZig 0.17 "
+          "Markdown FAST " MDF_APP_VERSION "\n\nFLTK 1.4.5 · Wayland · Cairo/Pango\nZig 0.17 "
           "· MD4C\n\nhttps://github.com/mariobaldini/mdf");
       return;
     }
@@ -1213,6 +1216,8 @@ struct App {
     metrics.set("layout_ms", layout_ns / 1e6);
     metrics.set("source_bytes", source_bytes);
     metrics.set("blocks", reader->blocks.size());
+    metrics.set("vertical_scrollbar", bool(scrollbar->visible()));
+    metrics.set("line_wrap", settings.line_wrap);
     metrics.set("document_frames", document_frames);
     metrics.set("total_frames", startup_frames);
     metrics.set("decoded_images", reader->images.size() - reader->diagram_sizes.size());
@@ -1293,7 +1298,7 @@ struct App {
                    {"process_id", getpid()},
                    {"wayland_fd", wl_display_get_fd(fl_wl_display())},
                    {"main_started_ns", origin},
-                   {"version", "0.2.0"},
+                   {"version", MDF_APP_VERSION},
                    {"mode", mdf_core_mode()},
                    {"gui", "FLTK 1.4.5"},
                    {"ui_mode",
@@ -1331,6 +1336,20 @@ struct App {
                first_document_commit <= first_document_flush && first_document_flush <= first_document,
            "Markdown pixels are committed and flushed before viewport readiness");
     PHASE("Native FLTK integration checks");
+    {
+      ensure(reader->max_scroll() > 0 && scrollbar->visible(),
+             "Overflowing documents show the vertical scrollbar");
+      const int height = reader->h();
+      reader->move_scroll(reader->max_scroll());
+      reader->resize(reader->x(), reader->y(), reader->w(), int(std::ceil(reader->total())));
+      scroll_changed();
+      ensure(reader->scroll == 0 && !scrollbar->visible(),
+             "A fitting document resets its old scroll position and hides the vertical scrollbar");
+      reader->resize(reader->x(), reader->y(), reader->w(), height);
+      scroll_changed();
+      ensure(reader->max_scroll() > 0 && scrollbar->visible(),
+             "Shrinking the viewport restores the vertical scrollbar");
+    }
     for (auto cursor : {FL_CURSOR_ARROW, FL_CURSOR_INSERT, FL_CURSOR_HAND,
                         FL_CURSOR_NS, FL_CURSOR_WE, FL_CURSOR_NONE})
       window->cursor(cursor);

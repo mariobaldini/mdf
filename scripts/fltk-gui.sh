@@ -42,6 +42,9 @@ python3 - "$mdf_test/no-code.log" <<'PY'
 import json, sys
 data=json.load(open(sys.argv[1]))
 assert data['metrics']['monospace_status']=='not-needed'
+assert not data['metrics']['vertical_scrollbar'], data['metrics']
+assert data['metrics']['line_wrap'], data['metrics']
+print('PASS: short documents open wrapped without a vertical scrollbar')
 assert not data['metrics']['first_viewport_monospace']
 assert 'monospace_request_ms' not in data['metrics']
 assert data['metrics']['fallback_status']=='not-needed'

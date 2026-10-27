@@ -461,7 +461,7 @@ pub const Shell = struct {
         canvas.rectangle(@floatFromInt(box.x + 1), @floatFromInt(box.y + 1), @floatFromInt(box.width - 2), @floatFromInt(box.height - 2), palette.panel);
         try label(canvas, if(self.modal==.about) "About Markdown FAST" else "Third-party licenses",
             @floatFromInt(box.x + 20), @floatFromInt(box.y + 34), 20, true, palette.fg);
-        const lines: []const []const u8 = if (self.modal == .about) &.{ "Markdown FAST 0.2.0", "Zig, Wayland and z2d", "github.com/mariobaldini/mdf" }
+        const lines: []const []const u8 = if (self.modal == .about) &.{ "Markdown FAST " ++ @import("app_version").value, "Zig, Wayland and z2d", "github.com/mariobaldini/mdf" }
             else &.{ "License notices are included in the executable.", "Run mdf --licenses to read the full notices." };
         for (lines, 0..) |line, row| try label(canvas, line, @floatFromInt(box.x + 20), @floatFromInt(box.y + 70 + @as(i32, @intCast(row)) * 26), 14, false, palette.fg);
         canvas.rectangle(@floatFromInt(box.x + box.width - 106), @floatFromInt(box.y + box.height - 48), 86, 30, 0x3276b0);

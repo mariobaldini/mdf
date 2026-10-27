@@ -10,6 +10,8 @@ The GUI suite also checks word-metric reuse against real FLTK fonts, bounded cac
 font invalidation, and retained painting metrics in `text-layout.hpp`.
 It covers styled words, decomposed accents, selection byte positions, color changes, TOC cache reuse, and details scroll anchors.
 The Latin cases use 480- and 1040-pixel widths and several font sizes.
+GUI checks cover scrollbar visibility for fitting and overflowing documents, including resizing from a scrolled position.
+Settings-store and native-window checks verify that each launch restores wrapping while retaining other saved preferences.
 `make test-cairo OPTIMIZE=ReleaseFast` checks the minimal Cairo backend contract and image compositing.
 
 Every `make build` first runs the unit tests in the selected build mode.
@@ -31,6 +33,7 @@ viewport lookup, wrapping, cancellation, filesystem limits, JSON ownership and c
 Workflow tests also inject a unit failure and verify that the build stops.
 They check setup's dependency-cache selection, pinned checksums, and offline behavior.
 They also cover HTTP archive prefixes, repair of older wrapped caches, and preservation after a failed repair.
+`version.py` checks integer version increases, manifest consistency, and the Make guard before the compiler runs.
 `ci-workflow.py` checks branch gates and release publication with a local GitHub CLI stub.
 It covers checkout ownership, the two-build publication gate, package-only release assets, checksums, draft retries, and Latest selection.
 These tests require PyYAML (`python3-pyyaml` on Fedora or `python3-yaml` on Ubuntu), which `make setup` installs.

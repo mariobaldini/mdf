@@ -16,6 +16,7 @@ extern fn mdf_profile_event(u8, [*]const u8, usize, [*]const u8, usize, u32, u64
 extern fn mdf_profile_signal(u8, [*]const u8, usize, [*]const u8, usize, u32, u64) void;
 
 const source = "frontend/launcher.zig";
+const version = @import("app_version").value;
 const max_ui = 256 * 1024 * 1024;
 var wake_fd: c_int = -1;
 
@@ -263,11 +264,11 @@ fn launch(argc: c_int, argv: [*][*:0]u8, origin: u64) !c_int {
     while (index < @as(usize, @intCast(argc))) : (index += 1) {
         const arg = std.mem.span(argv[index]);
         if (std.mem.eql(u8, arg, "--version")) {
-            write(1, "mdf 0.2.0\n");
+            write(1, "mdf " ++ version ++ "\n");
             return 0;
         }
         if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
-            write(1, "Markdown FAST 0.2.0\nUsage: mdf [FILE.md]\n  --version    Show version\n  --licenses   Print third-party notices\n  --profile    Report startup metrics and exit\n  --profile-scroll Report startup and scrolling metrics\n  --capture PNG Save the ready frame with --profile\n  --capture-anchor ID Select a heading for --capture\n  --capture-reader Capture the reader with navigation hidden\nRequires a Linux Wayland session.\n");
+            write(1, "Markdown FAST " ++ version ++ "\nUsage: mdf [FILE.md]\n  --version    Show version\n  --licenses   Print third-party notices\n  --profile    Report startup metrics and exit\n  --profile-scroll Report startup and scrolling metrics\n  --capture PNG Save the ready frame with --profile\n  --capture-anchor ID Select a heading for --capture\n  --capture-reader Capture the reader with navigation hidden\nRequires a Linux Wayland session.\n");
             return 0;
         }
         if (std.mem.eql(u8, arg, "--licenses")) {

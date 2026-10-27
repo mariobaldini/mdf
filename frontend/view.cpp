@@ -914,6 +914,7 @@ void DocumentView::resize(int X, int Y, int W, int H) {
   Fl_Widget::resize(X, Y, W, H);
   if (reflow)
     invalidate();
+  scroll = std::clamp(scroll, 0.f, max_scroll());
   redraw();
 }
 void DocumentView::move_scroll(float value) {

@@ -87,7 +87,7 @@ def main():
             assert not any(name in closure for name in ('libthai.so.', 'libdatrie.so.')),closure
             assert not any(name.startswith('th_') for name in imports),imports
             print('PASS: private minimal Cairo; no external Cairo or X11/XCB dependency')
-        for flag,expected in [('--version','mdf 0.2.0'),('--help','Usage: mdf'),('--licenses','Pozeiden')]:
+        for flag,expected in [('--version','mdf '+(ROOT/'VERSION').read_text().strip()+'.0'),('--help','Usage: mdf'),('--licenses','Pozeiden')]:
             run=subprocess.run([str(app),flag],cwd=temp,capture_output=True,text=True,timeout=10)
             assert run.returncode==0 and expected in run.stdout,(flag,run.stderr)
         env={**os.environ,'WAYLAND_DISPLAY':'mdf-bootstrap-unavailable'}

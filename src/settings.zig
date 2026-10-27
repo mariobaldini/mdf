@@ -66,7 +66,12 @@ pub const Store = struct {
             const n = c.read(fd, buffer[length..].ptr, buffer.len - length);
             if (n < 0 and c.__errno_location().* == c.EINTR) continue;
             if (n < 0) return error.CannotReadSettings;
-            if (n == 0) return decode(self.allocator, buffer[0..length]);
+            if (n == 0) {
+                var values = try decode(self.allocator, buffer[0..length]);
+                // No-wrap is a session choice; every launch starts with readable wrapped text.
+                values.line_wrap = true;
+                return values;
+            }
             length += @intCast(n);
         }
         return error.SettingsFileTooLarge;
@@ -148,7 +153,7 @@ test "settings decode defaults, partial files, invalid data, and bounds" {
     }
 }
 
-test "settings store round trips, replaces complete JSON, and clears opt-in" {
+test "settings store restores preferences with wrapping, replaces complete JSON, and clears opt-in" {
     var template = "/tmp/mdf-settings-XXXXXX".*;
     const home = c.mkdtemp(&template) orelse return error.TestDirectoryFailed;
     defer std.Io.Dir.cwd().deleteTree(std.testing.io, std.mem.span(home)) catch {};
@@ -169,7 +174,9 @@ test "settings store round trips, replaces complete JSON, and clears opt-in" {
         .window = .{ .width = 900, .height = 640, .maximized = true },
     };
     try store.save(values);
-    try std.testing.expectEqualDeep(values, try store.load());
+    var expected = values;
+    expected.line_wrap = true;
+    try std.testing.expectEqualDeep(expected, try store.load());
     var stat: c.struct_stat = undefined;
     try std.testing.expectEqual(@as(c_int, 0), c.stat(store.path.ptr, &stat));
     try std.testing.expectEqual(@as(c.mode_t, 0o600), stat.st_mode & 0o777);

@@ -1,5 +1,10 @@
 cmake_minimum_required(VERSION 3.22)
-project(mdf_fltk VERSION 0.2.0 LANGUAGES C CXX)
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/../VERSION" MDF_VERSION LIMIT_COUNT 1)
+if(NOT MDF_VERSION MATCHES "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$")
+  message(FATAL_ERROR "VERSION must contain MAJOR.MINOR, such as 0.3")
+endif()
+project(mdf_fltk VERSION "${MDF_VERSION}.0" LANGUAGES C CXX)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/../VERSION")
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 option(MDF_ASYNC_INPUT "Prepare keyboard resources asynchronously and defer startup cursors" ON)
@@ -106,6 +111,7 @@ function(mdf_embed_diagram target)
 endfunction()
 add_library(mdf-ui SHARED main.cpp view.cpp profile.cpp startup.cpp images.cpp diagrams.cpp bundled-fonts.cpp monospace.cpp compat.c)
 add_dependencies(mdf-ui mdf-mermaid-payload mdf-svg-payload mdf-image-payload)
+set_property(SOURCE main.cpp APPEND PROPERTY COMPILE_DEFINITIONS MDF_APP_VERSION="${PROJECT_VERSION}")
 target_compile_definitions(mdf-ui PRIVATE MDF_ASYNC_INPUT=$<BOOL:${MDF_ASYNC_INPUT}>
   MDF_PREPARE_FRAME=$<BOOL:${MDF_PREPARE_FRAME}> MDF_SHARED_DRAWING=$<BOOL:${MDF_SHARED_DRAWING}>
   MDF_BUNDLED_PANGO=$<BOOL:${MDF_BUNDLED_PANGO}>

@@ -42,5 +42,7 @@ for backend in x11 dummy offscreen;do
     if env -u WAYLAND_DISPLAY -u WAYLAND_SOCKET DISPLAY=:12345 FLTK_BACKEND="$backend" "$mdf_app/mdf" --benchmark SAMPLE.md >"$mdf_test/no-wayland.log" 2>&1;then printf '%s\n' 'Unexpected non-Wayland fallback.' >&2;exit 1;fi
     grep -q 'requires a Wayland session' "$mdf_test/no-wayland.log"
 done
-"$mdf_app/mdf" --version | grep '^mdf 0.2.0$'
+mdf_version=$("$mdf_app/mdf" --version)
+test "$mdf_version" = "mdf $(cat "$root/VERSION").0"
+printf '%s\n' "$mdf_version"
 printf '%s\n' 'PASS: standalone executable, native GUI, private Open Sans styles, and Wayland-only checks'
