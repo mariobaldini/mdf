@@ -55,6 +55,7 @@ Requires: pixman >= 0.40
 $mdf_cairo_rpm_requires
 Requires: fontconfig >= 2.17
 Requires: harfbuzz >= 8.4
+Recommends: xdg-desktop-portal
 
 %description
 Markdown FAST is a native Markdown viewer with a table of contents and minimap.
@@ -90,6 +91,7 @@ Version: $mdf_deb_version
 Architecture: amd64
 Maintainer: Markdown FAST maintainers <mariobaldini@users.noreply.github.com>
 Depends: desktop-file-utils, shared-mime-info, libc6 (>= 2.38), libwayland-client0, libwayland-cursor0, libxkbcommon0, libglib2.0-0 (>= 2.82), libfribidi0, libharfbuzz0b (>= 8.4), libfreetype6, libpixman-1-0 (>= 0.40), libfontconfig1 (>= 2.17)$mdf_cairo_deb_depends
+Recommends: xdg-desktop-portal
 Section: text
 Priority: optional
 Homepage: https://github.com/mariobaldini/mdf

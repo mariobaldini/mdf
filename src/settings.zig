@@ -4,6 +4,7 @@ const layout = @import("layout.zig");
 const Allocator = std.mem.Allocator;
 
 pub const Preset = @import("themes.zig").Preset;
+pub const theme_menu_order = @import("themes.zig").menu_order;
 
 // Dimensions use logical window units, independent of framebuffer pixels.
 // Keep the normal rectangle when the window is maximized or minimized.
@@ -15,9 +16,9 @@ pub const Window = struct {
 
 pub const Values = struct {
     save_settings_across_sessions: bool = true,
-    theme: Preset = .classic,
+    theme: Preset = @import("themes.zig").default_preset,
     dark_mode: bool = false,
-    font_size: u16 = layout.default_font_size,
+    font_size: u16 = @import("themes.zig").default_preset.fontSize(),
     max_width: layout.MaxWidth = .percent_80,
     line_wrap: bool = true,
     show_toc: bool = true,
@@ -116,10 +117,11 @@ pub const Store = struct {
 test "settings decode defaults, partial files, invalid data, and bounds" {
     const allocator = std.testing.allocator;
     try std.testing.expectEqualDeep(Values{}, try decode(allocator, "{}"));
+    try std.testing.expectEqual(Preset.ink, (try decode(allocator, "{}")).theme);
     try std.testing.expectEqualDeep(Values{ .dark_mode = true }, try decode(allocator, "{\"dark_mode\":true}"));
     const partial = try decode(allocator, "{\"save_settings_across_sessions\":true,\"font_family\":\"ubuntu_mono\",\"future_option\":1}");
     try std.testing.expect(partial.save_settings_across_sessions and partial.auto_reload);
-    try std.testing.expectEqual(@as(u16, 12), partial.font_size);
+    try std.testing.expectEqual(Preset.ink.fontSize(), partial.font_size);
     try std.testing.expectEqual(layout.MaxWidth.percent_80, partial.max_width);
     try std.testing.expect(partial.show_toc);
     try std.testing.expect(partial.show_preview);

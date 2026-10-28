@@ -3,6 +3,7 @@
 #include "../tests/source-view.hpp"
 #include "bundled-fonts.hpp"
 #include "startup.hpp"
+#include "file-chooser.hpp"
 #include "diagrams.hpp"
 #include "../tests/text-layout.hpp"
 #include <FL/Fl.H>
@@ -11,7 +12,6 @@
 #include <FL/Fl_Double_Window.H>
 #include <FL/Fl_Hold_Browser.H>
 #include <FL/Fl_Menu_Bar.H>
-#include <FL/Fl_Native_File_Chooser.H>
 #include <FL/Fl_RGB_Image.H>
 #include <FL/Fl_Scrollbar.H>
 #include <FL/filename.H>
@@ -70,7 +70,7 @@ protected:
 };
 class IconButton : public Fl_Button {
 public:
-  enum Icon { contents, moon, sun, reset, wrap } icon;
+  enum Icon { contents, folder, moon, sun, reset, wrap } icon;
   IconButton(int x, int y, int w, int h, Icon icon)
       : Fl_Button(x, y, w, h), icon(icon) {}
   void draw() override {
@@ -85,6 +85,17 @@ public:
         fl_line(cx - 9, cy + yy, cx - 7, cy + yy);
         fl_line(cx - 3, cy + yy, cx + 9, cy + yy);
       }
+    } else if (icon == folder) {
+      fl_begin_line();
+      fl_vertex(cx - 10, cy + 7);
+      fl_vertex(cx - 10, cy - 7);
+      fl_vertex(cx - 3, cy - 7);
+      fl_vertex(cx, cy - 4);
+      fl_vertex(cx + 9, cy - 4);
+      fl_vertex(cx + 9, cy - 1);
+      fl_end_line();
+      fl_loop(cx - 10, cy + 7, cx - 7, cy - 1,
+              cx + 11, cy - 1, cx + 8, cy + 7);
     } else if (icon == sun) {
       fl_arc(cx - 5, cy - 5, 10, 10, 0, 360);
       for (int i = 0; i < 8; ++i) {
@@ -126,6 +137,8 @@ public:
 static const MdfStartup *launch_context = nullptr;
 struct App {
   static constexpr int scrollbar_width = 20;
+  static constexpr int compact_toolbar_width = 590;
+  static constexpr int toolbar_right_margin = 10;
   Core &core;
   MdfDiagramStats startup_image_module{};
   FontStore &fonts;
@@ -133,10 +146,12 @@ struct App {
   std::unique_ptr<MainWindow> window;
   Fl_Menu_Bar *menu;
   Fl_Group *toolbar;
-  IconButton *toc_button, *theme_button, *wrap_button;
+  IconButton *toc_button, *open_button, *theme_button, *wrap_button;
   Fl_Button *width_button, *preview_button, *source_button;
   SourceView *source_view = nullptr;
   bool source_mode = false;
+  float formatted_scroll = 0, formatted_horizontal_scroll = 0;
+  uint64_t formatted_revision = 0;
   uint64_t source_revision = 0;
   std::string pending_anchor;
   Fl_Button *font_decrease_button, *font_reset_button, *font_increase_button;
@@ -168,7 +183,9 @@ struct App {
   double measured_window_scale = 0;
   bool painted_monospace = false, painted_mono_finished = false, first_viewport_monospace = false;
   MonospaceWorker monospace_worker;
+  CodeFont source_monospace;
   bool mono_requested = false, mono_finished = false;
+  bool mono_for_source_only = false;
   uint64_t mono_request_ns = 0, mono_adopted_ns = 0, mono_frame_ns = 0;
   std::string mono_error;
   FallbackWorker fallback_worker;
@@ -190,6 +207,7 @@ struct App {
   Json startup_usage;
   uint64_t startup_frames = 0, scroll_frames = 0;
   bool drop_pending = false;
+  bool file_chooser_open = false;
   App(Core &c, FontStore &f, Settings prefs, uint64_t started, bool prof,
       bool bench, bool test, bool scroll, const std::string &path,
       const std::string &capture)
@@ -206,22 +224,25 @@ struct App {
     toolbar->begin();
     toc_button = new IconButton(10, 35, 36, 32, IconButton::contents);
     toc_button->tooltip("Show or hide table of contents");
-    theme_button = new IconButton(53, 35, 36, 32, IconButton::moon);
-    width_button = new Fl_Button(96, 35, 64, 32, "80%");
+    open_button = new IconButton(53, 35, 36, 32, IconButton::folder);
+    open_button->tooltip("Open file (Ctrl+O)");
+    theme_button = new IconButton(96, 35, 36, 32, IconButton::moon);
+    width_button = new Fl_Button(139, 35, 64, 32, "80%");
     width_button->tooltip("Switch between 80% and 100% text width");
-    font_group_start = new Fl_Box(167, 40, 1, 22);
-    font_decrease_button = new Fl_Button(174, 35, 32, 32, "−");
-    font_reset_button = new IconButton(213, 35, 32, 32, IconButton::reset);
-    font_increase_button = new Fl_Button(252, 35, 32, 32, "+");
+    font_group_start = new Fl_Box(210, 40, 1, 22);
+    font_decrease_button = new Fl_Button(217, 35, 32, 32, "−");
+    font_reset_button = new IconButton(256, 35, 32, 32, IconButton::reset);
+    font_increase_button = new Fl_Button(295, 35, 32, 32, "+");
     font_decrease_button->tooltip("Decrease font size");
     font_reset_button->tooltip("Reset font size to theme default");
     font_increase_button->tooltip("Increase font size");
-    font_group_end = new Fl_Box(291, 40, 1, 22);
-    wrap_button = new IconButton(298, 35, 28, 32, IconButton::wrap);
+    font_group_end = new Fl_Box(334, 40, 1, 22);
+    wrap_button = new IconButton(341, 35, 28, 32, IconButton::wrap);
     for (auto *divider : {font_group_start, font_group_end})
       divider->box(FL_FLAT_BOX);
     preview_button = new Fl_Button(window->w() - 90, 35, 80, 32, "Preview");
     source_button = new Fl_Button(window->w() - 230, 35, 128, 32, "View Source");
+    source_button->deactivate();
     toolbar->resizable(nullptr);
     toolbar->end();
     toc_title = new Fl_Box(14, 82, 200, 24, "Contents");
@@ -271,7 +292,7 @@ struct App {
     status->labelsize(11);
     window->end();
     for (auto *w :
-         {(Fl_Widget *)menu, (Fl_Widget *)toc_button, (Fl_Widget *)theme_button,
+         {(Fl_Widget *)menu, (Fl_Widget *)toc_button, (Fl_Widget *)open_button, (Fl_Widget *)theme_button,
           (Fl_Widget *)width_button, (Fl_Widget *)preview_button, (Fl_Widget *)source_button,
           (Fl_Widget *)font_decrease_button, (Fl_Widget *)font_reset_button,
           (Fl_Widget *)font_increase_button, (Fl_Widget *)status,
@@ -281,6 +302,7 @@ struct App {
     menu->textfont(FL_FREE_FONT);
     menu->textsize(16);
     bind(toc_button, "toc");
+    bind(open_button, "open");
     bind(theme_button, "dark");
     bind(width_button, "width-cycle");
     bind(font_decrease_button, "smaller");
@@ -309,7 +331,7 @@ struct App {
     add_menu("Font/Smaller", FL_CTRL + '-', "smaller");
     add_menu("Font/Default size", FL_CTRL + '0', "font-reset");
     for (size_t i = 0; i < mdf_theme_count(); ++i) {
-      const auto theme = mdf_theme_info(i);
+      const auto theme = mdf_theme_menu_info(i);
       add_menu(("Theme/" + view_text(theme.name)).c_str(), 0,
                ("theme:" + view_text(theme.id)).c_str(), FL_MENU_RADIO);
     }
@@ -341,6 +363,11 @@ struct App {
     layout();
     reader->invalidate();
     initialized = true;
+    if (self_test) {
+      action("source");
+      ensure(!source_mode && !mono_requested && !source_button->active(),
+             "Source view waits for the first document frame");
+    }
   }
   ~App() {
     if (socket_write_pending) Fl::remove_fd(wl_display_get_fd(fl_wl_display()), FL_WRITE);
@@ -385,23 +412,25 @@ struct App {
     int W = window->w(), H = window->h(),
         preview_width = std::clamp(int(W * .12), 64, 130),
         left = settings.toc && !source_mode ? std::min(220, int(W * .22)) : 0,
-        right = settings.preview && !source_mode ? preview_width : 0,
-        Y = W < 530 ? 112 : 74,
+        right = settings.preview ? preview_width : 0,
+        Y = W < compact_toolbar_width ? 112 : 74,
         view_h = std::max(1, H - Y - 24);
     menu->resize(0, 0, W, 28);
     toolbar->resize(0, 28, W, Y - 28);
     toc_button->resize(10, 35, 36, 32);
-    theme_button->resize(53, 35, 36, 32);
-    width_button->resize(96, 35, 64, 32);
-    font_group_start->resize(167, 40, 1, 22);
-    font_decrease_button->resize(174, 35, 32, 32);
-    font_reset_button->resize(213, 35, 32, 32);
-    font_increase_button->resize(252, 35, 32, 32);
-    font_group_end->resize(291, 40, 1, 22);
-    wrap_button->resize(298, 35, 28, 32);
-    const int button_y = W < 530 ? 73 : 35;
-    preview_button->resize(W - preview_width, button_y, preview_width, 32);
-    source_button->resize(W - preview_width - 134, button_y, 128, 32);
+    open_button->resize(53, 35, 36, 32);
+    theme_button->resize(96, 35, 36, 32);
+    width_button->resize(139, 35, 64, 32);
+    font_group_start->resize(210, 40, 1, 22);
+    font_decrease_button->resize(217, 35, 32, 32);
+    font_reset_button->resize(256, 35, 32, 32);
+    font_increase_button->resize(295, 35, 32, 32);
+    font_group_end->resize(334, 40, 1, 22);
+    wrap_button->resize(341, 35, 28, 32);
+    const int button_y = W < compact_toolbar_width ? 73 : 35;
+    const int preview_x = W - preview_width - toolbar_right_margin;
+    preview_button->resize(preview_x, button_y, preview_width, 32);
+    source_button->resize(preview_x - 134, button_y, 128, 32);
     toc_title->resize(14, Y + 8, std::max(1, left - 20), 24);
     toc->resize(0, Y + 36, left, std::max(1, view_h - 36));
     if (settings.toc && !source_mode) {
@@ -412,8 +441,9 @@ struct App {
       toc_title->hide();
     }
     const bool horizontal = !settings.line_wrap || reader->max_horizontal_scroll() > 0;
-    reader->resize(left, Y, std::max(1, W - left - right - scrollbar_width),
-                   std::max(1, view_h - (horizontal ? scrollbar_width : 0)));
+    if (!source_mode)
+      reader->resize(left, Y, std::max(1, W - left - right - scrollbar_width),
+                     std::max(1, view_h - (horizontal ? scrollbar_width : 0)));
     horizontal_scrollbar->resize(reader->x(), reader->y() + reader->h(), reader->w(), scrollbar_width);
     if (!horizontal || source_mode) horizontal_scrollbar->hide();
     else horizontal_scrollbar->show();
@@ -422,16 +452,17 @@ struct App {
     const int inset = view_h >= 3 * scrollbar_width ? scrollbar_width : 0;
     minimap->resize(W - right, Y + inset, std::max(1, right),
                     std::max(1, view_h - 2 * inset));
-    if (settings.preview && !source_mode)
+    minimap->use_source_view(source_mode ? source_view : nullptr);
+    if (settings.preview)
       minimap->show();
     else
       minimap->hide();
     if (source_mode && source_view) {
       reader->hide();
       scrollbar->hide();
-      source_view->resize(0, Y, W, view_h);
+      source_view->resize(0, Y, W - right, view_h);
       source_view->show();
-      toc_button->deactivate(); preview_button->deactivate(); width_button->deactivate();
+      toc_button->deactivate(); preview_button->activate(); width_button->deactivate();
     } else {
       if (source_view) source_view->hide();
       reader->show();
@@ -469,6 +500,7 @@ struct App {
     horizontal_scrollbar->color(p.panel);
     for (auto *w :
          {static_cast<Fl_Button *>(toc_button),
+          static_cast<Fl_Button *>(open_button),
           static_cast<Fl_Button *>(theme_button), width_button, preview_button, source_button,
           font_decrease_button, font_reset_button, font_increase_button,
           static_cast<Fl_Button *>(wrap_button)}) {
@@ -545,6 +577,20 @@ struct App {
     }
     window->redraw();
   }
+  void request_monospace(bool source_only = false) {
+    if (mono_requested) return;
+    mono_requested = true;
+    mono_for_source_only = source_only;
+    mono_request_ns = mdf_now_ns();
+    try {
+      monospace_worker.start(wake);
+    } catch (const std::exception &failure) {
+      mono_finished = true;
+      mono_error = failure.what();
+      PROFILE_MARK("System monospace unavailable");
+      window->redraw();
+    }
+  }
   void scroll_changed() {
     if (source_mode) return;
     const bool horizontal = !settings.line_wrap || reader->max_horizontal_scroll() > 0;
@@ -588,7 +634,7 @@ struct App {
     }
     apply_chrome();
     layout();
-    if (first_document && navigation && (!navigation_started ||
+    if (first_document && navigation && !source_mode && (!navigation_started ||
         std::abs(navigation_width - reader->content_width) >= 1 || navigation_zoom != reader->zoom()))
       start_navigation();
   }
@@ -634,14 +680,24 @@ struct App {
         mono_finished = true;
         if (prepared && prepared->available()) {
           try {
-            reader->adopt_code_font(std::move(prepared));
+            if (mono_for_source_only && !reader->has_code)
+              source_monospace.adopt(std::move(prepared));
+            else {
+              reader->adopt_code_font(std::move(prepared));
+              mono_for_source_only = false;
+            }
+            if (source_view) source_view->set_monospace(fonts, reader->code_font.ready() ? reader->code_font : source_monospace);
             mono_adopted_ns = mdf_now_ns();
             PROFILE_MARK("System monospace adopted");
           } catch (const std::exception &failure) {
             mono_error = failure.what();
+            if (source_mode) message("Monospaced font unavailable; using the default font");
           }
         } else mono_error = prepared ? prepared->error : "System monospace unavailable";
-        if (!reader->code_font.ready()) PROFILE_MARK("System monospace unavailable");
+        if (!reader->code_font.ready() && !source_monospace.ready()) {
+          PROFILE_MARK("System monospace unavailable");
+          if (source_mode) message("Monospaced font unavailable; using the default font");
+        }
         minimap->redraw();
         window->redraw();
       }
@@ -688,6 +744,7 @@ struct App {
           if (source_view) {
             if (source_mode) { source_view->set_source(view_text(core.source())); source_revision = reader->revision; }
             else { source_view->set_source({}); source_revision = 0; }
+            minimap->invalidate_source_preview();
           }
           if (!pending_anchor.empty()) {
             if (auto index = core.anchor_index(pending_anchor)) reader->jump(int(*index));
@@ -914,6 +971,7 @@ struct App {
       ++document_frames;
       if (!first_document) {
         first_document = submitted_at;
+        source_button->activate();
         first_viewport_monospace = submitted.monospace;
         first_viewport_fallback = submitted.fallback != 0;
         if (self_test || profiling) prctl(PR_SET_NAME, "mdf-viewport");
@@ -924,15 +982,17 @@ struct App {
     if (submitted.revision && submitted.revision == reader->revision && reader->has_code && !mono_requested) {
       // No system configuration, font lookup, file read or thread creation
       // is permitted until this document has actually had a Markdown frame.
-      mono_requested = true;
-      mono_request_ns = mdf_now_ns();
+      request_monospace();
+    }
+    if (submitted.revision && submitted.revision == reader->revision && reader->has_code &&
+        mono_for_source_only && source_monospace.ready() && !reader->code_font.ready()) {
+      mono_for_source_only = false;
       try {
-        monospace_worker.start(wake);
+        reader->adopt_code_font(source_monospace.resources());
+        mono_adopted_ns = mdf_now_ns();
+        PROFILE_MARK("System monospace adopted");
       } catch (const std::exception &failure) {
-        mono_finished = true;
         mono_error = failure.what();
-        PROFILE_MARK("System monospace unavailable");
-        window->redraw();
       }
     }
     if (submitted.monospace && submitted.revision == reader->revision && !mono_frame_ns)
@@ -1068,12 +1128,20 @@ struct App {
       return;
     }
     if (name == "open") {
-      Fl_Native_File_Chooser chooser;
-      chooser.title("Open Markdown");
-      chooser.type(Fl_Native_File_Chooser::BROWSE_FILE);
-      chooser.filter("Markdown\t*.{md,markdown,txt}\nAll files\t*");
-      if (chooser.show() == 0)
-        open(chooser.filename());
+      if (file_chooser_open) return;
+      file_chooser_open = true;
+      const auto slash = reader->path.find_last_of('/');
+      const auto folder = slash == std::string::npos ? std::string() : reader->path.substr(0, slash ? slash : 1);
+      const auto choice = choose_desktop_file(folder, [this]() {
+        Fl::wait(.01);
+        return !done;
+      });
+      if (!done && choice.status == FileChoice::selected) open(choice.path);
+      else if (!done && choice.status == FileChoice::failed) message(choice.error);
+      else if (!done && choice.status == FileChoice::unavailable)
+        fl_alert("Cannot open the system file picker.\nInstall xdg-desktop-portal and a backend for your desktop.\n\n%s",
+                 choice.error.c_str());
+      file_chooser_open = false;
       return;
     }
     if (name == "reload") {
@@ -1082,21 +1150,49 @@ struct App {
       return;
     }
     if (name == "source") {
+      if (!first_document) return;
+      if (!source_mode) {
+        formatted_scroll = reader->scroll;
+        formatted_horizontal_scroll = reader->horizontal_scroll;
+        formatted_revision = reader->revision;
+      }
       source_mode = !source_mode;
       if (source_mode) {
         if (!source_view) {
           window->begin();
           source_view = new SourceView(reader->x(), reader->y(), reader->w(), reader->h(), settings, reader->palette);
           window->end();
+          // Paint the source first so its updated scrollbar state is visible
+          // when the minimap paints in the same frame.
+          window->remove(minimap);
+          window->add(minimap);
+          source_view->viewport_changed = [this]() { if (source_mode && settings.preview) minimap->redraw(); };
         }
         if (source_revision != reader->revision) {
           source_view->set_source(view_text(core.source()));
           source_revision = reader->revision;
         }
+        if (reader->code_font.ready() || source_monospace.ready()) {
+          try { source_view->set_monospace(fonts, reader->code_font.ready() ? reader->code_font : source_monospace); }
+          catch (const std::exception &failure) {
+            mono_error = failure.what();
+            message("Monospaced font unavailable; using the default font");
+          }
+        } else {
+          request_monospace(!reader->has_code);
+          if (mono_finished) message("Monospaced font unavailable; using the default font");
+        }
       }
       apply_chrome(); layout();
       if (source_mode) source_view->take_focus();
-      else { reader->take_focus(); scroll_changed(); }
+      else {
+        if (formatted_revision == reader->revision) {
+          reader->move_scroll(formatted_scroll);
+          reader->move_horizontal(formatted_horizontal_scroll);
+        }
+        reader->take_focus();
+        scroll_changed();
+      }
       return;
     }
     if (name == "copy") {
@@ -1616,16 +1712,79 @@ struct App {
     check_latin_boundaries(*reader, [this](bool condition, const char *message) { ensure(condition, message); });
     check_reflow_caches(*reader, [this](bool condition, const char *message) { ensure(condition, message); });
     check_source_view(settings, reader->palette, [this](bool condition, const char *message) { ensure(condition, message); });
+    check_source_monospace(settings, reader->palette, fonts, reader->code_font,
+                           [this](bool condition, const char *message) { ensure(condition, message); });
     const auto previous_scroll = reader->scroll;
     const auto previous_revision = reader->revision;
+    const bool previous_preview = settings.preview;
+    if (!settings.preview) action("preview");
+    Fl::check();
+    Fl::flush();
+    const auto formatted_atlas_builds = minimap->atlas_builds;
+    const auto formatted_layout_builds = minimap->layout_builds;
+    ensure(!source_view || source_view->source_preview_builds() == 0,
+           "Source minimap is not generated before source view is opened");
     action("source");
     ensure(source_mode && source_view && source_view->visible() && !reader->Fl_Widget::visible() &&
            std::string(source_button->label()) == "View Formatted", "Source button opens the raw source");
+    Fl::check();
+    Fl::flush();
+    ensure(source_view->source_preview_builds() == 1 && minimap->source_builds == 1,
+           "Opening source with preview generates one source minimap on demand");
+    const auto &source_preview = source_view->source_preview(size_t(std::max(256, minimap->h() * 2)));
+    ensure(!source_preview.lines.empty() && source_preview.lines.front().text.find('#') != std::string::npos,
+           "Source minimap shows raw Markdown syntax");
+    ensure(settings.preview && preview_button->active() && minimap->visible() &&
+               source_view->x() + source_view->w() == minimap->x() && preview_button->w() == minimap->w(),
+           "Source view retains the enabled preview beside the document");
+    ensure(window->find(source_view) < window->find(minimap), "Source scrollbar updates before preview painting");
+    auto *source_scroll = source_view->vertical_scrollbar();
+    ensure(source_scroll->maximum() > source_scroll->minimum(), "Long source has a scrollable viewport");
+    minimap->navigate(0, float(minimap->h() - 1));
+    minimap->navigate(2, float(minimap->h() - 1));
+    Fl::check();
+    Fl::flush();
+    ensure(source_scroll->value() > source_scroll->minimum() && minimap->thumb_top() > 0,
+           "Preview navigation moves the source and its viewport marker");
+    source_scroll->value(source_scroll->minimum());
+    source_scroll->do_callback();
+    Fl::check();
+    Fl::flush();
+    ensure(minimap->thumb_top() == 0, "Source scrolling updates the preview marker");
+    if (!capture.empty()) capture_frame(capture + ".source.png");
+    window->make_current();
+    unsigned char marker_pixel[3]{};
+    ensure(fl_read_image(marker_pixel, minimap->x(), minimap->y(), 1, 1, 0), "Preview marker is readable");
+    unsigned char marker_r, marker_g, marker_b;
+    Fl::get_color(fl_color_average(reader->palette.link, reader->palette.panel, .5f), marker_r, marker_g, marker_b);
+    ensure(marker_pixel[0] == marker_r && marker_pixel[1] == marker_g && marker_pixel[2] == marker_b,
+           "Source preview paints its viewport marker at the current scroll position");
+    preview_button->do_callback();
+    ensure(!settings.preview && !minimap->visible() && source_view->w() == window->w(),
+           "Preview can be hidden while reading source");
+    preview_button->do_callback();
+    ensure(settings.preview && minimap->visible() && source_view->w() + minimap->w() == window->w(),
+           "Preview can be restored while reading source");
+    Fl::check();
+    Fl::flush();
+    ensure(minimap->source_builds == 1, "Reopening the source preview reuses its cached image");
     source_view->select_all();
     ensure(source_view->selected() == view_text(core.source()), "Source view displays the original Markdown bytes");
     action("source");
+    Fl::check();
+    Fl::flush();
     ensure(!source_mode && reader->Fl_Widget::visible() && !source_view->visible() && reader->revision == previous_revision &&
            std::string(source_button->label()) == "View Source", "Formatted view restores the existing document");
+    ensure(minimap->atlas_builds == formatted_atlas_builds && minimap->layout_builds == formatted_layout_builds,
+           "Switching back reuses the formatted minimap without regeneration");
+    ensure(std::abs(reader->scroll - previous_scroll) < 1, "Formatted scroll position returns after viewing source");
+    action("preview");
+    action("source");
+    ensure(!settings.preview && !minimap->visible() && source_view->w() == window->w(),
+           "A closed preview stays closed when source opens");
+    ensure(minimap->source_builds == 1, "Opening source with preview disabled does not regenerate the source minimap");
+    action("source");
+    if (previous_preview) action("preview");
     reader->move_scroll(previous_scroll);
     if (!reader->rasters.empty()) {
       const int index = reader->rasters.begin()->first;
@@ -1727,6 +1886,8 @@ struct App {
                !menu->find_item("Theme/Light or dark") &&
                !menu->find_item("Font/Open Sans"),
            "Theme and size menus have no family controls");
+    ensure(menu->find_item("Theme/Classic")->next() == menu->find_item("Theme/Ink"),
+           "Ink appears immediately after Classic in the theme menu");
     width_button->do_callback();
     ensure(settings.width == "percent_100" &&
                std::string(width_button->label()) == "100%",
@@ -1872,14 +2033,15 @@ struct App {
     capture_quotes("dark");
     action("dark");
     reader->jump(0);
+    const int theme_size = settings.default_font_size();
     font_increase_button->do_callback();
-    ensure(settings.size == 13, "Font step");
+    ensure(settings.size == theme_size + 1, "Font step");
     font_decrease_button->do_callback();
-    ensure(settings.size == 12, "Font decrease button");
+    ensure(settings.size == theme_size, "Font decrease button");
     action("size:18");
     ensure(settings.size == 18, "Font size preset");
     font_reset_button->do_callback();
-    ensure(settings.size == 12, "Font reset button uses Classic default");
+    ensure(settings.size == theme_size, "Font reset button uses the theme default");
     action("size:8");
     ensure(!font_decrease_button->active(),
            "Font decrease stops at minimum size");
@@ -1900,10 +2062,12 @@ struct App {
     ensure(details >= 0, "Nested details fixture");
     reader->jump(details);
     ensure(reader->visible(details), "TOC reveals collapsed ancestors");
-    for (int W : {1040, 1440, 420, 1040}) {
+    for (int W : {1040, 1440, 420, 589, 590, 1040}) {
       window->size(W, 700);
       layout();
-      ensure(width_button->x() == 96 && width_button->w() == 64 &&
+      ensure(toc_button->x() + toc_button->w() + 7 == open_button->x() &&
+                 open_button->x() + open_button->w() + 7 == theme_button->x() &&
+                 width_button->x() == 139 && width_button->w() == 64 &&
                  width_button->x() + width_button->w() + 12 <=
                      font_decrease_button->x() &&
                  font_decrease_button->x() + font_decrease_button->w() <
@@ -1912,9 +2076,9 @@ struct App {
                      font_increase_button->x() &&
                  font_increase_button->x() + font_increase_button->w() + 12 <=
                      wrap_button->x() &&
-                 (W < 530 || wrap_button->x() + wrap_button->w() + 4 <= source_button->x()) &&
+                 (W < compact_toolbar_width || wrap_button->x() + wrap_button->w() + 4 <= source_button->x()) &&
                  source_button->x() + source_button->w() + 4 <= preview_button->x() &&
-                 preview_button->x() + preview_button->w() == W &&
+                 preview_button->x() + preview_button->w() == W - toolbar_right_margin &&
                  preview_button->w() == minimap->w(),
              "Toolbar controls stay separated after resizing");
       ensure(scrollbar->w() == scrollbar_width &&
@@ -1993,9 +2157,9 @@ struct App {
       }
     }
     action("reset");
-    ensure(settings.size == 12 && settings.save &&
+    ensure(settings.theme == "ink" && settings.size == settings.default_font_size() && settings.save &&
                settings.width == "percent_80",
-           "Reset defaults");
+           "Reset restores Ink and its default text size");
     ensure(settings.line_wrap && !wrap_button->value() &&
                bool(horizontal_scrollbar->visible()) == (reader->max_horizontal_scroll() > 0),
            "Reset restores line wrapping and an unselected button");
@@ -2125,9 +2289,6 @@ static int frontend_main(MdfStartup *startup) {
     {
       PHASE("Initialize FLTK native scheme");
       Fl::scheme("gtk+");
-      Fl::option(Fl::OPTION_FNFC_USES_GTK, false);
-      Fl::option(Fl::OPTION_FNFC_USES_KDIALOG, false);
-      Fl::option(Fl::OPTION_FNFC_USES_ZENITY, false);
     }
     FontStore fonts;
     fonts.prepare();

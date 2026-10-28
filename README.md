@@ -57,14 +57,24 @@ Open a document:
 mdf document.md
 ```
 
-Use **Ctrl+O** to open a file.
+Use the folder button in the toolbar or **Ctrl+O** to open a file.
+The Open dialog uses your desktop's system file picker through XDG Desktop Portal.
+MDF connects to the portal only when you select Open.
+The desktop service loads the dialog's toolkit libraries outside MDF.
 Use **Ctrl+C** to copy selected text.
 Use **View Source** to read the original Markdown.
 Use **View Formatted** to return to the reader.
+Source view uses a system monospace font when one is available.
+The preview follows the current view and its scroll position.
 The viewer starts with wrapped text. **View > Line wrap** can disable wrapping for the current session.
 The vertical scrollbar appears only when the document is taller than the reading area.
 Settings are saved across sessions by default.
 To disable saving, clear **Settings > Save settings across sessions**.
+
+The **Theme** menu offers 10 reading themes, each with light and dark modes.
+Ink is the default for first use and Reset Settings. Saved theme choices remain in use.
+Options range from warm paper and cool blue tones to Ink's strong monochrome contrast.
+See the [theme guide](docs/architecture.md#themes) for the complete list.
 
 For unsupported Mermaid types, MDF shows the source text and an error message.
 Bidirectional layout for Arabic and Hebrew is incomplete.

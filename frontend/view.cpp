@@ -1,4 +1,5 @@
 #include "view.hpp"
+#include "source-view.hpp"
 #include "bundled-fonts.hpp"
 #include <FL/Fl.H>
 #include <FL/Fl_Image_Surface.H>
@@ -215,6 +216,12 @@ void DocumentView::adopt_code_font(std::unique_ptr<PreparedMonospace> font) {
   if (fallback_font.ready()) code_font.add_fallback(fallback_font);
   reflow_fonts(false);
 }
+void DocumentView::adopt_code_font(std::shared_ptr<PreparedFont> font) {
+  PHASE("Adopt system monospace and reflow code");
+  code_font.adopt(std::move(font));
+  if (fallback_font.ready()) code_font.add_fallback(fallback_font);
+  reflow_fonts(false);
+}
 void DocumentView::adopt_fallback_font(std::unique_ptr<PreparedFont> font) {
   PHASE("Adopt system Sans fallback and reflow missing glyphs");
   fallback_font.adopt(std::move(font));
@@ -231,6 +238,7 @@ void DocumentView::reflow_fonts(bool fallback) {
   auto inline_code = [](const std::vector<Span> &spans) {
     return std::any_of(spans.begin(), spans.end(), [](const Span &span) { return span.code; });
   };
+  bool reflowed = false;
   for (int i = 0; i < (int)blocks.size(); ++i) {
     const auto &block = blocks[i];
     bool affected = (block.kind == "code" && (!block.mermaid() || diagram_errors.count(i))) || inline_code(block.spans);
@@ -242,6 +250,7 @@ void DocumentView::reflow_fonts(bool fallback) {
         affected = affected || needs_fallback(span.text, bundled_coverage);
     }
     if (!affected) continue;
+    reflowed = true;
     int first = i, end = i + 1;
     if (block.kind == "table_row") {
       while (first > 0 && !blocks[first].table_header && blocks[first - 1].kind == "table_row") --first;
@@ -254,7 +263,7 @@ void DocumentView::reflow_fonts(bool fallback) {
     }
     i = end - 1;
   }
-  reindex();
+  if (reflowed) reindex();
   if (fallback) ++preview_revision;
   scroll = offsets.empty() ? 0 : offsets[std::min(anchor, (int)blocks.size())] + delta;
   scroll = std::clamp(scroll, 0.f, max_scroll());
@@ -1276,20 +1285,64 @@ int DocumentView::handle(int e) {
   }
   return Fl_Widget::handle(e);
 }
+void Minimap::use_source_view(SourceView *source) {
+  if (source_view != source) {
+    source_view = source;
+    source_scrollbar = source ? source->vertical_scrollbar() : nullptr;
+    dragging = false;
+    redraw();
+  }
+}
 int Minimap::thumb_height() const {
-  return std::min(h(), std::max(scrollbar.w() / 2 + 1,
-                                int(scrollbar.slider_size() * h() + .5)));
+  const auto &bar = source_scrollbar ? *source_scrollbar : scrollbar;
+  if (source_scrollbar && (!bar.visible() || bar.maximum() <= bar.minimum())) return h();
+  return std::min(h(), std::max(bar.w() / 2 + 1,
+                                int(bar.slider_size() * h() + .5)));
 }
 int Minimap::thumb_top() const {
-  double range = scrollbar.maximum() - scrollbar.minimum();
+  const auto &bar = source_scrollbar ? *source_scrollbar : scrollbar;
+  double range = bar.maximum() - bar.minimum();
   double value =
-      range > 0 ? (scrollbar.value() - scrollbar.minimum()) / range : 0;
+      range > 0 ? (bar.value() - bar.minimum()) / range : 0;
   return int(std::clamp(value, 0., 1.) * (h() - thumb_height()) + .5);
 }
 void Minimap::draw() {
   PHASE("Draw native FLTK minimap");
   auto p = doc.palette;
   fl_push_clip(x(), y(), w(), h());
+  if (source_view) {
+    const auto &preview = source_view->source_preview(size_t(std::max(256, h() * 2)));
+    const int fs = std::clamp(int(std::round(source_view->textsize() * w() / std::max(1, source_view->w()))), 2, 4);
+    const int face = source_view->textfont();
+    if (!source_cached || source_cached_revision != preview.revision || source_cached_w != w() ||
+        source_cached_h != h() || source_cached_font != face || source_cached_size != fs ||
+        source_cached_bg != p.panel || source_cached_fg != p.muted) {
+      PHASE("Build source minimap");
+      ++source_builds;
+      Fl_Image_Surface surface(w(), h());
+      Fl_Surface_Device::push_current(&surface);
+      fl_color(p.panel);
+      fl_rectf(0, 0, w(), h());
+      fl_color(p.muted);
+      fl_font(face, fs);
+      const int baseline = fl_height() - fl_descent();
+      for (const auto &line : preview.lines) {
+        const int y = preview.total_lines > 1 ? int(line.line * size_t(std::max(0, h() - 1)) / (preview.total_lines - 1)) : 0;
+        fl_push_clip(0, 0, w(), h());
+        fl_draw(line.text.c_str(), 3, y + baseline);
+        fl_pop_clip();
+      }
+      source_cached.reset(surface.image());
+      Fl_Surface_Device::pop_current();
+      source_cached_revision = preview.revision;
+      source_cached_w = w(); source_cached_h = h(); source_cached_font = face; source_cached_size = fs;
+      source_cached_bg = p.panel; source_cached_fg = p.muted;
+    }
+    if (source_cached) source_cached->draw(x(), y());
+    if (preview.total_lines) draw_marker(p);
+    fl_pop_clip();
+    return;
+  }
   if (doc.preview.empty()) {
     fl_color(p.panel);
     fl_rectf(x(), y(), w(), h());
@@ -1396,23 +1449,23 @@ void Minimap::draw() {
   }
   if (cached)
     cached->draw(x(), y());
-  if (!doc.blocks.empty()) {
-    int thumb = thumb_height(), top = thumb_top();
-    if (!overlay || overlay_h != thumb || overlay->w() != w() ||
-        overlay_color != p.link) {
-      unsigned char r, g, b;
-      Fl::get_color(p.link, r, g, b);
-      unsigned char rgba[] = {r, g, b, 35};
-      Fl_RGB_Image pixel(rgba, 1, 1, 4);
-      overlay.reset((Fl_RGB_Image *)pixel.copy(w(), thumb));
-      overlay_h = thumb;
-      overlay_color = p.link;
-    }
-    overlay->draw(x(), y() + top);
-    fl_color(fl_color_average(p.link, p.panel, .5f));
-    fl_rect(x(), y() + top, w(), thumb);
-  }
+  if (!doc.blocks.empty()) draw_marker(p);
   fl_pop_clip();
+}
+void Minimap::draw_marker(const Palette &p) {
+  int thumb = thumb_height(), top = thumb_top();
+  if (!overlay || overlay_h != thumb || overlay->w() != w() || overlay_color != p.link) {
+    unsigned char r, g, b;
+    Fl::get_color(p.link, r, g, b);
+    unsigned char rgba[] = {r, g, b, 35};
+    Fl_RGB_Image pixel(rgba, 1, 1, 4);
+    overlay.reset((Fl_RGB_Image *)pixel.copy(w(), thumb));
+    overlay_h = thumb;
+    overlay_color = p.link;
+  }
+  overlay->draw(x(), y() + top);
+  fl_color(fl_color_average(p.link, p.panel, .5f));
+  fl_rect(x(), y() + top, w(), thumb);
 }
 void Minimap::navigate(int kind, float yy) {
   float th = thumb_height(), top = thumb_top();
@@ -1421,10 +1474,12 @@ void Minimap::navigate(int kind, float yy) {
     grab = yy >= top && yy <= top + th ? yy - top : th / 2;
   }
   if (dragging) {
-    doc.move_scroll((h() - th) > 0
-                        ? std::clamp((yy - grab) / (h() - th), 0.f, 1.f) *
-                              doc.max_scroll()
-                        : 0);
+    const float fraction = (h() - th) > 0 ? std::clamp((yy - grab) / (h() - th), 0.f, 1.f) : 0;
+    if (source_scrollbar) {
+      source_scrollbar->value(source_scrollbar->minimum() + fraction * (source_scrollbar->maximum() - source_scrollbar->minimum()));
+      source_scrollbar->do_callback();
+      redraw();
+    } else doc.move_scroll(fraction * doc.max_scroll());
   }
   if (kind == 2)
     dragging = false;
@@ -1443,7 +1498,13 @@ int Minimap::handle(int e) {
     return 1;
   }
   if (e == FL_MOUSEWHEEL) {
-    doc.move_scroll(doc.scroll + Fl::event_dy() * doc.body_size() * 3);
+    if (source_scrollbar) {
+      const double value = std::clamp(source_scrollbar->value() + Fl::event_dy() * double(source_scrollbar->linesize()),
+                                      source_scrollbar->minimum(), source_scrollbar->maximum());
+      source_scrollbar->value(value);
+      source_scrollbar->do_callback();
+      redraw();
+    } else doc.move_scroll(doc.scroll + Fl::event_dy() * doc.body_size() * 3);
     return 1;
   }
   return Fl_Widget::handle(e);

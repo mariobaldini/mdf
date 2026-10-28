@@ -25,6 +25,10 @@ Workers retain their inputs until cancellation and joining finish.
 Navigation and image state use document revisions to reject stale results.
 Explicit HTML anchors and generated heading anchors both resolve to document blocks.
 The source view copies the original Markdown on demand and returns to the retained formatted view without reparsing.
+It requests the existing deferred system monospace font when opened.
+The preview keeps its current setting and uses the source scrollbar while source view is active.
+Source preview lines are sampled and rendered only when source preview is visible.
+The formatted preview retains its independent atlas and bitmap across view changes.
 
 ## Startup and presentation
 
@@ -126,7 +130,14 @@ The engine exposes one implementation of each library and keeps their symbols pr
 
 Cairo excludes X11/XCB, PNG functions, PDF/PostScript/SVG export, script/tee surfaces, GObject bindings, and tracing tools.
 Pango excludes Xft, libthai/libdatrie, introspection, examples, documentation, and sysprof.
-GTK file choosers and libdecor's GTK plugin stay disabled.
+MDF excludes FLTK's file choosers and libdecor's GTK plugin.
+Open uses the [XDG FileChooser portal](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.FileChooser.html) through the existing GIO dependency.
+The desktop service owns the dialog and its toolkit libraries.
+The D-Bus connection, GLib context, and request exist only during an Open action.
+The private GLib context runs alongside the FLTK event loop until selection or cancellation.
+Closing MDF cancels the request and dismisses the dialog.
+No portal connection, toolkit loading, or GLib polling occurs during startup or normal reading.
+If the portal or its backend is unavailable, Open reports an error.
 System development files remain necessary for the FLTK SDK and reference tests.
 Relinking and source-access requirements are in the [release process](release-process.md#source-and-relinking).
 
@@ -190,22 +201,32 @@ The compositor controls window placement. Scroll positions clamp after resize. F
 ## Themes
 
 `src/themes.zig` owns palette IDs, names, colors, and default sizes for both frontends.
-The original Classic/Paper/Terminal IDs and saved names remain stable.
+All existing theme IDs and saved names remain stable when new themes are added.
+The shared menu order starts with Classic and Ink, independently of those IDs.
+First use and Reset Settings select Ink with its default text size. Explicitly saved themes and sizes remain in use.
 Selecting a theme preserves light/dark mode and applies its default size. Reset restores that size.
 
-| Theme | Default size |
-| --- | ---: |
-| Classic | 12 |
-| Paper | 14 |
-| Terminal | 11 |
-| Nord | 13 |
-| Solarized | 14 |
-| Gruvbox | 12 |
-| Catppuccin | 13 |
+| Theme | Reading style | Default size |
+| --- | --- | ---: |
+| Classic | Neutral white or charcoal, with blue links | 12 |
+| Ink | Strong monochrome contrast and underlined links | 13 |
+| Paper | Warm parchment and sepia ink | 14 |
+| Terminal | Forest green tones and compact text | 11 |
+| Nord | Cool, desaturated blue-gray | 13 |
+| Solarized | Cream or deep teal, with teal links | 14 |
+| Gruvbox | Amber paper and earthy colors | 12 |
+| Catppuccin | Soft violet tones and purple links | 13 |
+| Ocean | Icy blue or deep navy, with blue/cyan links | 13 |
+| Rose | Blush paper or dusky plum, with berry/rose links | 14 |
 
 Palettes cover reader and panel surfaces, controls, links, selections, highlights, and alerts.
 The compiled theme catalog needs no stylesheet parser or extra font discovery.
-Text, links, muted labels, selections, and highlights use a 4.5:1 minimum contrast in their tested contexts.
+All 20 variants use at least 7:1 contrast for body, code, and table text on reader and panel surfaces.
+Links, muted labels, and alert labels use at least 4.5:1 contrast on both surfaces.
+Body text and links retain at least 4.5:1 contrast when selected. Highlighted text also retains at least 4.5:1 contrast.
+These targets follow the W3C's [minimum](https://www.w3.org/WAI/WCAG22/Understanding/contrast-minimum.html)
+and [enhanced](https://www.w3.org/WAI/WCAG22/Understanding/contrast-enhanced.html) text contrast criteria.
+Ink, Ocean, and Rose are original MDF palettes. Other named palettes use readability adaptations of their source colors.
 Palette references: [Nord](https://www.nordtheme.com/docs/colors-and-palettes/), [Solarized](https://ethanschoonover.com/solarized/),
 [Gruvbox](https://github.com/morhetz/gruvbox), and [Catppuccin](https://catppuccin.com/palette/).
 

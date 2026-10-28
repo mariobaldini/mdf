@@ -15,6 +15,7 @@ option(MDF_BUNDLED_CAIRO "Link Cairo image/font backends without X11 or export b
 set(MDF_FLTK_PATCH_ID "unknown" CACHE STRING "Identity of the pinned MDF FLTK patches")
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(NATIVE REQUIRED IMPORTED_TARGET pangocairo pangoft2 fontconfig)
+pkg_check_modules(DESKTOP REQUIRED IMPORTED_TARGET gio-2.0)
 find_package(FLTK 1.4 REQUIRED CONFIG PATHS "${FLTK_DIR}" NO_DEFAULT_PATH)
 add_library(mdf-drawing INTERFACE)
 if(MDF_BUNDLED_CAIRO)
@@ -109,7 +110,7 @@ function(mdf_embed_diagram target)
         --binary "$<TARGET_FILE:${target}>" --payload "${payload}" --objcopy "${CMAKE_OBJCOPY}" VERBATIM)
   endforeach()
 endfunction()
-add_library(mdf-ui SHARED main.cpp view.cpp profile.cpp startup.cpp images.cpp diagrams.cpp bundled-fonts.cpp monospace.cpp compat.c)
+add_library(mdf-ui SHARED main.cpp view.cpp profile.cpp startup.cpp file-chooser.cpp images.cpp diagrams.cpp bundled-fonts.cpp monospace.cpp compat.c)
 add_dependencies(mdf-ui mdf-mermaid-payload mdf-svg-payload mdf-image-payload)
 set_property(SOURCE main.cpp APPEND PROPERTY COMPILE_DEFINITIONS MDF_APP_VERSION="${PROJECT_VERSION}")
 target_compile_definitions(mdf-ui PRIVATE MDF_ASYNC_INPUT=$<BOOL:${MDF_ASYNC_INPUT}>
@@ -120,7 +121,7 @@ target_compile_definitions(mdf-ui PRIVATE MDF_ASYNC_INPUT=$<BOOL:${MDF_ASYNC_INP
 target_include_directories(mdf-ui PRIVATE "${FLTK_INCLUDE_DIRS}")
 # Core C symbols resolve from the launcher; keeping one core avoids duplicate
 # workers, allocators and profiling state across the module boundary.
-target_link_libraries(mdf-ui PRIVATE "${MDF_UI_WORKERS_LIBRARY}" fltk::fltk mdf-text m dl pthread)
+target_link_libraries(mdf-ui PRIVATE "${MDF_UI_WORKERS_LIBRARY}" fltk::fltk mdf-text PkgConfig::DESKTOP m dl pthread)
 set_property(TARGET mdf-ui APPEND PROPERTY LINK_DEPENDS "${MDF_UI_WORKERS_LIBRARY}")
 target_link_options(mdf-ui PRIVATE -Wl,--gc-sections -Wl,--wrap=select -Wl,--wrap=poll -static-libstdc++ -static-libgcc)
 target_link_options(mdf-ui PRIVATE -Wl,--wrap=wl_display_dispatch -Wl,--wrap=wl_display_roundtrip)
@@ -145,6 +146,10 @@ add_executable(mdf-json-tests EXCLUDE_FROM_ALL ../tests/json.cpp)
 target_link_libraries(mdf-json-tests PRIVATE "${MDF_CORE_DIR}/libmdf-core.a" m dl pthread)
 set_property(TARGET mdf-json-tests APPEND PROPERTY LINK_DEPENDS "${MDF_CORE_DIR}/libmdf-core.a")
 target_compile_options(mdf-json-tests PRIVATE -UNDEBUG)
+
+add_executable(mdf-file-chooser-tests EXCLUDE_FROM_ALL ../tests/file-chooser.cpp file-chooser.cpp)
+target_link_libraries(mdf-file-chooser-tests PRIVATE PkgConfig::DESKTOP pthread)
+target_compile_options(mdf-file-chooser-tests PRIVATE -UNDEBUG)
 
 add_executable(mdf-image-tests EXCLUDE_FROM_ALL ../tests/image-decode.cpp images.cpp diagrams.cpp bundled-fonts.cpp compat.c)
 target_include_directories(mdf-image-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../zig-pkg")

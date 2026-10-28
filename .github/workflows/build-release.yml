@@ -186,7 +186,7 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - name: Install repository tools
-        run: dnf install -y git gh python3 rpm-sign createrepo_c gnupg2 dnf5-plugins curl
+        run: dnf install -y git gh python3 rpm-sign createrepo_c gnupg2 dnf5-plugins curl diffutils
 
       - uses: actions/checkout@v7
         with:

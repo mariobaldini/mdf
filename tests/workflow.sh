@@ -42,6 +42,11 @@ cat > "$scratch/bin/objcopy" <<'STUB'
 while [ "$#" -gt 1 ];do shift;done
 : > "$1"
 STUB
+cat > "$scratch/bin/dbus-run-session" <<'STUB'
+#!/bin/sh
+test "$1" != -- || shift
+exec "$@"
+STUB
 cat > "$scratch/bin/zig" <<'STUB'
 #!/bin/sh
 printf 'zig %s\n' "$*" >> "$MDF_TEST_LOG"
@@ -69,7 +74,7 @@ if [ "$1" = --build ];then
   printf '#!/bin/sh\nprintf "run %%s\\n" "$*" >> "$MDF_TEST_LOG"\n' > "$2/mdf"
   chmod +x "$2/mdf";;
  esac
- for native_test in mdf-image-tests mdf-buffer-tests mdf-cairo-tests mdf-startup-tests mdf-monospace-tests;do
+ for native_test in mdf-image-tests mdf-buffer-tests mdf-cairo-tests mdf-startup-tests mdf-monospace-tests mdf-file-chooser-tests;do
   case " $* " in *" --target $native_test "*)
    printf '#!/bin/sh\nexit 0\n' > "$2/$native_test"
    chmod +x "$2/$native_test";;
@@ -82,7 +87,7 @@ else
  done
 fi
 STUB
-chmod +x "$scratch/bin/g++" "$scratch/bin/python3" "$scratch/bin/zig" "$scratch/bin/cmake" "$scratch/bin/objcopy"
+chmod +x "$scratch/bin/g++" "$scratch/bin/python3" "$scratch/bin/zig" "$scratch/bin/cmake" "$scratch/bin/objcopy" "$scratch/bin/dbus-run-session"
 printf '#!/bin/sh\nprintf "release %%s\\n" "$OPTIMIZE" >> "$MDF_TEST_LOG"\n' > "$scratch/project/tools/scripts/release.sh"
 run(){ PATH="$scratch/bin" "$real_make" --no-print-directory -C "$scratch/project" "$@" >"$scratch/output" 2>&1; }
 no_downloads(){ if grep -Eq 'fetch|^sudo |^dnf |cargo|rustc' "$MDF_TEST_LOG";then cat "$MDF_TEST_LOG" >&2;exit 1;fi; }

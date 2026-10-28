@@ -63,6 +63,7 @@ public:
   std::shared_ptr<PreparedFont> resources() const { return data; }
   bool has_character(FcChar32 ch) const { return text && mdf_system_text_has_character(text, ch); }
   void adopt(std::unique_ptr<PreparedFont> prepared);
+  void adopt(std::shared_ptr<PreparedFont> prepared);
   void add_fallback(const CodeFont &font);
   int unknown_glyphs(const std::string &text, int style = 0);
   TextMetrics measure(const char *text, size_t length, int size, int style);

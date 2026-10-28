@@ -57,6 +57,8 @@ test "$(dpkg-deb --field "$mdf_deb" Version)" = "$mdf_deb_version"
 test "$(dpkg-deb --field "$mdf_deb" Architecture)" = amd64
 mdf_requires=$(rpm -qp --requires "$mdf_rpm")
 mdf_depends=$(dpkg-deb --field "$mdf_deb" Depends)
+test "$(rpm -qp --recommends "$mdf_rpm")" = xdg-desktop-portal
+test "$(dpkg-deb --field "$mdf_deb" Recommends)" = xdg-desktop-portal
 printf '%s\n' "$mdf_requires" | grep -q 'libwayland-cursor.so.0'
 printf '%s\n' "$mdf_requires" | grep -q 'libpixman-1.so.0'
 printf '%s\n' "$mdf_requires" | grep -q 'libgio-2.0.so.0'

@@ -66,6 +66,8 @@ struct MdfThemePalette {
 };
 size_t mdf_theme_count(void);
 MdfThemeInfo mdf_theme_info(size_t);
+/* Menu positions do not change stable theme/palette indexes. */
+MdfThemeInfo mdf_theme_menu_info(size_t);
 uint32_t mdf_theme_index(const unsigned char *, size_t);
 MdfThemePalette mdf_theme_palette(uint32_t, bool dark);
 struct MdfTextStyle { uint32_t face; int32_t size; };

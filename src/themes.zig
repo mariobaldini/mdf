@@ -25,6 +25,9 @@ pub const Preset = enum {
     solarized,
     gruvbox,
     catppuccin,
+    ink,
+    ocean,
+    rose,
 
     pub fn name(self: Preset) []const u8 {
         return switch (self) {
@@ -35,6 +38,9 @@ pub const Preset = enum {
             .solarized => "Solarized",
             .gruvbox => "Gruvbox",
             .catppuccin => "Catppuccin",
+            .ink => "Ink",
+            .ocean => "Ocean",
+            .rose => "Rose",
         };
     }
 
@@ -47,6 +53,9 @@ pub const Preset = enum {
             .solarized => 14,
             .gruvbox => 12,
             .catppuccin => 13,
+            .ink => 13,
+            .ocean => 13,
+            .rose => 14,
         };
     }
 
@@ -59,7 +68,7 @@ pub const Preset = enum {
                 .border = 0x3c3e42,
                 .link = 0x8ab4e5,
                 .muted = 0xadb4be,
-                .selection = 0x314c6a,
+                .selection = 0x2b415b,
                 .highlight = 0x4a4026,
                 .note = 0x79b8ff,
                 .tip = 0x7ee787,
@@ -71,7 +80,7 @@ pub const Preset = enum {
                 .fg = 0x42464b,
                 .panel = 0xf5f6f7,
                 .border = 0xd8dce1,
-                .link = 0x3174ae,
+                .link = 0x215c8d,
                 .muted = 0x6b6f75,
                 .selection = 0xc5ddf5,
                 .highlight = 0xebd77f,
@@ -170,7 +179,7 @@ pub const Preset = enum {
             },
             .solarized => if (dark) .{
                 .bg = 0x002b36,
-                .fg = 0xa9b7b7,
+                .fg = 0xb9c7c7,
                 .panel = 0x073642,
                 .border = 0x3c6066,
                 .link = 0x55b8ae,
@@ -184,7 +193,7 @@ pub const Preset = enum {
                 .caution = 0xf68d7b,
             } else .{
                 .bg = 0xfdf6e3,
-                .fg = 0x365b63,
+                .fg = 0x2b4e56,
                 .panel = 0xeee8d5,
                 .border = 0xc5beaa,
                 .link = 0x006879,
@@ -242,7 +251,7 @@ pub const Preset = enum {
                 .caution = 0xf38ba8,
             } else .{
                 .bg = 0xeff1f5,
-                .fg = 0x4c4f69,
+                .fg = 0x42445d,
                 .panel = 0xe6e9ef,
                 .border = 0xbcc0cc,
                 .link = 0x7930d9,
@@ -255,10 +264,105 @@ pub const Preset = enum {
                 .warning = 0x825b0c,
                 .caution = 0xc2183f,
             },
+            .ink => if (dark) .{
+                .bg = 0x0f1011,
+                .fg = 0xf3f3f1,
+                .panel = 0x1c1d1f,
+                .border = 0x6a6b6d,
+                .link = 0xe1e1df,
+                .muted = 0xc0c0be,
+                .selection = 0x3a3c3f,
+                .highlight = 0x474125,
+                .note = 0xa3ccff,
+                .tip = 0xaad7b1,
+                .important = 0xd7c2ef,
+                .warning = 0xead295,
+                .caution = 0xeeb2ad,
+            } else .{
+                .bg = 0xffffff,
+                .fg = 0x161616,
+                .panel = 0xf1f1f1,
+                .border = 0x8c8c8c,
+                .link = 0x2c2c2c,
+                .muted = 0x555555,
+                .selection = 0xd9d9d9,
+                .highlight = 0xe5dfb4,
+                .note = 0x1f5da4,
+                .tip = 0x28613d,
+                .important = 0x674781,
+                .warning = 0x745100,
+                .caution = 0x9d3131,
+            },
+            .ocean => if (dark) .{
+                .bg = 0x0e2334,
+                .fg = 0xdaedf5,
+                .panel = 0x163044,
+                .border = 0x37586d,
+                .link = 0x80cbe4,
+                .muted = 0xafc9d7,
+                .selection = 0x24465c,
+                .highlight = 0x4b4224,
+                .note = 0x80cbe4,
+                .tip = 0x95d6b4,
+                .important = 0xc8b3ed,
+                .warning = 0xebcf8f,
+                .caution = 0xf0ada7,
+            } else .{
+                .bg = 0xf0f8fc,
+                .fg = 0x173448,
+                .panel = 0xdfedf5,
+                .border = 0xa5c0d1,
+                .link = 0x14557f,
+                .muted = 0x405f73,
+                .selection = 0xc5deec,
+                .highlight = 0xeee0ab,
+                .note = 0x14557f,
+                .tip = 0x2a644b,
+                .important = 0x6b4683,
+                .warning = 0x77500c,
+                .caution = 0xa13e3e,
+            },
+            .rose => if (dark) .{
+                .bg = 0x2a1d24,
+                .fg = 0xefdde1,
+                .panel = 0x34252e,
+                .border = 0x6b4a58,
+                .link = 0xeda7b9,
+                .muted = 0xccb2bb,
+                .selection = 0x513640,
+                .highlight = 0x52402a,
+                .note = 0xa8c8e8,
+                .tip = 0xb3d1b8,
+                .important = 0xd4b6e4,
+                .warning = 0xe6c58e,
+                .caution = 0xf4aba1,
+            } else .{
+                .bg = 0xfcf3f2,
+                .fg = 0x51363d,
+                .panel = 0xf3e3e2,
+                .border = 0xcaa9ae,
+                .link = 0x8b3e5d,
+                .muted = 0x73535c,
+                .selection = 0xead1d9,
+                .highlight = 0xefdca4,
+                .note = 0x2d5b8a,
+                .tip = 0x416044,
+                .important = 0x7c4682,
+                .warning = 0x785410,
+                .caution = 0xa33442,
+            },
         };
     }
 };
 
+pub const default_preset: Preset = .ink;
+
+// Presentation order is independent of stable palette IDs and saved names.
+pub const menu_order = [_]Preset{
+    .classic, .ink, .paper, .terminal, .nord,
+    .solarized, .gruvbox, .catppuccin, .ocean, .rose,
+};
+
 pub fn fromName(name: []const u8) Preset {
-    return std.meta.stringToEnum(Preset, name) orelse .classic;
+    return std.meta.stringToEnum(Preset, name) orelse default_preset;
 }

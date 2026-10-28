@@ -13,6 +13,12 @@ The Latin cases use 480- and 1040-pixel widths and several font sizes.
 GUI checks cover scrollbar visibility for fitting and overflowing documents, including resizing from a scrolled position.
 Settings-store and native-window checks verify that each launch restores wrapping while retaining other saved preferences.
 `make test-cairo OPTIMIZE=ReleaseFast` checks the minimal Cairo backend contract and image compositing.
+`make test-file-chooser OPTIMIZE=ReleaseFast` uses a private D-Bus session and a simulated desktop portal.
+It checks selection, cancellation, URI decoding, filters, early responses, older request handles, and service failures.
+GUI startup traces also check that normal reading makes no D-Bus connection and loads no GTK library.
+Theme tests check all 10 presets in light and dark modes, including saved settings and the C API.
+They require 7:1 contrast for body text and 4.5:1 for links, labels, selected text, and highlighted text.
+GUI captures cover each theme's text styles, inline code, and alerts.
 
 Every `make build` first runs the unit tests in the selected build mode.
 For example, `make build OPTIMIZE=ReleaseFast` tests ReleaseFast before building it.

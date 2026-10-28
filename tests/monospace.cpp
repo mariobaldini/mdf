@@ -114,9 +114,30 @@ int main() {
   assert(uncached && uncached->available() && uncached->sources.size() == 1);
   assert(uncached->sources.front() == (scratch/"fonts/mono.ttf").string());
   assert(fs::is_empty(scratch/"cache"));
-  CodeFont scanned;
-  scanned.adopt(std::move(uncached));
-  assert(scanned.measure("iiii", 4, 16, 0).width == scanned.measure("WWWW", 4, 16, 0).width);
+  std::weak_ptr<PreparedFont> shared_lifetime;
+  {
+    CodeFont survivor;
+    float expected_width = 0;
+    {
+      CodeFont scanned;
+      scanned.adopt(std::move(uncached));
+      auto shared = scanned.resources();
+      shared_lifetime = shared;
+      survivor.adopt(shared);
+      expected_width = scanned.measure("iiii", 4, 16, 0).width;
+      assert(expected_width > 0 && expected_width == scanned.measure("WWWW", 4, 16, 0).width);
+      assert(survivor.measure("iiii", 4, 16, 0).width == expected_width);
+      assert(survivor.measure("WWWW", 4, 16, 0).width == expected_width);
+      shared.reset();
+      worker.reset();
+    }
+    // The first CodeFont and caller's pointer are gone; the second map must
+    // retain both the prepared font and its anonymous backing files.
+    assert(!shared_lifetime.expired());
+    assert(survivor.measure("iiii", 4, 16, 0).width == expected_width);
+    assert(survivor.measure("WWWW", 4, 16, 0).width == expected_width);
+  }
+  assert(shared_lifetime.expired());
   assert(FcConfigGetCurrent() == body);
 
   // A font is selected only if it contributes an actually requested glyph.

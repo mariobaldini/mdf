@@ -207,8 +207,8 @@ inline Block read_block(Core &core, size_t index) {
 struct Settings {
   bool save = true, dark = false, toc = true, preview = true, reload = true,
        maximized = false, line_wrap = true;
-  std::string theme = "classic", width = "percent_80";
-  int size = 12, window_w = 1040, window_h = 780;
+  std::string theme = "ink", width = "percent_80";
+  int size = default_font_size(), window_w = 1040, window_h = 780;
   Settings() = default;
   int default_font_size() const {
     return int(mdf_theme_info(mdf_theme_index(reinterpret_cast<const unsigned char *>(theme.data()), theme.size())).font_size);
@@ -220,9 +220,9 @@ struct Settings {
     preview = j.value("show_preview", true);
     reload = j.value("auto_reload", true);
     line_wrap = j.value("line_wrap", true);
-    theme = text(j, "theme", "classic");
+    theme = text(j, "theme", theme.c_str());
     width = text(j, "max_width", "percent_80");
-    size = j.value("font_size", 12);
+    size = j.value("font_size", size);
     if (j.contains("window")) {
       auto w = j.get("window");
       window_w = w.value("width", 1040);

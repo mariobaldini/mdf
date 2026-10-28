@@ -79,6 +79,11 @@ void CodeFont::clear() {
 void CodeFont::adopt(std::unique_ptr<PreparedFont> prepared) {
   if (!prepared || !prepared->available()) throw std::runtime_error("System monospace unavailable");
   clear();
+  adopt(std::shared_ptr<PreparedFont>(std::move(prepared)));
+}
+void CodeFont::adopt(std::shared_ptr<PreparedFont> prepared) {
+  if (!prepared || !prepared->available()) throw std::runtime_error("System monospace unavailable");
+  clear();
   data = std::move(prepared);
   char error[512]{};
   text = mdf_system_text_create(data->owner, error, sizeof error);

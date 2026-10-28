@@ -223,7 +223,8 @@ test "native shell: controls have distinct hit regions and preserve font bounds"
     for (0..100) |_| shell.apply(.smaller);
     try std.testing.expectEqual(@as(i32, 8), shell.points);
     shell.apply(.reset);
-    try std.testing.expectEqual(@as(i32, 12), shell.points);
+    try std.testing.expectEqual(ui.preferences.Preset.ink, shell.theme);
+    try std.testing.expectEqual(@as(i32, ui.preferences.Preset.ink.fontSize()), shell.points);
 }
 test "native shell: canonical preferences preserve every option and preset defaults" {
     const stored: ui.preferences.Values = .{ .theme = .paper, .font_size = 18, .dark_mode = true,
@@ -265,7 +266,7 @@ test "native menus: pointer commands and keyboard scrolling stay in window bound
     const box = menu.bounds(420, 240);
     try std.testing.expect(box.x >= 0 and box.x + box.width <= 420);
     const picked = menu.press(@floatFromInt(box.x + 40), 71, 420, 240);
-    try std.testing.expectEqual(ui.preferences.Preset.paper, picked.command.?.theme);
+    try std.testing.expectEqual(ui.preferences.Preset.ink, picked.command.?.theme);
     try std.testing.expectEqual(@as(?ui.menus.Title, null), menu.opened);
     _ = menu.press(110, 14, 420, 240);
     menu.move(-1, 420, 240);

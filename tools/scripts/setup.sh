@@ -12,14 +12,14 @@ case "$ID:$VERSION_ID" in
         mdf_package_manager=dnf
         mdf_packages='make ca-certificates pkgconf-pkg-config binutils python3 python3-pyyaml git git-lfs sudo coreutils curl tar xz rpm-build dpkg cpio strace desktop-file-utils shared-mime-info pango-devel fontconfig-devel wayland-devel wayland-protocols-devel libxkbcommon-devel weston weston-devel'
         if [ "$MDF_REFERENCE" = 1 ]; then
-            mdf_packages="$mdf_packages cmake ninja-build gcc gcc-c++ libstdc++-static clang-tools-extra cairo-devel pixman-devel glib2-devel fribidi-devel harfbuzz-devel freetype-devel dejavu-sans-mono-fonts"
+            mdf_packages="$mdf_packages cmake ninja-build gcc gcc-c++ libstdc++-static clang-tools-extra cairo-devel pixman-devel glib2-devel fribidi-devel harfbuzz-devel freetype-devel dejavu-sans-mono-fonts dbus-daemon"
         fi
         ;;
     ubuntu:26.04)
         mdf_package_manager=apt-get
         mdf_packages='make ca-certificates pkg-config binutils python3 python3-yaml git git-lfs sudo coreutils curl tar xz-utils rpm dpkg-dev cpio strace desktop-file-utils shared-mime-info libpango1.0-dev libfontconfig1-dev libwayland-dev wayland-protocols libxkbcommon-dev weston libweston-14-dev'
         if [ "$MDF_REFERENCE" = 1 ]; then
-            mdf_packages="$mdf_packages cmake ninja-build gcc g++ clang-tools libcairo2-dev libpixman-1-dev libglib2.0-dev libglib2.0-bin libfribidi-dev libharfbuzz-dev libfreetype-dev fonts-dejavu-core"
+            mdf_packages="$mdf_packages cmake ninja-build gcc g++ clang-tools libcairo2-dev libpixman-1-dev libglib2.0-dev libglib2.0-bin libfribidi-dev libharfbuzz-dev libfreetype-dev fonts-dejavu-core dbus-daemon"
         fi
         ;;
     *)

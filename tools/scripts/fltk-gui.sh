@@ -35,9 +35,17 @@ python3 "$mdf_root/tests/font_access.py" "$mdf_test/font-access.log" --faces 4
 # An ordinary text document must keep the completely private startup path.
 printf '# Plain document\n\nOnly ordinary body text, café and `inline code`.\n' > "$mdf_test/no-code.md"
 env -u WAYLAND_SOCKET XDG_RUNTIME_DIR="$mdf_test/runtime" WAYLAND_DISPLAY=mdf-test \
-    strace -f -e trace=%file,memfd_create,prctl -o "$mdf_test/no-code.trace" \
+    strace -f -e trace=%file,memfd_create,prctl,connect -o "$mdf_test/no-code.trace" \
     "$mdf_binary" --profile "$mdf_test/no-code.md" >"$mdf_test/no-code.log" 2>"$mdf_test/no-code.err"
 python3 "$mdf_root/tests/font_access.py" "$mdf_test/no-code.trace" --no-deferred
+python3 - "$mdf_test/no-code.trace" <<'PY'
+import re, sys
+trace = open(sys.argv[1]).read()
+connections = [line for line in trace.splitlines() if re.search(r'\bconnect\(', line)]
+assert connections and all('AF_UNIX' in line and '/mdf-test"' in line for line in connections), connections
+assert not re.search(r'lib(?:gtk|gdk)-[234]', trace), 'Reading loaded GTK/GDK'
+print('PASS: normal startup connects only to Wayland; no D-Bus connection or GTK loading')
+PY
 python3 - "$mdf_test/no-code.log" <<'PY'
 import json, sys
 data=json.load(open(sys.argv[1]))

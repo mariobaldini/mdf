@@ -45,6 +45,10 @@ def main():
         imports={line.split()[-1] for line in subprocess.check_output(['nm','-D','--undefined-only',str(engine)],text=True).splitlines()}
         assert {name for name in imports if name.startswith('mdf_')} <= host_symbols
         dependencies=subprocess.check_output(['readelf','-Wd',str(engine)],text=True)
+        if not native:
+            assert not any(name in dependencies for name in ('libgtk-', 'libgdk-', 'libportal.')),dependencies
+            chooser_symbols=subprocess.check_output(['strings',str(engine)],text=True)
+            assert 'Fl_Native_File_Chooser' not in chooser_symbols, 'FLTK file chooser code remains bundled'
         pango_dependencies=[line for line in dependencies.splitlines() if '(NEEDED)' in line and 'libpango' in line]
         if native:
             closure=subprocess.check_output(['ldd',str(engine)],text=True)

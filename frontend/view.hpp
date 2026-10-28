@@ -162,6 +162,7 @@ public:
   void document(const Json &doc, Core &core, FontStore &fonts);
   void configure(const Settings &s);
   void adopt_code_font(std::unique_ptr<PreparedMonospace> font);
+  void adopt_code_font(std::shared_ptr<PreparedFont> font);
   void adopt_fallback_font(std::unique_ptr<PreparedFont> font);
   void reflow_fonts(bool fallback);
   bool visible(int index) const;
@@ -205,9 +206,16 @@ public:
   Fl_Color role(int r) const;
   Fl_Color text_color(const Style &s) const;
 };
+class SourceView;
 class Minimap : public Fl_Widget {
   DocumentView &doc;
   Fl_Scrollbar &scrollbar;
+  Fl_Scrollbar *source_scrollbar = nullptr;
+  SourceView *source_view = nullptr;
+  std::unique_ptr<Fl_RGB_Image> source_cached;
+  uint64_t source_cached_revision = std::numeric_limits<uint64_t>::max();
+  int source_cached_w = 0, source_cached_h = 0, source_cached_font = -1, source_cached_size = 0;
+  Fl_Color source_cached_bg = 0, source_cached_fg = 0;
   bool dragging = false;
   float grab = 0;
   std::unique_ptr<Fl_RGB_Image> cached, overlay;
@@ -223,12 +231,15 @@ class Minimap : public Fl_Widget {
   uint64_t cached_revision = std::numeric_limits<uint64_t>::max();
   int cached_w = 0, cached_h = 0, overlay_h = 0;
   Fl_Color overlay_color = 0;
+  void draw_marker(const Palette &palette);
 
 public:
-  uint64_t atlas_builds = 0, layout_builds = 0;
+  uint64_t atlas_builds = 0, layout_builds = 0, source_builds = 0;
   Minimap(int x, int y, int w, int h, DocumentView &doc,
           Fl_Scrollbar &scrollbar)
       : Fl_Widget(x, y, w, h), doc(doc), scrollbar(scrollbar) {}
+  void use_source_view(SourceView *source);
+  void invalidate_source_preview() { source_cached.reset(); redraw(); }
   int thumb_height() const;
   int thumb_top() const;
   void draw() override;

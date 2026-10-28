@@ -98,7 +98,7 @@ tests: test
 test:
 	@$(MAKE) --no-print-directory test-suite OPTIMIZE=ReleaseFast
 
-test-suite: check-requirements test-workflow test-install test-profile test-samples test-mermaid test-svg test-patches test-markdown test-launcher test-codecs test-json test-images test-buffers test-cairo test-startup test-monospace test-core-Debug test-core-ReleaseSafe test-core-ReleaseFast
+test-suite: check-requirements test-workflow test-install test-profile test-samples test-mermaid test-svg test-patches test-markdown test-launcher test-codecs test-json test-images test-buffers test-cairo test-startup test-monospace test-file-chooser test-core-Debug test-core-ReleaseSafe test-core-ReleaseFast
 
 .PHONY: test-native-modules test-native-window test-native-launcher
 test-native-launcher: native
@@ -193,6 +193,12 @@ test-startup: reference
 	@cmake --build "build/fltk-ui/$(OPTIMIZE)" --target mdf-startup-tests --parallel 2
 	@"build/fltk-ui/$(OPTIMIZE)/mdf-startup-tests"
 
+.PHONY: test-file-chooser
+test-file-chooser: reference
+	@cmake --build "build/fltk-ui/$(OPTIMIZE)" --target mdf-file-chooser-tests --parallel 2
+	@dbus-run-session -- "build/fltk-ui/$(OPTIMIZE)/mdf-file-chooser-tests"
+	@DBUS_SESSION_BUS_ADDRESS=unix:path=/tmp/mdf-test-missing-session-bus "build/fltk-ui/$(OPTIMIZE)/mdf-file-chooser-tests" --no-bus
+
 .PHONY: test-buffers
 test-buffers: reference
 	@cmake --build "build/fltk-ui/$(OPTIMIZE)" --target mdf-buffer-tests --parallel 2
@@ -206,10 +212,10 @@ test-cairo: reference
 test-launcher: build
 	@python3 tests/launcher.py "$(BUILD_PREFIX)/bin/mdf" $(if $(filter Debug,$(OPTIMIZE)),--debug,)
 
-test-gui: build test-launcher test-images test-monospace test-startup
+test-gui: build test-launcher test-images test-monospace test-startup test-file-chooser
 	@sh tests/gui.sh "$(BUILD_PREFIX)/bin/mdf"
 
-test-reference-gui: test-images test-monospace test-startup
+test-reference-gui: test-images test-monospace test-startup test-file-chooser
 	@sh tests/gui.sh "$(REFERENCE_PREFIX)/bin/mdf"
 
 release: check-package-tools

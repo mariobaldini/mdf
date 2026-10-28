@@ -17,17 +17,19 @@ fn contrast(a: u32, b: u32) f64 {
     return (@max(x, y) + 0.05) / (@min(x, y) + 0.05);
 }
 test "themes: legacy IDs remain stable and every preset has distinct light and dark palettes" {
-    try std.testing.expectEqual(@as(u32, 0), @backingInt(themes.Preset.classic));
-    try std.testing.expectEqual(@as(u32, 1), @backingInt(themes.Preset.paper));
-    try std.testing.expectEqual(@as(u32, 2), @backingInt(themes.Preset.terminal));
-    try std.testing.expectEqual(@as(usize, 7), std.meta.tags(themes.Preset).len);
+    const existing = [_]themes.Preset{ .classic, .paper, .terminal, .nord, .solarized, .gruvbox, .catppuccin };
+    for (existing, 0..) |theme, index|
+        try std.testing.expectEqual(@as(u32, @intCast(index)), @backingInt(theme));
+    try std.testing.expectEqual(@as(usize, 10), std.meta.tags(themes.Preset).len);
+    try std.testing.expectEqual(themes.Preset.classic, themes.menu_order[0]);
+    try std.testing.expectEqual(themes.Preset.ink, themes.menu_order[1]);
     for (std.meta.tags(themes.Preset)) |theme| {
         try std.testing.expect(theme.name().len > 0);
         try std.testing.expect(theme.fontSize() >= 11 and theme.fontSize() <= 14);
         try std.testing.expectEqual(theme, themes.fromName(@tagName(theme)));
         try std.testing.expect(theme.palette(false).bg != theme.palette(true).bg);
     }
-    try std.testing.expectEqual(themes.Preset.classic, themes.fromName("unknown"));
+    try std.testing.expectEqual(themes.Preset.ink, themes.fromName("unknown"));
 }
 test "themes: catalog and RGB records cross the C boundary without conversion drift" {
     const all = std.meta.tags(themes.Preset);
@@ -46,16 +48,32 @@ test "themes: catalog and RGB records cross the C boundary without conversion dr
         }
     }
     try std.testing.expectEqual(@as(usize, 0), c.mdf_theme_info(999).id.len);
-    try std.testing.expectEqual(themes.Preset.classic.palette(false).bg, c.mdf_theme_palette(999, false).bg);
+    try std.testing.expectEqual(all.len, themes.menu_order.len);
+    var seen: [all.len]bool = @splat(false);
+    for (themes.menu_order, 0..) |theme, position| {
+        const index = @backingInt(theme);
+        try std.testing.expect(!seen[index]);
+        seen[index] = true;
+        const info = c.mdf_theme_menu_info(position);
+        try std.testing.expectEqualStrings(@tagName(theme), info.id.ptr[0..info.id.len]);
+        try std.testing.expectEqualStrings(theme.name(), info.name.ptr[0..info.name.len]);
+    }
+    try std.testing.expectEqual(@as(usize, 0), c.mdf_theme_menu_info(999).id.len);
+    try std.testing.expectEqual(themes.Preset.ink.palette(false).fg, c.mdf_theme_palette(999, false).fg);
 }
 test "themes: text links labels highlights and selected text retain readable contrast" {
     for (std.meta.tags(themes.Preset)) |theme| for ([_]bool{ false, true }) |dark| {
+        errdefer std.debug.print("Contrast check failed for {s}, dark={any}\n", .{ @tagName(theme), dark });
         const p = theme.palette(dark);
+        // Body copy, code, and table text use the same foreground on these surfaces.
+        try std.testing.expect(contrast(p.fg, p.bg) >= 7);
+        try std.testing.expect(contrast(p.fg, p.panel) >= 7);
         for ([_]u32{ p.bg, p.panel }) |background| {
             for ([_]u32{ p.fg, p.link, p.muted, p.note, p.tip, p.important, p.warning, p.caution }) |foreground|
                 try std.testing.expect(contrast(foreground, background) >= 4.5);
         }
         try std.testing.expect(contrast(p.fg, p.selection) >= 4.5);
+        try std.testing.expect(contrast(p.link, p.selection) >= 4.5);
         try std.testing.expect(contrast(p.fg, p.highlight) >= 4.5);
         try std.testing.expect(contrast(if (dark) p.bg else 0xffffff, p.link) >= 4.5);
     };

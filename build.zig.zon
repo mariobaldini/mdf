@@ -1,7 +1,7 @@
 .{
     .name = .mdf,
     .fingerprint = 0x1a0eebaf571cb338,
-    .version = "0.8.0",
+    .version = "0.16.0",
     .minimum_zig_version = "0.17.0",
     .dependencies = .{
         .zig_svg = .{ .path = "modules/zig-svg" },

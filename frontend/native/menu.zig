@@ -1,6 +1,7 @@
 //! Allocation-free menu state. Drawing and commands belong to the shell/window.
 const std = @import("std");
 pub const Theme = @import("settings").Preset;
+const theme_order = @import("settings").theme_menu_order;
 pub const Command = union(enum) {
     open, reload, quit, toc, preview, wrap, width80, width100, copy, select_all,
     larger, smaller, reset_size, size: i32, theme: Theme,
@@ -35,9 +36,9 @@ fn makeFonts() [20]Item {
     return result;
 }
 const theme = makeThemes();
-fn makeThemes() [std.meta.tags(Theme).len]Item {
-    var result: [std.meta.tags(Theme).len]Item = undefined;
-    for (std.meta.tags(Theme), 0..) |value, index|
+fn makeThemes() [theme_order.len]Item {
+    var result: [theme_order.len]Item = undefined;
+    for (theme_order, 0..) |value, index|
         result[index] = .{ .name = value.name(), .command = .{ .theme = value } };
     return result;
 }

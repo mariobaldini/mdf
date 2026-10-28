@@ -32,11 +32,15 @@ export fn mdf_theme_info(index: usize) ThemeInfo {
     const theme = all[index];
     return .{ .id = borrowed(@tagName(theme)), .name = borrowed(theme.name()), .font_size = theme.fontSize() };
 }
+export fn mdf_theme_menu_info(position: usize) ThemeInfo {
+    if (position >= themes.menu_order.len) return .{};
+    return mdf_theme_info(@backingInt(themes.menu_order[position]));
+}
 export fn mdf_theme_index(name: ?[*]const u8, len: usize) u32 {
     return @backingInt(themes.fromName(if (name) |ptr| ptr[0..len] else ""));
 }
 export fn mdf_theme_palette(index: u32, dark: bool) themes.Palette {
-    const theme: themes.Preset = std.enums.fromInt(themes.Preset, index) orelse .classic;
+    const theme: themes.Preset = std.enums.fromInt(themes.Preset, index) orelse themes.default_preset;
     return theme.palette(dark);
 }
 pub const BlockView = extern struct {
@@ -463,6 +467,8 @@ test "settings save by default and preserve an explicit opt-out across launches"
         const core = mdf_core_create(path.ptr, path.len, false, 0, wake) orelse return error.CoreCreationFailed;
         defer mdf_core_destroy(core);
         try std.testing.expect(core.values.save_settings_across_sessions);
+        try std.testing.expectEqual(settings.Preset.ink, core.values.theme);
+        try std.testing.expectEqual(settings.Preset.ink.fontSize(), core.values.font_size);
         try update(core, "{\"font_size\":18,\"theme\":\"paper\"}");
     }
     {
