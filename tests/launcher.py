@@ -14,8 +14,8 @@ ROOT=Path(__file__).resolve().parents[1]
 def module(name,path):
     spec=importlib.util.spec_from_file_location(name,path)
     result=importlib.util.module_from_spec(spec);spec.loader.exec_module(result);return result
-profile=module('profile',ROOT/'scripts/profile.py')
-packer=module('pack_ui',ROOT/'scripts/pack-frontend.py')
+profile=module('profile',ROOT/'tools/scripts/profile.py')
+packer=module('pack_ui',ROOT/'tools/scripts/pack-frontend.py')
 
 def main():
     binary=Path(sys.argv[1]).resolve()
@@ -93,7 +93,7 @@ def main():
         env={**os.environ,'WAYLAND_DISPLAY':'mdf-bootstrap-unavailable'}
         env.pop('WAYLAND_SOCKET',None)
         def probe(target,expected):
-            run=subprocess.run([str(target),'--profile',str(ROOT/'SAMPLE-SMALL.md')],cwd=temp,env=env,capture_output=True,text=True,timeout=15)
+            run=subprocess.run([str(target),'--profile',str(ROOT/'assets/samples/SAMPLE-SMALL.md')],cwd=temp,env=env,capture_output=True,text=True,timeout=15)
             assert run.returncode!=0 and expected in run.stderr,run.stderr
         missing=temp/'missing'
         subprocess.run(['objcopy','--remove-section=.mdf_ui',str(app),str(missing)],check=True)

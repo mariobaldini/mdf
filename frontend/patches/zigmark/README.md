@@ -2,8 +2,8 @@
 
 The parent repository pins Zigmark 0.11.1 and Mecha 0.11.0 as submodules.
 Both source trees stay unmodified.
-`scripts/prepare-zigmark.py` copies the parser into the build cache, applies checked Zig 0.17 syntax changes, and applies these patches without fuzz.
-`scripts/prepare-mecha.py` adapts tuple and field reflection in a generated copy.
+`tools/scripts/prepare-zigmark.py` copies the parser into the build cache, applies checked Zig 0.17 syntax changes, and applies these patches without fuzz.
+`tools/scripts/prepare-mecha.py` adapts tuple and field reflection in a generated copy.
 The build tracks the scripts, source directories, and every patch as inputs.
 
 1. `0001` corrects physical line endings, indented-code whitespace, soft-break trimming, and container tab columns.

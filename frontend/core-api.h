@@ -52,6 +52,11 @@ struct MdfCellView {
 };
 struct MdfDocumentText { Buffer text; const size_t *starts; size_t count; uint32_t styles, flags; };
 MdfDocumentText mdf_core_document_text(MdfCore *);
+/* Resolve an already-decoded fragment to a rendered block without replacing
+   its generated heading ID. Explicit HTML id/name aliases are also accepted. */
+bool mdf_core_find_anchor(MdfCore *, const unsigned char *, size_t, size_t *);
+/* Original loaded Markdown bytes, borrowed until document replacement. */
+Buffer mdf_core_source(MdfCore *);
 /* Theme names/IDs borrow immutable catalog storage. Indexes 0..2 retain the
    original Classic/Paper/Terminal order. Palette values are packed RGB. */
 struct MdfThemeInfo { Buffer id, name; uint32_t font_size; };

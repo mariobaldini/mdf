@@ -42,6 +42,7 @@ pub const Palette = struct {
             7 => self.important,
             8 => self.warning,
             9 => self.caution,
+            10 => self.fg,
             else => self.bg,
         };
     }

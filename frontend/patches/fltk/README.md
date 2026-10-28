@@ -17,7 +17,7 @@ The upstream archive remains unchanged.
 | `0006-viewport-pool.patch` | Reserve only the page-rounded first viewport for shared drawing. | Allocation guarantees, signed protocol bounds, pool retirement, resize, and scaling. |
 | `0007-wayland-no-print.patch` | Honor disabled printing for the Wayland-only build. | Debug and release must define `FL_NO_PRINT_SUPPORT` and import no disabled Cairo PDF/PostScript functions. |
 
-`scripts/prepare-fltk.py` applies the series during setup and before every native build.
+`tools/scripts/prepare-fltk.py` applies the series during setup and before every native build.
 It accepts pristine sources and exact intermediate states, including the former inline title-height adjustment.
 It validates all files before replacement and leaves already prepared files untouched.
 An unknown managed-file change stops the build instead of guessing patch context.
@@ -161,7 +161,7 @@ To exercise early buffers with a delayed server, use the experimental build:
 MDF_PREPARE_FRAME=ON make build OPTIMIZE=ReleaseFast BUILD_PREFIX=build/early-frame-test
 cc -shared -fPIC tests/slow-compositor.c -o build/fltk-tests/slow-compositor.so -ldl
 MDF_TEST_COMPOSITOR_PRELOAD="$PWD/build/fltk-tests/slow-compositor.so" \
-  sh scripts/fltk-gui.sh build/early-frame-test/bin/mdf
+  sh tools/scripts/fltk-gui.sh build/early-frame-test/bin/mdf
 ```
 
 The preload affects only the isolated Weston server. The client executable stays unchanged.

@@ -995,7 +995,7 @@ const Window = struct {
                 self.running = false;
             };
         } else if (self.test_preferences and self.paints == 1) {
-            self.command(.save_settings) catch |err| {
+            if (!self.ui.save) self.command(.save_settings) catch |err| {
                 self.failure = err;
                 self.running = false;
             };

@@ -26,7 +26,7 @@ assert 'b.dependency("md4c"' not in (root/'frontend/core-build.zig').read_text()
 patches=sorted((root/'frontend/patches/zigmark').glob('*.patch'))
 with tempfile.TemporaryDirectory() as directory:
     output=Path(directory)/'generated'
-    command=['python3',str(root/'scripts/prepare-zigmark.py'),str(root/'modules/zigmark/src'),str(output),*[str(p) for p in patches]]
+    command=['python3',str(root/'tools/scripts/prepare-zigmark.py'),str(root/'modules/zigmark/src'),str(output),*[str(p) for p in patches]]
     subprocess.run(command,check=True)
     def digest():return {str(p.relative_to(output)):hashlib.sha256(p.read_bytes()).hexdigest() for p in output.rglob('*') if p.is_file()}
     first=digest();subprocess.run(command,check=True);assert digest()==first

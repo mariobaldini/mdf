@@ -20,7 +20,7 @@ versions = re.findall(r'GLIBC_([0-9.]+)', subprocess.check_output(['readelf', '-
 maximum = max(tuple(map(int, version.split('.'))) for version in versions)
 assert maximum <= (2, 38), f'Executable needs glibc {maximum}; installer/packages promise 2.38'
 print('PASS: executable GLIBC symbol requirements stay within the declared 2.38 minimum')
-spec=importlib.util.spec_from_file_location('mdf_profile','scripts/profile.py')
+spec=importlib.util.spec_from_file_location('mdf_profile','tools/scripts/profile.py')
 profile=importlib.util.module_from_spec(spec);spec.loader.exec_module(profile)
 image=profile.elf_file(Path('build/mdf'))
 assert '.mdf_text' not in {s['name'] for s in image['sections']}, 'FLTK uses its bundled Pango frontend, not the experimental text module'

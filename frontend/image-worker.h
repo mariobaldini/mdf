@@ -3,8 +3,8 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-/* Input bytes and font descriptors are borrowed until join/destroy. Results
-   transfer their malloc-owned pixels once through pop. */
+/* Inputs stay borrowed until join/destroy. A nonzero pending limit enables
+   bounded streaming; pop transfers each malloc-owned result exactly once. */
 struct MdfImageInput {
   int index;
   uint32_t kind; /* 0: encoded raster, 1: Mermaid, 2: SVG */
@@ -23,12 +23,13 @@ struct MdfPreparedImage {
 };
 void *mdf_image_worker_create(const struct MdfImageInput *, size_t, size_t limit,
     void (*notify)(void), int dark, const int *font_fds, size_t font_count,
-    int allow_diagrams, MdfBuiltinFont, int profile);
+    int allow_diagrams, MdfBuiltinFont, int profile, size_t pending_limit);
 void mdf_image_worker_destroy(void *);
 void mdf_image_worker_allow_diagrams(void *);
 int mdf_image_worker_complete(void *);
 int mdf_image_worker_join(void *);
 int mdf_image_worker_pop(void *, struct MdfPreparedImage *);
+size_t mdf_image_worker_pending(void *);
 uint64_t mdf_image_worker_first_diagram(void *);
 #ifdef __cplusplus
 }

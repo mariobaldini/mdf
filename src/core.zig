@@ -272,6 +272,18 @@ export fn mdf_core_document_text(self: *Core) DocumentText {
     return .{ .text = borrowed(doc.rendered.text), .starts = doc.rendered.starts.ptr,
         .count = doc.rendered.starts.len, .styles = doc.rendered.styles, .flags = doc.rendered.flags };
 }
+export fn mdf_core_find_anchor(self: *Core, ptr: ?[*]const u8, len: usize, output: ?*usize) bool {
+    const result = output orelse return false;
+    if (ptr == null and len != 0) return false;
+    const doc = self.doc orelse return false;
+    const index = doc.findAnchor(if (ptr) |bytes| bytes[0..len] else "") orelse return false;
+    result.* = index;
+    return true;
+}
+export fn mdf_core_source(self: *Core) Buffer {
+    const doc = self.doc orelse return .{};
+    return borrowed(doc.source);
+}
 const FloatBuffer = extern struct { data: ?[*]f32 = null, count: usize = 0 };
 export fn mdf_core_table_columns(self: *Core, index: usize, width: f32, zoom: f32, wrap: bool, mono_ready: bool, callback: measurement.Measure, context: ?*anyopaque, depth: usize, output: *FloatBuffer) bool {
     output.* = .{};
@@ -381,7 +393,7 @@ export fn mdf_core_settings_update(self: *Core, ptr: [*]const u8, len: usize) Bu
     self.values.font_size = std.math.clamp(self.values.font_size, 8, 72);
     self.loader.setAutoReload(self.values.auto_reload);
     if (self.recorder == null) if (self.store) |*store| {
-        if (self.values.save_settings_across_sessions) store.save(self.values) catch |err| return failure(err) else store.clear() catch |err| return failure(err);
+        store.save(if (self.values.save_settings_across_sessions) self.values else .{ .save_settings_across_sessions = false }) catch |err| return failure(err);
     };
     return json(self.values);
 }
@@ -433,6 +445,48 @@ export fn mdf_core_profile(self: *Core) Buffer {
     return json(.{ .events = snapshot.events, .dropped_events = snapshot.dropped, .usage = c.mdf_get_profile_usage() });
 }
 
+test "settings save by default and preserve an explicit opt-out across launches" {
+    var template = "/tmp/mdf-settings-core-XXXXXX".*;
+    const home = c.mkdtemp(&template) orelse return error.TestDirectoryFailed;
+    const path = std.mem.span(home);
+    defer std.Io.Dir.cwd().deleteTree(std.testing.io, path) catch {};
+    const wake = struct { fn call() callconv(.c) void {} }.call;
+    const update = struct {
+        fn call(core: *Core, value: []const u8) !void {
+            const result = mdf_core_settings_update(core, value.ptr, value.len);
+            defer mdf_buffer_free(result);
+            try std.testing.expect(result.ptr != null);
+            try std.testing.expect(std.mem.indexOf(u8, result.ptr.?[0..result.len], "\"err\"") == null);
+        }
+    }.call;
+    {
+        const core = mdf_core_create(path.ptr, path.len, false, 0, wake) orelse return error.CoreCreationFailed;
+        defer mdf_core_destroy(core);
+        try std.testing.expect(core.values.save_settings_across_sessions);
+        try update(core, "{\"font_size\":18,\"theme\":\"paper\"}");
+    }
+    {
+        const core = mdf_core_create(path.ptr, path.len, false, 0, wake) orelse return error.CoreCreationFailed;
+        defer mdf_core_destroy(core);
+        try std.testing.expect(core.values.save_settings_across_sessions);
+        try std.testing.expectEqual(@as(u16, 18), core.values.font_size);
+        try std.testing.expectEqual(settings.Preset.paper, core.values.theme);
+        try update(core, "{\"save_settings_across_sessions\":false,\"font_size\":55,\"theme\":\"terminal\"}");
+    }
+    {
+        const core = mdf_core_create(path.ptr, path.len, false, 0, wake) orelse return error.CoreCreationFailed;
+        defer mdf_core_destroy(core);
+        try std.testing.expectEqualDeep(settings.Values{ .save_settings_across_sessions = false }, core.values);
+        try update(core, "{\"save_settings_across_sessions\":true,\"font_size\":19}");
+    }
+    {
+        const core = mdf_core_create(path.ptr, path.len, false, 0, wake) orelse return error.CoreCreationFailed;
+        defer mdf_core_destroy(core);
+        try std.testing.expect(core.values.save_settings_across_sessions);
+        try std.testing.expectEqual(@as(u16, 19), core.values.font_size);
+    }
+}
+
 test "C boundary preserves settings and rejects unsafe links" {
     const self = mdf_core_create("", 0, false, 0, struct {
         fn wake() callconv(.c) void {}
@@ -442,7 +496,7 @@ test "C boundary preserves settings and rejects unsafe links" {
     const updated = mdf_core_settings_update(self, value, value.len);
     defer mdf_buffer_free(updated);
     try std.testing.expectEqual(@as(u16, 18), self.values.font_size);
-    try std.testing.expect(self.values.dark_mode and !self.values.save_settings_across_sessions);
+    try std.testing.expect(self.values.dark_mode and self.values.save_settings_across_sessions);
     const legacy = "{\"font_family\":\"unknown-legacy-family\",\"font_size\":19,\"theme\":\"terminal\",\"dark_mode\":true,\"show_preview\":false}";
     const migrated = mdf_core_settings_update(self, legacy, legacy.len);
     defer mdf_buffer_free(migrated);
@@ -474,6 +528,48 @@ test "typed document views preserve styles tasks tables and bounds" {
     try std.testing.expect(mdf_core_span(self, 3, 1, 0).flags & 4 != 0);
     try std.testing.expect(mdf_core_block(self, 100).kind.ptr == null);
     try std.testing.expect(mdf_core_span(self, 3, 100, 0).text.ptr == null);
+}
+
+test "core anchor lookup accepts HTML aliases and generated heading IDs" {
+    const self = mdf_core_create("", 0, false, 0, struct {
+        fn wake() callconv(.c) void {}
+    }.wake).?;
+    defer mdf_core_destroy(self);
+    var index: usize = 999;
+    try std.testing.expect(!mdf_core_find_anchor(self, "alias", 5, &index));
+    self.doc = try document.Document.parseDeferred(a, "<a id='alias'></a>\n\n## Descriptive heading\n", "anchors.md");
+    try std.testing.expect(mdf_core_find_anchor(self, "alias", 5, &index));
+    const expected = index;
+    try std.testing.expect(mdf_core_find_anchor(self, "descriptive-heading", 19, &index));
+    try std.testing.expectEqual(expected, index);
+    try std.testing.expect(!mdf_core_find_anchor(self, "missing", 7, &index));
+    try std.testing.expect(!mdf_core_find_anchor(self, null, 1, &index));
+    try std.testing.expect(!mdf_core_find_anchor(self, "alias", 5, null));
+    self.doc.?.deinit();
+    self.doc = null;
+    self.doc = try document.Document.parseDeferred(a, "# Replacement\n", "next.md");
+    try std.testing.expect(!mdf_core_find_anchor(self, "alias", 5, &index));
+    try std.testing.expect(mdf_core_find_anchor(self, "replacement", 11, &index));
+}
+
+test "core source view borrows original Markdown rather than transformed text" {
+    const self = mdf_core_create("", 0, false, 0, struct {
+        fn wake() callconv(.c) void {}
+    }.wake).?;
+    defer mdf_core_destroy(self);
+    try std.testing.expectEqual(@as(usize, 0), mdf_core_source(self).len);
+    const original = "# Raw **source**\r\n\r\n<a id='alias'></a>\r\n\r\nText.[^n]\r\n\r\n[^n]: Note\r\n";
+    var input = original.*;
+    self.doc = try document.Document.parseDeferred(a, &input, "source.md");
+    @memset(&input, 'x');
+    const source = mdf_core_source(self);
+    try std.testing.expectEqualStrings(original, source.ptr.?[0..source.len]);
+    try std.testing.expect(source.ptr.? == self.doc.?.source.ptr);
+    self.doc.?.deinit();
+    self.doc = null;
+    self.doc = try document.Document.parseDeferred(a, "# New document\n", "new.md");
+    const updated = mdf_core_source(self);
+    try std.testing.expectEqualStrings("# New document\n", updated.ptr.?[0..updated.len]);
 }
 test "typed preview views preserve wrapped Unicode and reject stale or out-of-range access" {
     const self = mdf_core_create("", 0, false, 0, struct {

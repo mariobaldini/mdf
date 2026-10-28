@@ -15,17 +15,18 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = yaml.load((ROOT / '.github/workflows/build-release.yml').read_text(), Loader=yaml.BaseLoader)
-SPEC = importlib.util.spec_from_file_location('assemble_release', ROOT / 'scripts/assemble-release.py')
+SPEC = importlib.util.spec_from_file_location('assemble_release', ROOT / 'tools/scripts/assemble-release.py')
 ASSEMBLER = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(ASSEMBLER)
 
 
-def enabled(entry, event, ref, build='success'):
+def enabled(entry, event, ref, build='success', release='success', distro='fedora'):
     expression = entry.get('if', 'True').removeprefix('${{').removesuffix('}}').strip()
     expression = expression.replace('&&', ' and ').replace('||', ' or ')
     return bool(eval(expression, {'__builtins__': {}}, {
         'True': True, 'github': SimpleNamespace(event_name=event, ref=ref),
-        'needs': SimpleNamespace(build=SimpleNamespace(result=build)),
+        'needs': SimpleNamespace(build=SimpleNamespace(result=build), release=SimpleNamespace(result=release)),
+        'matrix': SimpleNamespace(distro=distro),
         'startsWith': str.startswith,
     }))
 
@@ -49,6 +50,7 @@ class WorkflowTests(unittest.TestCase):
                 self.assertEqual('bash tests/package-desktop.sh' in commands, publish)
                 self.assertEqual(any(step.get('uses', '').startswith('actions/upload-artifact@') for step in steps), publish)
                 self.assertEqual(enabled(WORKFLOW['jobs']['release'], event, ref), publish)
+                self.assertEqual(enabled(WORKFLOW['jobs']['dnf-repository'], event, ref), publish)
 
     def test_two_independent_builds_must_both_succeed_before_publication(self):
         build = WORKFLOW['jobs']['build']
@@ -59,13 +61,19 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotIn('continue-on-error', build)
         for result in ('failure', 'cancelled', 'skipped'):
             self.assertFalse(enabled(WORKFLOW['jobs']['release'], 'push', 'refs/heads/main', result))
-        self.assertEqual(set(WORKFLOW['jobs']), {'build', 'release'})
+        self.assertEqual(set(WORKFLOW['jobs']), {'build', 'release', 'dnf-repository'})
+        for result in ('failure', 'cancelled', 'skipped'):
+            self.assertFalse(enabled(WORKFLOW['jobs']['dnf-repository'], 'push', 'refs/heads/main', release=result))
 
     def test_permissions_and_build_dependencies(self):
         self.assertEqual(WORKFLOW['permissions']['contents'], 'read')
         self.assertEqual(WORKFLOW['jobs']['release']['needs'], 'build')
         self.assertEqual(WORKFLOW['jobs']['release']['permissions']['contents'], 'write')
         self.assertNotIn('concurrency', WORKFLOW['jobs']['release'])
+        repository = WORKFLOW['jobs']['dnf-repository']
+        self.assertEqual(repository['needs'], 'release')
+        self.assertEqual(repository['permissions'], {'contents': 'read', 'pages': 'write', 'id-token': 'write'})
+        self.assertEqual(repository['concurrency'], {'group': 'mdf-dnf-pages', 'cancel-in-progress': 'false'})
 
     def test_publication_downloads_and_verifies_both_artifacts(self):
         steps = WORKFLOW['jobs']['release']['steps']
@@ -74,7 +82,25 @@ class WorkflowTests(unittest.TestCase):
                          {'mdf-linux-x86_64-fedora': 'build/fedora', 'mdf-linux-x86_64-ubuntu': 'build/ubuntu'})
         assemble = next(step for step in steps if 'assemble-release.py' in step.get('run', ''))
         publish = next(step for step in steps if 'publish-release.sh' in step.get('run', ''))
-        self.assertLess(steps.index(assemble), steps.index(publish))
+        sign = next(step for step in steps if 'rpm-repository.py sign-release' in step.get('run', ''))
+        self.assertLess(steps.index(assemble), steps.index(sign))
+        self.assertLess(steps.index(sign), steps.index(publish))
+        self.assertEqual(sign['env']['MDF_RPM_GPG_PRIVATE_KEY'], '${{ secrets.MDF_RPM_GPG_PRIVATE_KEY }}')
+
+    def test_repository_uses_current_releases_and_tests_before_deployment(self):
+        steps = WORKFLOW['jobs']['dnf-repository']['steps']
+        commands = [step.get('run', '') for step in steps]
+        build = commands.index('python3 tools/scripts/rpm-repository.py build --pages-url "$MDF_PAGES_URL"')
+        deploy = next(i for i, step in enumerate(steps) if step.get('uses', '').startswith('actions/deploy-pages@'))
+        self.assertLess(build, deploy)
+        test = next(step for step in WORKFLOW['jobs']['build']['steps'] if step.get('run') == 'make test-dnf-repo')
+        for event, ref in [('push', 'refs/heads/main'), ('push', 'refs/heads/dev'), ('pull_request', 'refs/pull/1/merge')]:
+            self.assertTrue(enabled(test, event, ref, distro='fedora'))
+            self.assertFalse(enabled(test, event, ref, distro='ubuntu'))
+        self.assertNotIn('env', test)
+        self.assertNotIn('RELEASE_TAG', WORKFLOW['jobs']['dnf-repository'].get('env', {}))
+        self.assertNotIn('GH_TOKEN', steps[-1].get('env', {}))
+        self.assertIn('dnf -y --refresh install mdf', steps[-1]['run'])
 
     def test_container_trust_allows_checkout_and_nested_submodules_only(self):
         steps = WORKFLOW['jobs']['build']['steps']
@@ -142,7 +168,7 @@ class WorkflowTests(unittest.TestCase):
     def test_invalid_package_revision_stops_before_packaging(self):
         with tempfile.TemporaryDirectory() as directory:
             for revision in ('0', '01', '-1', '42x', '42\n7'):
-                result = subprocess.run(['sh', str(ROOT / 'scripts/packages.sh'), directory, '0.2.0'],
+                result = subprocess.run(['sh', str(ROOT / 'tools/scripts/packages.sh'), directory, '0.2.0'],
                                         cwd=ROOT, env={**os.environ, 'MDF_PACKAGE_RELEASE': revision},
                                         text=True, capture_output=True)
                 self.assertNotEqual(result.returncode, 0)
@@ -200,11 +226,12 @@ class PublishTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory(prefix='mdf-ci-release-')
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
-        (self.root / 'scripts').mkdir()
+        (self.root / 'tools/scripts').mkdir(parents=True)
         (self.root / 'bin').mkdir()
         self.bundle = self.root / 'build'
         self.bundle.mkdir()
-        shutil.copy2(ROOT / 'scripts/publish-release.sh', self.root / 'scripts')
+        shutil.copy2(ROOT / 'tools/scripts/publish-release.sh', self.root / 'tools/scripts')
+        shutil.copy2(ROOT / 'tools/scripts/rpm-repository.py', self.root / 'tools/scripts')
         self.files = ['mdf', 'mdf-0.2.0-42.x86_64.rpm', 'mdf_0.2.0-42_amd64.deb']
         for name in self.files:
             (self.bundle / name).write_bytes(('payload ' + name).encode())
@@ -237,7 +264,7 @@ if len(args) > 1 and args[1] == os.environ.get('MDF_TEST_GH_FAIL'):
                     'MDF_TEST_GH_LOG': str(self.log)}
 
     def run_publish(self, argument='v0.2.0-42'):
-        return subprocess.run(['bash', str(self.root / 'scripts/publish-release.sh'), argument],
+        return subprocess.run(['bash', str(self.root / 'tools/scripts/publish-release.sh'), argument],
                               env=self.env, text=True, capture_output=True)
 
     def calls(self):

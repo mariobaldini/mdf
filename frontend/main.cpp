@@ -1,4 +1,6 @@
 #include "view.hpp"
+#include "source-view.hpp"
+#include "../tests/source-view.hpp"
 #include "bundled-fonts.hpp"
 #include "startup.hpp"
 #include "diagrams.hpp"
@@ -132,7 +134,11 @@ struct App {
   Fl_Menu_Bar *menu;
   Fl_Group *toolbar;
   IconButton *toc_button, *theme_button, *wrap_button;
-  Fl_Button *width_button, *preview_button;
+  Fl_Button *width_button, *preview_button, *source_button;
+  SourceView *source_view = nullptr;
+  bool source_mode = false;
+  uint64_t source_revision = 0;
+  std::string pending_anchor;
   Fl_Button *font_decrease_button, *font_reset_button, *font_increase_button;
   Fl_Box *font_group_start, *font_group_end;
   Fl_Box *status, *toc_title;
@@ -179,6 +185,7 @@ struct App {
   float navigation_width = 0, navigation_zoom = 0;
   std::string capture, capture_anchor, initial_path, error;
   std::vector<double> scroll_draw_ms;
+  std::vector<double> scroll_settled_ms;
   Json interaction_profile;
   Json startup_usage;
   uint64_t startup_frames = 0, scroll_frames = 0;
@@ -214,6 +221,7 @@ struct App {
     for (auto *divider : {font_group_start, font_group_end})
       divider->box(FL_FLAT_BOX);
     preview_button = new Fl_Button(window->w() - 90, 35, 80, 32, "Preview");
+    source_button = new Fl_Button(window->w() - 230, 35, 128, 32, "View Source");
     toolbar->resizable(nullptr);
     toolbar->end();
     toc_title = new Fl_Box(14, 82, 200, 24, "Contents");
@@ -264,7 +272,7 @@ struct App {
     window->end();
     for (auto *w :
          {(Fl_Widget *)menu, (Fl_Widget *)toc_button, (Fl_Widget *)theme_button,
-          (Fl_Widget *)width_button, (Fl_Widget *)preview_button,
+          (Fl_Widget *)width_button, (Fl_Widget *)preview_button, (Fl_Widget *)source_button,
           (Fl_Widget *)font_decrease_button, (Fl_Widget *)font_reset_button,
           (Fl_Widget *)font_increase_button, (Fl_Widget *)status,
           (Fl_Widget *)wrap_button,
@@ -279,6 +287,7 @@ struct App {
     bind(font_reset_button, "font-reset");
     bind(font_increase_button, "larger");
     bind(preview_button, "preview");
+    bind(source_button, "source");
     bind(wrap_button, "line-wrap");
     add_menu("File/Open…", FL_CTRL + 'o', "open");
     add_menu("File/Reload", FL_CTRL + 'r', "reload");
@@ -374,11 +383,13 @@ struct App {
   }
   void layout() {
     int W = window->w(), H = window->h(),
-        left = settings.toc ? std::min(220, int(W * .22)) : 0,
-        right = settings.preview ? std::min(130, int(W * .12)) : 0, Y = 74,
+        preview_width = std::clamp(int(W * .12), 64, 130),
+        left = settings.toc && !source_mode ? std::min(220, int(W * .22)) : 0,
+        right = settings.preview && !source_mode ? preview_width : 0,
+        Y = W < 530 ? 112 : 74,
         view_h = std::max(1, H - Y - 24);
     menu->resize(0, 0, W, 28);
-    toolbar->resize(0, 28, W, 46);
+    toolbar->resize(0, 28, W, Y - 28);
     toc_button->resize(10, 35, 36, 32);
     theme_button->resize(53, 35, 36, 32);
     width_button->resize(96, 35, 64, 32);
@@ -388,10 +399,12 @@ struct App {
     font_increase_button->resize(252, 35, 32, 32);
     font_group_end->resize(291, 40, 1, 22);
     wrap_button->resize(298, 35, 28, 32);
-    preview_button->resize(W - 90, 35, 80, 32);
+    const int button_y = W < 530 ? 73 : 35;
+    preview_button->resize(W - preview_width, button_y, preview_width, 32);
+    source_button->resize(W - preview_width - 134, button_y, 128, 32);
     toc_title->resize(14, Y + 8, std::max(1, left - 20), 24);
     toc->resize(0, Y + 36, left, std::max(1, view_h - 36));
-    if (settings.toc) {
+    if (settings.toc && !source_mode) {
       toc->show();
       toc_title->show();
     } else {
@@ -402,17 +415,28 @@ struct App {
     reader->resize(left, Y, std::max(1, W - left - right - scrollbar_width),
                    std::max(1, view_h - (horizontal ? scrollbar_width : 0)));
     horizontal_scrollbar->resize(reader->x(), reader->y() + reader->h(), reader->w(), scrollbar_width);
-    if (!horizontal) horizontal_scrollbar->hide();
+    if (!horizontal || source_mode) horizontal_scrollbar->hide();
     else horizontal_scrollbar->show();
     scrollbar->resize(W - right - scrollbar_width, Y, scrollbar_width, view_h);
     // The scrollbar's arrow buttons sit outside its document track.
     const int inset = view_h >= 3 * scrollbar_width ? scrollbar_width : 0;
     minimap->resize(W - right, Y + inset, std::max(1, right),
                     std::max(1, view_h - 2 * inset));
-    if (settings.preview)
+    if (settings.preview && !source_mode)
       minimap->show();
     else
       minimap->hide();
+    if (source_mode && source_view) {
+      reader->hide();
+      scrollbar->hide();
+      source_view->resize(0, Y, W, view_h);
+      source_view->show();
+      toc_button->deactivate(); preview_button->deactivate(); width_button->deactivate();
+    } else {
+      if (source_view) source_view->hide();
+      reader->show();
+      toc_button->activate(); preview_button->activate(); width_button->activate();
+    }
     status->resize(10, H - 24, W - 20, 24);
     window->redraw();
   }
@@ -445,7 +469,7 @@ struct App {
     horizontal_scrollbar->color(p.panel);
     for (auto *w :
          {static_cast<Fl_Button *>(toc_button),
-          static_cast<Fl_Button *>(theme_button), width_button, preview_button,
+          static_cast<Fl_Button *>(theme_button), width_button, preview_button, source_button,
           font_decrease_button, font_reset_button, font_increase_button,
           static_cast<Fl_Button *>(wrap_button)}) {
       w->labelsize(14);
@@ -482,6 +506,8 @@ struct App {
                                         : "Switch to dark mode");
     width_button->copy_label(settings.width == "percent_100" ? "100%" : "80%");
     preview_button->tooltip(settings.preview ? "Hide preview" : "Show preview");
+    source_button->copy_label(source_mode ? "View Formatted" : "View Source");
+    if (source_view) source_view->configure(settings, p);
     for (auto pair :
          {std::pair<const char *, bool>{"View/Table of contents", settings.toc},
           {"View/Preview", settings.preview},
@@ -520,6 +546,7 @@ struct App {
     window->redraw();
   }
   void scroll_changed() {
+    if (source_mode) return;
     const bool horizontal = !settings.line_wrap || reader->max_horizontal_scroll() > 0;
     if (bool(horizontal_scrollbar->visible()) != horizontal) layout();
     const int position = reader->scroll;
@@ -544,6 +571,7 @@ struct App {
       if (toc_indices[i] <= index)
         row = i + 1;
     toc->select(row);
+    if (images_ready && !reader->rasters.empty()) wake();
   }
   void settings_changed(bool navigation = true) {
     settings.size = std::clamp(settings.size, 8, 72);
@@ -564,9 +592,10 @@ struct App {
         std::abs(navigation_width - reader->content_width) >= 1 || navigation_zoom != reader->zoom()))
       start_navigation();
   }
-  void open(const std::string &path) {
+  void open(const std::string &path, const std::string &anchor = {}) {
     try {
       core.open(path);
+      pending_anchor = anchor;
       message("Opening " + path + "…");
     } catch (std::exception &e) {
       message(e.what());
@@ -656,6 +685,14 @@ struct App {
           navigation_started = false;
           start_navigation(true);
           reader->document(doc, core, fonts);
+          if (source_view) {
+            if (source_mode) { source_view->set_source(view_text(core.source())); source_revision = reader->revision; }
+            else { source_view->set_source({}); source_revision = 0; }
+          }
+          if (!pending_anchor.empty()) {
+            if (auto index = core.anchor_index(pending_anchor)) reader->jump(int(*index));
+            pending_anchor.clear();
+          }
           trace("document model accepted");
           set_title(reader->path);
           toc->clear();
@@ -683,7 +720,7 @@ struct App {
             continue;
           }
           if (reader->blocks[i].image_src.empty()) continue;
-          if (reader->images.count(i) && !(refresh_diagram_fonts && reader->diagram_sizes.count(i))) continue;
+          if ((reader->images.count(i) || reader->rasters.count(i)) && !(refresh_diagram_fonts && reader->diagram_sizes.count(i))) continue;
           auto bytes = core.image(i);
           if (bytes.ptr && bytes.len >= 4 &&
               ((bytes.ptr[0] == 137 && bytes.ptr[1] == 'P') ||
@@ -700,7 +737,8 @@ struct App {
         }
         if (inputs.empty()) images_ready = true;
         else image_worker.start(reader->revision, std::move(inputs), Fl_RGB_Image::max_size(), wake, settings.dark,
-                                use_diagram_fallback ? reader->fallback_font.resources() : nullptr, first_document != 0);
+                                use_diagram_fallback ? reader->fallback_font.resources() : nullptr, first_document != 0,
+                                ImageWorker::pending_budget);
         refresh_diagram_fonts = false;
         images_started = true;
       }
@@ -747,12 +785,11 @@ struct App {
           message("Navigation preview unavailable");
         }
       }
-      if (images_started && !images_ready && image_worker.complete()) {
+      if (images_started && !images_ready && (image_worker.complete() || image_worker.pending())) {
         PHASE("Adopt decoded image pixels");
         reader->horizontal_dirty = true;
         PROFILE_MARK("Accept images");
-        if (!first_diagram_ns) first_diagram_ns = image_worker.first_diagram_ns;
-        for (auto &prepared : image_worker.take()) {
+        for (auto &prepared : image_worker.take(false)) {
           if (image_worker.revision != reader->revision) continue;
           if (prepared.diagram) {
             reader->diagram_errors.erase(prepared.index);
@@ -767,15 +804,42 @@ struct App {
             }
             reader->diagram_sizes[prepared.index] = {prepared.logical_width, prepared.logical_height};
           }
+          if (!prepared.diagram) {
+            if (prepared.pixels->image.data) reader->adopt_raster(prepared.index, std::move(prepared.pixels));
+            else if (auto found = reader->rasters.find(prepared.index); found != reader->rasters.end()) {
+              found->second.failed = true;
+              ++reader->raster_reload_failures;
+              message(prepared.error);
+            }
+            continue;
+          }
           const auto &pixels = prepared.pixels->image;
           reader->images[prepared.index] = std::make_unique<Fl_RGB_Image>(pixels.data, pixels.width, pixels.height, pixels.channels);
           reader->image_pixels[prepared.index] = std::move(prepared.pixels);
           reader->cache.erase(prepared.index);
         }
-        images_ready = !refresh_diagram_fonts;
-        if (refresh_diagram_fonts) images_started = false;
+        reader->trim_rasters();
+        if (image_worker.complete() && !image_worker.pending()) {
+          if (!first_diagram_ns) first_diagram_ns = image_worker.first_diagram_ns;
+          images_ready = !refresh_diagram_fonts;
+          if (refresh_diagram_fonts) images_started = false;
+        }
         reader->redraw();
         minimap->redraw();
+      }
+      if (images_ready && first_document && navigation_ready && !reader->rasters.empty()) {
+        reader->trim_rasters();
+        std::vector<EncodedImage> inputs;
+        for (int index : reader->wanted_rasters()) {
+          if (reader->images.count(index)) continue;
+          const auto bytes = core.image(index);
+          if (bytes.ptr && bytes.len) inputs.push_back({index, {bytes.ptr, bytes.ptr + bytes.len}});
+        }
+        if (!inputs.empty()) {
+          image_worker.start(reader->revision, std::move(inputs), Fl_RGB_Image::max_size(), wake, settings.dark,
+                             nullptr, true, ImageWorker::pending_budget);
+          images_ready = false;
+        }
       }
       if (navigation_ready && images_ready && stage != ready) {
         const bool transition = stage != chrome;
@@ -901,7 +965,7 @@ struct App {
     if (submitted.fallback && submitted.fallback == fallback_generation &&
         submitted.revision == reader->revision && !fallback_frame_ns)
       fallback_frame_ns = submitted_at;
-    if (stage == chrome && navigation_ready && images_ready && submitted.navigation &&
+    if (stage == chrome && navigation_ready && images_ready && submitted.navigation && !reader->visible_rasters_missing() &&
                fl_mdf_wayland_input_ready() &&
                submitted.revision == reader->revision &&
                (!mono_requested || (mono_finished && submitted.mono_finished)) &&
@@ -982,13 +1046,9 @@ struct App {
       auto link = core.link(url);
       auto kind = text(link, "kind"), value = text(link, "url");
       if (kind == "fragment") {
-        for (int i = 0; i < (int)reader->blocks.size(); ++i)
-          if (reader->blocks[i].anchor == value) {
-            reader->jump(i);
-            break;
-          }
+        if (auto index = core.anchor_index(value)) reader->jump(int(*index));
       } else if (kind == "local")
-        open(value);
+        open(value, text(link, "anchor"));
       else if (kind == "web") {
         pid_t pid = fork();
         if (!pid) {
@@ -1021,13 +1081,32 @@ struct App {
         open(reader->path);
       return;
     }
+    if (name == "source") {
+      source_mode = !source_mode;
+      if (source_mode) {
+        if (!source_view) {
+          window->begin();
+          source_view = new SourceView(reader->x(), reader->y(), reader->w(), reader->h(), settings, reader->palette);
+          window->end();
+        }
+        if (source_revision != reader->revision) {
+          source_view->set_source(view_text(core.source()));
+          source_revision = reader->revision;
+        }
+      }
+      apply_chrome(); layout();
+      if (source_mode) source_view->take_focus();
+      else { reader->take_focus(); scroll_changed(); }
+      return;
+    }
     if (name == "copy") {
-      auto value = reader->selected();
+      auto value = source_mode && source_view ? source_view->selected() : reader->selected();
       Fl::copy(value.c_str(), value.size(), 1);
       return;
     }
     if (name == "select-all") {
-      reader->select_all();
+      if (source_mode && source_view) source_view->select_all();
+      else reader->select_all();
       return;
     }
     if (name == "about") {
@@ -1083,6 +1162,10 @@ struct App {
     settings_changed(name != "line-wrap");
   }
   int shortcut(int e) {
+    if (source_mode && (e == FL_SHORTCUT || e == FL_KEYDOWN) && Fl::event_state(FL_CTRL)) {
+      if (Fl::event_key() == 'c') { action("copy"); return 1; }
+      if (Fl::event_key() == 'a') { action("select-all"); return 1; }
+    }
     if (e == FL_SHORTCUT && Fl::event_state(FL_CTRL) &&
         Fl::event_key() == '+') {
       action("larger");
@@ -1092,13 +1175,13 @@ struct App {
   }
   void capture_frame(const std::string &file) {
     if (!capture_anchor.empty()) {
-      int target = -1;
-      for (int i = 0; i < (int)reader->blocks.size(); ++i)
-        if (reader->blocks[i].anchor == capture_anchor) { target = i; break; }
+      const auto found = core.anchor_index(capture_anchor);
+      const int target = found ? int(*found) : -1;
       if (target < 0)
         throw std::runtime_error("Screenshot heading not found: " + capture_anchor);
       reader->jump(target);
       Fl::flush();
+      settle_visible_rasters();
       if (reader->offsets[target] >= reader->scroll + reader->h() ||
           reader->offsets[target] + reader->heights[target] <= reader->scroll)
         throw std::runtime_error("Screenshot heading is outside the viewport");
@@ -1123,6 +1206,16 @@ struct App {
     output.close();
     if (!output) throw std::runtime_error("Cannot save screenshot");
   }
+  void settle_visible_rasters() {
+    const auto deadline = mdf_now_ns() + 5'000'000'000ull;
+    while (reader->visible_rasters_missing()) {
+      ensure(mdf_now_ns() < deadline && !failed, "Visible raster reload must finish before settled-image timing");
+      poll();
+      Fl::wait(.001);
+      Fl::flush();
+    }
+    ensure(!reader->raster_reload_failures, "Profiled raster reloads must preserve valid source pixels");
+  }
   void measure_scroll() {
     PHASE("Measure interactive document scrolling");
     int count = 80;
@@ -1136,6 +1229,8 @@ struct App {
       ensure(reader->paints > paints,
              "Scrolling must draw the reader viewport");
       scroll_draw_ms.push_back((mdf_now_ns() - start) / 1e6);
+      settle_visible_rasters();
+      scroll_settled_ms.push_back((mdf_now_ns() - start) / 1e6);
     }
     reader->move_scroll(old);
     Fl::flush();
@@ -1152,7 +1247,7 @@ struct App {
     };
     auto series = [&](const char *name, int count, auto action) {
       const auto before = counters();
-      std::vector<double> handler, flush;
+      std::vector<double> handler, flush, settled;
       for (int i = 0; i < count; ++i) {
         const auto start = mdf_now_ns();
         const auto paints = reader->paints;
@@ -1162,13 +1257,15 @@ struct App {
         Fl::flush();
         ensure(reader->paints > paints, "Profiled interaction must paint the reader");
         flush.push_back((mdf_now_ns() - start) / 1e6);
+        settle_visible_rasters();
+        settled.push_back((mdf_now_ns() - start) / 1e6);
       }
       const auto after = counters();
       Json counts;
       const char *keys[] = {"measurement_hits", "measurement_misses", "layout_builds",
         "layout_invalidations", "font_invalidations", "minimap_atlas_builds", "minimap_layout_builds"};
       for (size_t i = 0; i < before.size(); ++i) counts.set(keys[i], after[i] - before[i]);
-      interaction_profile.set(name, {{"handler_ms", handler}, {"to_flush_ms", flush}, {"counters", counts}});
+      interaction_profile.set(name, {{"handler_ms", handler}, {"to_flush_ms", flush}, {"to_settled_ms", settled}, {"counters", counts}});
     };
     const float old_scroll = reader->scroll;
     series("repeated_scroll", 120, [&](int i) {
@@ -1220,7 +1317,13 @@ struct App {
     metrics.set("line_wrap", settings.line_wrap);
     metrics.set("document_frames", document_frames);
     metrics.set("total_frames", startup_frames);
-    metrics.set("decoded_images", reader->images.size() - reader->diagram_sizes.size());
+    metrics.set("decoded_images", reader->rasters.size());
+    metrics.set("cached_raster_images", reader->image_pixels.size() - reader->diagram_sizes.size());
+    metrics.set("cached_raster_bytes", reader->raster_bytes);
+    metrics.set("raster_cache_budget_bytes", DocumentView::raster_budget);
+    metrics.set("image_pending_budget_bytes", ImageWorker::pending_budget);
+    metrics.set("raster_cache_miss_paints", reader->raster_cache_miss_paints);
+    metrics.set("raster_reload_failures", reader->raster_reload_failures);
     size_t mermaid_count = 0;
     for (const auto &[index, dimensions] : reader->diagram_sizes)
       if (reader->blocks[index].mermaid()) ++mermaid_count;
@@ -1322,6 +1425,7 @@ struct App {
                    {"dropped_events", result.get("dropped_events")}};
     if (!scroll_draw_ms.empty()) {
       output.set("scroll_draw_ms", scroll_draw_ms);
+      output.set("scroll_settled_ms", scroll_settled_ms);
       output.set("scroll_frames", scroll_frames);
       output.set("interaction_profile", interaction_profile);
     }
@@ -1332,6 +1436,9 @@ struct App {
       throw std::runtime_error(message);
   }
   void run_tests() {
+    const auto *save_item = menu->find_item("Settings/Save settings across sessions");
+    ensure(save_item && bool(save_item->value()) == settings.save,
+           "The saving menu reflects the current setting");
     ensure(first_document_commit && first_document_flush &&
                first_document_commit <= first_document_flush && first_document_flush <= first_document,
            "Markdown pixels are committed and flushed before viewport readiness");
@@ -1508,6 +1615,39 @@ struct App {
     check_text_layout(*reader, [this](bool condition, const char *message) { ensure(condition, message); });
     check_latin_boundaries(*reader, [this](bool condition, const char *message) { ensure(condition, message); });
     check_reflow_caches(*reader, [this](bool condition, const char *message) { ensure(condition, message); });
+    check_source_view(settings, reader->palette, [this](bool condition, const char *message) { ensure(condition, message); });
+    const auto previous_scroll = reader->scroll;
+    const auto previous_revision = reader->revision;
+    action("source");
+    ensure(source_mode && source_view && source_view->visible() && !reader->Fl_Widget::visible() &&
+           std::string(source_button->label()) == "View Formatted", "Source button opens the raw source");
+    source_view->select_all();
+    ensure(source_view->selected() == view_text(core.source()), "Source view displays the original Markdown bytes");
+    action("source");
+    ensure(!source_mode && reader->Fl_Widget::visible() && !source_view->visible() && reader->revision == previous_revision &&
+           std::string(source_button->label()) == "View Source", "Formatted view restores the existing document");
+    reader->move_scroll(previous_scroll);
+    if (!reader->rasters.empty()) {
+      const int index = reader->rasters.begin()->first;
+      const auto &original = reader->image_pixels.at(index)->image;
+      const size_t length = reader->image_pixels.at(index)->bytes();
+      const std::vector<unsigned char> pixels(original.data, original.data + length);
+      const int width = original.width, height = original.height, channels = original.channels;
+      reader->raster_bytes -= length;
+      reader->images.erase(index);
+      reader->image_pixels.erase(index);
+      reader->jump(index);
+      Fl::flush();
+      settle_visible_rasters();
+      ensure(reader->images.count(index) && reader->image_pixels.count(index), "Evicted visible raster reloads");
+      const auto &restored = reader->image_pixels.at(index)->image;
+      ensure(restored.width == width && restored.height == height && restored.channels == channels &&
+             std::memcmp(restored.data, pixels.data(), length) == 0, "Reloaded raster retains its full-resolution pixels");
+      reader->move_scroll(previous_scroll);
+      Fl::flush();
+    }
+
+    check_raster_cache(*reader, [this](bool condition, const char *message) { ensure(condition, message); });
     std::cout << "PASS: bounded text measurement cache, font invalidation and retained run metrics\n";
     if (reader->code_font.ready()) {
       Block block;
@@ -1772,9 +1912,10 @@ struct App {
                      font_increase_button->x() &&
                  font_increase_button->x() + font_increase_button->w() + 12 <=
                      wrap_button->x() &&
-                 wrap_button->x() + wrap_button->w() + 4 <=
-                     preview_button->x() &&
-                 preview_button->x() + preview_button->w() <= W - 10,
+                 (W < 530 || wrap_button->x() + wrap_button->w() + 4 <= source_button->x()) &&
+                 source_button->x() + source_button->w() + 4 <= preview_button->x() &&
+                 preview_button->x() + preview_button->w() == W &&
+                 preview_button->w() == minimap->w(),
              "Toolbar controls stay separated after resizing");
       ensure(scrollbar->w() == scrollbar_width &&
                  minimap->x() == scrollbar->x() + scrollbar->w() &&
@@ -1852,7 +1993,7 @@ struct App {
       }
     }
     action("reset");
-    ensure(settings.size == 12 && !settings.save &&
+    ensure(settings.size == 12 && settings.save &&
                settings.width == "percent_80",
            "Reset defaults");
     ensure(settings.line_wrap && !wrap_button->value() &&

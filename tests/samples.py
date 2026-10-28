@@ -10,14 +10,14 @@ import sys
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location('mdf_profile', ROOT/'scripts/profile.py')
+spec = importlib.util.spec_from_file_location('mdf_profile', ROOT/'tools/scripts/profile.py')
 profile = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(profile)
 
-small = ROOT/'SAMPLE.md'
-text_only = ROOT/'SAMPLE-SMALL.md'
-huge = ROOT/'SAMPLE-HUGE.md'
-extended = ROOT/'SAMPLE-EXTENDED.md'
+small = ROOT/'assets/samples/SAMPLE.md'
+text_only = ROOT/'assets/samples/SAMPLE-SMALL.md'
+huge = ROOT/'assets/samples/SAMPLE-HUGE.md'
+extended = ROOT/'assets/samples/SAMPLE-EXTENDED.md'
 
 
 def font_characters(path):
@@ -80,7 +80,7 @@ assert normal['missing_images'] == 1, 'The compact syntax test has one intention
 assert large['local_images'] == large['unique_images'] == 100, large
 assert large['png_images'] == 60 and large['jpeg_images'] == 40, large
 assert large['missing_images'] == 0, large
-paths = [ROOT/path for path in re.findall(r'\]\((assets/sample-huge/[^\s)]+)', huge.read_text())]
+paths = [huge.parent/path for path in re.findall(r'\]\((\.\./sample-huge/[^\s)]+)', huge.read_text())]
 assert len(paths) == len(set(paths)) == len({hashlib.sha256(p.read_bytes()).digest() for p in paths}) == 100
 for path in [*paths, *(ROOT/'assets').glob('sample-*.jpg'), *(ROOT/'assets').glob('sample-*.png')]:
     signature = path.read_bytes()[:8]
@@ -91,10 +91,10 @@ for document, data in [(small, normal), (huge, large)]:
           f'{data["unique_images"]} distinct images ({data["png_images"]} PNG, {data["jpeg_images"]} JPEG); '
           f'{data["asset_bytes"]:,} asset bytes')
 
-spec = importlib.util.spec_from_file_location('samples', ROOT/'scripts/generate-profile-samples.py')
+spec = importlib.util.spec_from_file_location('samples', ROOT/'tools/scripts/generate-profile-samples.py')
 samples = importlib.util.module_from_spec(spec); spec.loader.exec_module(samples)
 for size, count in [('SMALL',2),('MID',5),('HUGE',100)]:
-    text = ROOT/f'SAMPLE-{size}-TEXT.md'; images = ROOT/f'SAMPLE-{size}-IMAGES.md'
+    text = ROOT/f'assets/samples/SAMPLE-{size}-TEXT.md'; images = ROOT/f'assets/samples/SAMPLE-{size}-IMAGES.md'
     a = profile.document_workload(text); b = profile.document_workload(images)
     assert a['image_references'] == 0 and '```mermaid' not in text.read_text(), text
     assert b['local_images'] == b['unique_images'] == count+1 and b['missing_images']==0, b

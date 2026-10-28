@@ -17,8 +17,8 @@ def module(name, path):
     result = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(result)
     return result
-profile = module('mdf_profile', ROOT/'scripts/profile.py')
-packer = module('mdf_packer', ROOT/'scripts/pack-diagram.py')
+profile = module('mdf_profile', ROOT/'tools/scripts/profile.py')
+packer = module('mdf_packer', ROOT/'tools/scripts/pack-diagram.py')
 
 
 def inspect(binary, kind):

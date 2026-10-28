@@ -131,6 +131,16 @@ public:
   // Declare owners first so images (and their GUI caches) die before pixels.
   std::unordered_map<int, std::unique_ptr<PixelBuffer>> image_pixels;
   std::unordered_map<int, std::unique_ptr<Fl_RGB_Image>> images;
+  struct RasterState { int width, height; size_t bytes; uint64_t used; bool failed = false; };
+  std::unordered_map<int, RasterState> rasters;
+  static constexpr size_t raster_budget = 32 * 1024 * 1024;
+  size_t raster_bytes = 0;
+  uint64_t raster_clock = 0;
+  uint64_t raster_cache_miss_paints = 0, raster_reload_failures = 0;
+  void adopt_raster(int index, std::unique_ptr<PixelBuffer> pixels);
+  std::vector<int> wanted_rasters() const;
+  bool visible_rasters_missing() const;
+  void trim_rasters();
   std::unordered_map<int, std::pair<float, float>> diagram_sizes;
   std::unordered_map<int, std::string> diagram_errors;
   bool has_diagrams = false;

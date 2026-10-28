@@ -1,5 +1,8 @@
 # Markdown sample fixtures
 
+All sample documents are in [samples/](samples/).
+Their images stay in `assets/`, with paths relative to each document.
+
 The default profiler uses six paired fixtures:
 
 | Size | Text only | With images |
@@ -11,7 +14,7 @@ The default profiler uses six paired fixtures:
 Every pair shares the same prose. TEXT has no raster images, SVG, or Mermaid.
 IMAGES adds two, five, or 100 distinct PNG/JPEG files, plus a local SVG and a Mermaid flowchart.
 The image editions contain no deliberately missing assets. Existing syntax/error fixtures below remain unchanged.
-Run `python3 scripts/generate-profile-samples.py` to regenerate these six editions from the original fixtures without changing image bytes.
+Run `python3 tools/scripts/generate-profile-samples.py` to regenerate these six editions from the original fixtures without changing image bytes.
 `sample-vector.svg` is a project-generated observation pipeline used by all three image editions.
 It exercises local SVG independently from Mermaid's generated SVG.
 
@@ -37,7 +40,7 @@ RGB, palette, and transparency. JPEG variants include color, grayscale,
 baseline, and progressive encoding. The measurements are fictional.
 These files test image decoding and scaling; they are not scientific evidence.
 
-Run `python3 scripts/generate-samples.py` to rebuild the synthetic assets and handbook.
+Run `python3 tools/scripts/generate-samples.py` to rebuild the synthetic assets and handbook.
 Regeneration needs Python, Pillow, and NumPy. Normal builds and fixture validation
 do not need Pillow or NumPy. Asset encoding can change across Pillow versions.
 Run `python3 tests/samples.py` to check image uniqueness, formats, and references.

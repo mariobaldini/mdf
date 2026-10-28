@@ -14,7 +14,7 @@ import time
 import zlib
 
 ROOT = Path(__file__).resolve().parents[1]
-profile_spec=importlib.util.spec_from_file_location('mdf_profile',ROOT/'scripts/profile.py')
+profile_spec=importlib.util.spec_from_file_location('mdf_profile',ROOT/'tools/scripts/profile.py')
 profile=importlib.util.module_from_spec(profile_spec)
 profile_spec.loader.exec_module(profile)
 
@@ -135,7 +135,7 @@ def main():
         env = {**os.environ, 'XDG_RUNTIME_DIR': str(runtime), 'WAYLAND_DISPLAY': 'mdf-native-tests', 'MDF_TEST_NATIVE_POINTER': '1',
             'MDF_TEST_NATIVE_DROP_TRIGGER': str(drop_trigger.resolve())}
         env.pop('WAYLAND_SOCKET', None)
-        missing = subprocess.run([str(binary), str(ROOT/'SAMPLE-SMALL.md')], cwd=ROOT,
+        missing = subprocess.run([str(binary), str(ROOT/'assets/samples/SAMPLE-SMALL.md')], cwd=ROOT,
             env={**env, 'WAYLAND_DISPLAY': 'mdf-native-unavailable'}, capture_output=True, text=True, timeout=5)
         assert missing.returncode != 0 and 'WaylandUnavailable' in missing.stderr, missing.stderr
         with (work/'weston-output.log').open('w') as log:
@@ -160,7 +160,7 @@ def main():
                 if debug_smoke:
                     for document in ('SAMPLE-SMALL.md','SAMPLE.md'):
                         capture=output/(Path(document).stem+'-debug.png')
-                        checked=subprocess.run([str(application),'--profile',str(ROOT/document),'--capture',str(capture)],
+                        checked=subprocess.run([str(application),'--profile',str(ROOT/'assets/samples'/document),'--capture',str(capture)],
                             cwd=ROOT,env=env,capture_output=True,text=True,timeout=90)
                         assert checked.returncode==0,(document,checked.stderr)
                         result=json.loads(checked.stdout)
@@ -177,7 +177,7 @@ def main():
                 for document in ['SAMPLE-SMALL.md', 'SAMPLE.md', 'SAMPLE-HUGE.md']:
                     capture = output/(Path(document).stem+'.png')
                     started = time.monotonic_ns()
-                    run = subprocess.run([str(binary), str(ROOT/document), str(capture)], cwd=ROOT,
+                    run = subprocess.run([str(binary), str(ROOT/'assets/samples'/document), str(capture)], cwd=ROOT,
                         env=env, capture_output=True, text=True, timeout=35)
                     assert run.returncode == 0, (document, run.stderr)
                     result = json.loads(run.stdout)
@@ -190,14 +190,14 @@ def main():
                     result['launch_to_commit_ms'] = (result['main_started_ns']-started)/1e6 + result['commit_ms']
                     rows.append(result)
                 (output/'results.json').write_text(json.dumps(rows, indent=2)+'\n')
-                pending = subprocess.run([str(binary), str(ROOT/'SAMPLE-SMALL.md'), str(output/'first-dirty.png'), '--test-first-dirty'],
+                pending = subprocess.run([str(binary), str(ROOT/'assets/samples/SAMPLE-SMALL.md'), str(output/'first-dirty.png'), '--test-first-dirty'],
                     cwd=ROOT, env=env, capture_output=True, text=True, timeout=35)
                 assert pending.returncode == 0, pending.stderr
                 pending_result = json.loads(pending.stdout)
                 assert pending_result['paints'] == 1, pending_result
                 assert (output/'first-dirty.png').read_bytes() == (output/'SAMPLE-SMALL.png').read_bytes()
                 scroll_capture = output/'scroll.png'
-                scrolled = subprocess.run([str(binary), str(ROOT/'SAMPLE-SMALL.md'), str(scroll_capture), '--test-scroll'],
+                scrolled = subprocess.run([str(binary), str(ROOT/'assets/samples/SAMPLE-SMALL.md'), str(scroll_capture), '--test-scroll'],
                     cwd=ROOT, env=env, capture_output=True, text=True, timeout=35)
                 assert scrolled.returncode == 0, scrolled.stderr
                 scrolling = json.loads(scrolled.stdout)
@@ -205,27 +205,27 @@ def main():
                 assert scroll_capture.read_bytes() != (output/'SAMPLE-SMALL.png').read_bytes()
                 (output/'scroll.json').write_text(json.dumps(scrolling, indent=2)+'\n')
                 selection_capture = output/'selection.png'
-                selected = subprocess.run([str(binary), str(ROOT/'SAMPLE-SMALL.md'), str(selection_capture), '--test-selection'],
+                selected = subprocess.run([str(binary), str(ROOT/'assets/samples/SAMPLE-SMALL.md'), str(selection_capture), '--test-selection'],
                     cwd=ROOT, env=env, capture_output=True, text=True, timeout=35)
                 assert selected.returncode == 0, selected.stderr
                 selection = json.loads(selected.stdout)
                 assert selection['paints'] == 2 and 0 < selection['selected_bytes'] < 100, selection
                 assert selection_capture.read_bytes() != (output/'SAMPLE-SMALL.png').read_bytes()
                 (output/'selection.json').write_text(json.dumps(selection, indent=2)+'\n')
-                details = subprocess.run([str(binary), str(ROOT/'SAMPLE.md'), str(output/'details.png'), '--test-details'],
+                details = subprocess.run([str(binary), str(ROOT/'assets/samples/SAMPLE.md'), str(output/'details.png'), '--test-details'],
                     cwd=ROOT, env=env, capture_output=True, text=True, timeout=35)
                 assert details.returncode == 0, details.stderr
                 toggled = json.loads(details.stdout)
                 assert toggled['paints'] == 3 and toggled['details_preserved'], toggled
                 (output/'details.json').write_text(json.dumps(toggled, indent=2)+'\n')
-                keyboard = subprocess.run([str(binary), str(ROOT/'SAMPLE-SMALL.md'), str(output/'keyboard.png'), '--test-keyboard'],
+                keyboard = subprocess.run([str(binary), str(ROOT/'assets/samples/SAMPLE-SMALL.md'), str(output/'keyboard.png'), '--test-keyboard'],
                     cwd=ROOT, env=env, capture_output=True, text=True, timeout=35)
                 assert keyboard.returncode == 0, keyboard.stderr
                 shortcuts = json.loads(keyboard.stdout)
                 assert shortcuts['paints'] == 2 and shortcuts['keyboard_ready'] and shortcuts['keyboard_test'], shortcuts
                 assert shortcuts['zoom'] > 1 and shortcuts['scroll'] > 0 and shortcuts['selected_bytes'] > 0, shortcuts
                 (output/'keyboard.json').write_text(json.dumps(shortcuts, indent=2)+'\n')
-                toolbar = subprocess.run([str(binary), str(ROOT/'SAMPLE-SMALL.md'), str(output/'toolbar.png'), '--test-toolbar'],
+                toolbar = subprocess.run([str(binary), str(ROOT/'assets/samples/SAMPLE-SMALL.md'), str(output/'toolbar.png'), '--test-toolbar'],
                     cwd=ROOT, env=env, capture_output=True, text=True, timeout=35)
                 assert toolbar.returncode == 0, toolbar.stderr
                 controls = json.loads(toolbar.stdout)
@@ -233,14 +233,14 @@ def main():
                 assert controls['ui'] == {'toc': False, 'preview': False, 'dark': True, 'wrap': False, 'points': 12}, controls
                 assert controls['body']['width'] == controls['width']-20 and controls['body']['horizontal_scroll'] > 0, controls
                 (output/'toolbar.json').write_text(json.dumps(controls, indent=2)+'\n')
-                full = subprocess.run([str(binary), str(ROOT/'SAMPLE-SMALL.md'), str(output/'full-ui.png'), '--ui'],
+                full = subprocess.run([str(binary), str(ROOT/'assets/samples/SAMPLE-SMALL.md'), str(output/'full-ui.png'), '--ui'],
                     cwd=ROOT, env=env, capture_output=True, text=True, timeout=35)
                 assert full.returncode == 0, full.stderr
                 initial_ui = json.loads(full.stdout)
                 assert initial_ui['ui']['toc'] and initial_ui['ui']['preview'] and initial_ui['ui']['wrap']
                 assert initial_ui['body']['width'] == 676 and initial_ui['body']['height'] == 682, initial_ui
                 (output/'full-ui.json').write_text(json.dumps(initial_ui, indent=2)+'\n')
-                resize = subprocess.run([str(binary), str(ROOT/'SAMPLE-SMALL.md'), str(output/'resize.png'), '--test-resize'],
+                resize = subprocess.run([str(binary), str(ROOT/'assets/samples/SAMPLE-SMALL.md'), str(output/'resize.png'), '--test-resize'],
                     cwd=ROOT, env=env, capture_output=True, text=True, timeout=35)
                 assert resize.returncode == 0, resize.stderr
                 resized = json.loads(resize.stdout)
@@ -250,7 +250,7 @@ def main():
                 assert resized['selected_bytes'] > 0, resized
                 assert (resized['body']['width'], resized['body']['height']) == (508, 502), resized
                 (output/'resize.json').write_text(json.dumps(resized, indent=2)+'\n')
-                frame = subprocess.run([str(binary), str(ROOT/'SAMPLE-SMALL.md'), str(output/'frame.png'), '--test-frame'],
+                frame = subprocess.run([str(binary), str(ROOT/'assets/samples/SAMPLE-SMALL.md'), str(output/'frame.png'), '--test-frame'],
                     cwd=ROOT, env=env, capture_output=True, text=True, timeout=35)
                 assert frame.returncode == 0, frame.stderr
                 framed = json.loads(frame.stdout)
@@ -258,7 +258,7 @@ def main():
                 assert (framed['width'], framed['height']) == (800, 600) and framed['selected_bytes'] > 0, framed
                 assert (framed['resized_width'], framed['resized_height']) != (800, 600), framed
                 (output/'frame.json').write_text(json.dumps(framed, indent=2)+'\n')
-                clipboard = subprocess.run([str(binary), str(ROOT/'SAMPLE-SMALL.md'), str(output/'clipboard.png'), '--test-clipboard'],
+                clipboard = subprocess.run([str(binary), str(ROOT/'assets/samples/SAMPLE-SMALL.md'), str(output/'clipboard.png'), '--test-clipboard'],
                     cwd=ROOT, env=env, capture_output=True, text=True, timeout=35)
                 assert clipboard.returncode == 0, clipboard.stderr
                 copied = json.loads(clipboard.stdout)
@@ -275,7 +275,7 @@ def main():
                 opened_document.write_text('# Native opened file\n\nNew **document** from the Open dialog.\n')
                 paste_document = work/'pasted café file.md'
                 paste_document.write_text('# Pasted path\n\nOpened from the real Wayland clipboard.\n')
-                paste = subprocess.run([str(binary), str(ROOT/'SAMPLE-SMALL.md'), str(output/'paste.png'), '--test-paste'],
+                paste = subprocess.run([str(binary), str(ROOT/'assets/samples/SAMPLE-SMALL.md'), str(output/'paste.png'), '--test-paste'],
                     cwd=ROOT, env={**env, 'MDF_NATIVE_TEST_OPEN': str(paste_document.resolve())}, capture_output=True, text=True, timeout=35)
                 assert paste.returncode == 0, paste.stderr
                 pasted = json.loads(paste.stdout)
@@ -290,7 +290,7 @@ def main():
                     (browser_home/f'{index:02d}-document.md').write_text(f'# Document {index}\n')
                 browser_target=browser_home/'z-last 中文.md'
                 browser_target.write_text('# Selected from the browser\n\nThe final document is open.\n')
-                for name,initial,mode,revision in [('document',str(ROOT/'SAMPLE-SMALL.md'),'--test-browser',1),('empty','','--test-browser-empty',0)]:
+                for name,initial,mode,revision in [('document',str(ROOT/'assets/samples/SAMPLE-SMALL.md'),'--test-browser',1),('empty','','--test-browser-empty',0)]:
                     dialog_capture=output/('browser-'+name+'-dialog.png')
                     browsing=subprocess.run([str(binary),initial,str(output/('browser-'+name+'.png')),mode],cwd=ROOT,
                         env={**env,'HOME':str(browser_home.resolve()),'MDF_NATIVE_TEST_BROWSE':str(browser_home.resolve()),
@@ -306,7 +306,7 @@ def main():
                     (output/('browser-'+name+'.json')).write_text(json.dumps(selected_file,indent=2)+'\n')
                 drop_document = work/'dropped café; file.md'
                 drop_document.write_text('# Dropped file\n\nOpened through a negotiated Wayland COPY drop.\n')
-                drop = subprocess.Popen([str(binary), str(ROOT/'SAMPLE-SMALL.md'), str(output/'drop.png'), '--test-drop'],
+                drop = subprocess.Popen([str(binary), str(ROOT/'assets/samples/SAMPLE-SMALL.md'), str(output/'drop.png'), '--test-drop'],
                     cwd=ROOT, env={**env, 'MDF_NATIVE_TEST_DROP': '# Local file\r\n'+drop_document.resolve().as_uri()+'\r\n'},
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
                 try:
@@ -322,7 +322,7 @@ def main():
                 assert dropped['drop_stage'] == 2 and dropped['drop_finished'] and dropped['document_revision'] == 2, dropped
                 assert dropped['document_path'] == str(drop_document.resolve()), dropped
                 (output/'drop.json').write_text(json.dumps(dropped, indent=2)+'\n')
-                menus = subprocess.run([str(binary), str(ROOT/'SAMPLE-SMALL.md'), str(output/'menus.png'), '--test-menu'],
+                menus = subprocess.run([str(binary), str(ROOT/'assets/samples/SAMPLE-SMALL.md'), str(output/'menus.png'), '--test-menu'],
                     cwd=ROOT, env={**env, 'MDF_NATIVE_TEST_OPEN': str(opened_document.resolve())}, capture_output=True, text=True, timeout=35)
                 assert menus.returncode == 0, menus.stderr
                 menu_result = json.loads(menus.stdout)
@@ -333,13 +333,13 @@ def main():
                 preferences_home = work/'preferences-home'
                 preferences_home.mkdir()
                 preferences_env = {**env, 'HOME': str(preferences_home)}
-                saved = subprocess.run([str(binary), str(ROOT/'SAMPLE-SMALL.md'), str(output/'preferences.png'), '--test-preferences'],
+                saved = subprocess.run([str(binary), str(ROOT/'assets/samples/SAMPLE-SMALL.md'), str(output/'preferences.png'), '--test-preferences'],
                     cwd=ROOT, env=preferences_env, capture_output=True, text=True, timeout=35)
                 assert saved.returncode == 0, saved.stderr
                 saved_values = json.loads((preferences_home/'.config/mdf/settings.json').read_text())
                 assert saved_values['save_settings_across_sessions'] and saved_values['font_size'] == 18
                 assert saved_values['theme'] == 'paper' and not saved_values['line_wrap']
-                restored = subprocess.run([str(binary), str(ROOT/'SAMPLE-SMALL.md'), str(output/'preferences-restored.png'), '--test-load-preferences'],
+                restored = subprocess.run([str(binary), str(ROOT/'assets/samples/SAMPLE-SMALL.md'), str(output/'preferences-restored.png'), '--test-load-preferences'],
                     cwd=ROOT, env=preferences_env, capture_output=True, text=True, timeout=35)
                 assert restored.returncode == 0, restored.stderr
                 restored_values = json.loads(restored.stdout)
@@ -370,7 +370,7 @@ def main():
                 missing_result = json.loads(missing_document.stdout)
                 assert missing_result['document_revision'] == 0 and missing_result['status'] == 'FileNotFound', missing_result
                 for mode, name in [('--show-menu', 'menu'), ('--show-dialog', 'dialog'),('--show-dialog-dark','dialog-dark'),('--show-dialog-small','dialog-small')]:
-                    visible = subprocess.run([str(binary), str(ROOT/'SAMPLE-SMALL.md'), str(output/(name+'.png')), mode],
+                    visible = subprocess.run([str(binary), str(ROOT/'assets/samples/SAMPLE-SMALL.md'), str(output/(name+'.png')), mode],
                         cwd=ROOT, env=env, capture_output=True, text=True, timeout=35)
                     assert visible.returncode == 0, visible.stderr
                     dialog=json.loads(visible.stdout)
@@ -384,7 +384,7 @@ def main():
                 injection=work/'shell-injected'
                 web_url='https://example.invalid/\'";$(touch${IFS}'+str(injection)+')'
                 link_target=work/'next page.md'
-                link_target.write_text('# Next page\n\n'+'A paragraph before the target.\n\n'*60+'## Section target\n\nTarget reached.\n')
+                link_target.write_text('# Next page\n\n'+'A paragraph before the target.\n\n'*60+'<a id="section-target"></a>\n## Descriptive section\n\nTarget reached.\n')
                 link_document=work/'links.md'
                 link_document.write_text('# Links\n\n[System handler](<'+web_url+'>)\n\n[Local target](<next%20page.md#section%2Dtarget>)\n')
                 linked=subprocess.run([str(binary),str(link_document),str(output/'links.png'),'--test-links'],cwd=ROOT,
@@ -410,13 +410,13 @@ def main():
                 legacy_document.write_text('# GIF and BMP\n\n![GIF first frame]('+str(legacy/'gif-0-1-1-1.gif')+')\n\n![Top-down BMP]('+str(legacy/'bmp-24-1.bmp')+')\n')
                 asset_rows = []
                 cases = [
-                    ('small-ready', ROOT/'SAMPLE-SMALL.md', 0, 0, 0, False, False),
+                    ('small-ready', ROOT/'assets/samples/SAMPLE-SMALL.md', 0, 0, 0, False, False),
                     ('raster-ready', raster_document, 2, 0, 0, False, False),
                     ('svg-ready', svg_document, 0, 1, 0, True, False),
-                    ('mermaid-ready', ROOT/'SAMPLE.md', None, 0, 1, True, True),
+                    ('mermaid-ready', ROOT/'assets/samples/SAMPLE.md', None, 0, 1, True, True),
                     ('unsupported-ready', unsupported, 0, 0, 0, False, True),
                     ('legacy-ready', legacy_document, 2, 0, 0, False, False),
-                    ('mermaid-theme', ROOT/'SAMPLE.md', None, 0, 1, True, True),
+                    ('mermaid-theme', ROOT/'assets/samples/SAMPLE.md', None, 0, 1, True, True),
                 ]
                 for name, document, raster, vectors, mermaid, svg_loaded, mermaid_loaded in cases:
                     ready_env = {**env}
@@ -483,7 +483,7 @@ def main():
                     ('svg-glyphs', svg_glyph_document, False, True),
                     ('svg-metadata', svg_metadata_document, False, False),
                     ('glyph-diagrams', glyph_diagrams, False, True),
-                    ('extended', ROOT/'SAMPLE-EXTENDED.md', False, True),
+                    ('extended', ROOT/'assets/samples/SAMPLE-EXTENDED.md', False, True),
                 ]:
                     first_capture = output/(name+'-first.png')
                     first = subprocess.run([str(binary), str(document), str(first_capture)],
@@ -531,7 +531,7 @@ def main():
                     font_rows.append(rendered)
                 (output/'fonts.json').write_text(json.dumps(font_rows, indent=2)+'\n')
                 map_rows = []
-                for name, document in [('small', ROOT/'SAMPLE-SMALL.md'), ('sample', ROOT/'SAMPLE.md'), ('huge', ROOT/'SAMPLE-HUGE.md'), ('extended',ROOT/'SAMPLE-EXTENDED.md')]:
+                for name, document in [('small', ROOT/'assets/samples/SAMPLE-SMALL.md'), ('sample', ROOT/'assets/samples/SAMPLE.md'), ('huge', ROOT/'assets/samples/SAMPLE-HUGE.md'), ('extended',ROOT/'assets/samples/SAMPLE-EXTENDED.md')]:
                     capture = output/('minimap-'+name+'.png')
                     run = subprocess.run([str(binary), str(document), str(capture), '--ready-ui'],
                         cwd=ROOT, env=env, capture_output=True, text=True, timeout=35)
@@ -549,18 +549,18 @@ def main():
                         assert mini['font_version'] == rendered['fonts']['sans_version'] > 0, rendered
                     rendered['case'] = name; map_rows.append(rendered)
                 (output/'minimap.json').write_text(json.dumps(map_rows, indent=2)+'\n')
-                missing_map = subprocess.run([str(without_text),str(ROOT/'SAMPLE-EXTENDED.md'),str(output/'minimap-extended-missing.png'),'--ready-ui'],
+                missing_map = subprocess.run([str(without_text),str(ROOT/'assets/samples/SAMPLE-EXTENDED.md'),str(output/'minimap-extended-missing.png'),'--ready-ui'],
                     cwd=ROOT,env=env,capture_output=True,text=True,timeout=35)
                 assert missing_map.returncode == 0, missing_map.stderr
                 assert png_region(output/'minimap-extended.png',(916,94,1040,736)) != png_region(output/'minimap-extended-missing.png',(916,94,1040,736)), 'Minimap fallback kept the same missing-glyph pixels'
                 assert len({r['minimap']['thumb_height'] for r in map_rows}) == 1, map_rows
-                hidden_map = subprocess.run([str(binary), str(ROOT/'SAMPLE-SMALL.md'), str(output/'minimap-hidden.png'), '--ready-ui-no-preview'],
+                hidden_map = subprocess.run([str(binary), str(ROOT/'assets/samples/SAMPLE-SMALL.md'), str(output/'minimap-hidden.png'), '--ready-ui-no-preview'],
                     cwd=ROOT, env=env, capture_output=True, text=True, timeout=35)
                 assert hidden_map.returncode == 0, hidden_map.stderr
                 hidden_result = json.loads(hidden_map.stdout)
                 assert not hidden_result['ui']['preview'] and hidden_result['minimap']['jobs'] == 0, hidden_result
                 assert hidden_result['minimap']['started_ms'] == 0 and hidden_result['body']['width'] == 800, hidden_result
-                for name, document in [('small',ROOT/'SAMPLE-SMALL.md'),('huge',ROOT/'SAMPLE-HUGE.md')]:
+                for name, document in [('small',ROOT/'assets/samples/SAMPLE-SMALL.md'),('huge',ROOT/'assets/samples/SAMPLE-HUGE.md')]:
                     drag = subprocess.run([str(binary),str(document),str(output/('minimap-drag-'+name+'.png')),'--test-minimap'],
                         cwd=ROOT,env=env,capture_output=True,text=True,timeout=35)
                     assert drag.returncode == 0, (name,drag.stderr)
@@ -570,7 +570,7 @@ def main():
                 packed = application
                 assert packed.is_file(), 'Missing native bootstrap application; build with make native'
                 interactive_home=work/'interactive-home';interactive_home.mkdir()
-                for initial in ([],[str(ROOT/'SAMPLE-SMALL.md')]):
+                for initial in ([],[str(ROOT/'assets/samples/SAMPLE-SMALL.md')]):
                     opened=subprocess.Popen([str(packed),*initial],cwd=ROOT,env={**env,'HOME':str(interactive_home)},
                         stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
                     try:
@@ -581,7 +581,7 @@ def main():
                         if opened.poll() is None:opened.kill();opened.communicate()
                     assert opened.returncode==0 and ordinary_output=='',(initial,ordinary_output,ordinary_error)
                 one_file=work/'mdf-one-file';shutil.copy2(packed,one_file)
-                independent=subprocess.run([str(one_file),'--benchmark',str(ROOT/'SAMPLE.md')],cwd=work,
+                independent=subprocess.run([str(one_file),'--benchmark',str(ROOT/'assets/samples/SAMPLE.md')],cwd=work,
                     env=env,capture_output=True,text=True,timeout=35)
                 assert independent.returncode==0,independent.stderr
                 one_result=json.loads(independent.stdout)
@@ -591,7 +591,7 @@ def main():
                 for document in ('SAMPLE-SMALL.md', 'SAMPLE.md', 'SAMPLE-HUGE.md', 'SAMPLE-EXTENDED.md'):
                     capture = output/(Path(document).stem+'-bootstrap.png')
                     boot_started=time.monotonic_ns()
-                    boot = subprocess.run([str(packed), '--benchmark', str(ROOT/document), '--capture', str(capture)],
+                    boot = subprocess.run([str(packed), '--benchmark', str(ROOT/'assets/samples'/document), '--capture', str(capture)],
                         cwd=ROOT, env=env, capture_output=True, text=True, timeout=35)
                     boot_finished=time.monotonic_ns()
                     assert boot.returncode == 0, (document, boot.stderr)
@@ -635,7 +635,7 @@ def main():
                             assert not any(nodes[key]['track'] in ('fonts','fallback','images','minimap') for key in path['node_ids']),path
                     boot_rows.append(analyzed)
                 (output/'bootstrap.json').write_text(json.dumps(boot_rows,indent=2)+'\n')
-                anchored = subprocess.run([str(packed), '--benchmark', str(ROOT/'SAMPLE.md'), '--capture', str(output/'bootstrap-anchor.png'),
+                anchored = subprocess.run([str(packed), '--benchmark', str(ROOT/'assets/samples/SAMPLE.md'), '--capture', str(output/'bootstrap-anchor.png'),
                     '--capture-anchor', 'layout-stress', '--capture-reader'], cwd=ROOT, env=env, capture_output=True, text=True, timeout=35)
                 assert anchored.returncode == 0, anchored.stderr
                 anchored_result = json.loads(anchored.stdout)
@@ -645,7 +645,7 @@ def main():
                     name=Path(document).stem
                     capture=output/(name+'-scroll-startup.png')
                     started=time.monotonic_ns()
-                    scrolling=subprocess.run([str(packed),'--profile-scroll',str(ROOT/document),'--capture',str(capture)],
+                    scrolling=subprocess.run([str(packed),'--profile-scroll',str(ROOT/'assets/samples'/document),'--capture',str(capture)],
                         cwd=ROOT,env=env,capture_output=True,text=True,timeout=35)
                     finished=time.monotonic_ns()
                     assert scrolling.returncode==0,(document,scrolling.stderr)

@@ -119,7 +119,7 @@ pub const Assets = struct {
             self.font_snapshot = drawing.snapshot() orelse return error.FontResourcesUnavailable;
         const fds: []const c_int = if (self.font_snapshot) |snapshot| snapshot.descriptors() else &.{};
         profile.signal(self.tracing,@src(),"Request image decoding",0);
-        self.worker = api.mdf_image_worker_create(inputs.items.ptr, inputs.items.len, 128 * 1024 * 1024, notify, @intFromBool(dark), fds.ptr, fds.len, 1, builtin, @intFromBool(self.tracing)) orelse return error.ImageWorkerCreationFailed;
+        self.worker = api.mdf_image_worker_create(inputs.items.ptr, inputs.items.len, 128 * 1024 * 1024, notify, @intFromBool(dark), fds.ptr, fds.len, 1, builtin, @intFromBool(self.tracing), 0) orelse return error.ImageWorkerCreationFailed;
         self.had_jobs = true;
         self.threads_started += 1;
     }

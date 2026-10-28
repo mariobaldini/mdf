@@ -105,6 +105,59 @@ test "document: reference links use their definition and keep visible labels" {
     try std.testing.expectEqualStrings("Visible", doc.blocks[0].spans[0].text);
     try std.testing.expectEqualStrings("other.md", doc.blocks[0].spans[0].link.?);
 }
+test "document: explicit HTML aliases preserve generated heading anchors" {
+    var doc = try Document.parse(a,
+        "[BLE-18](#ble-18)\n\n<a name='compat'></a>\n\n<a id=\"ble-18\"></a>\n" ++
+        "## BLE-18 Shared transport implementation\n\nBody.\n", "todo.md");
+    defer doc.deinit();
+    const heading = doc.findAnchor("ble-18-shared-transport-implementation").?;
+    try std.testing.expectEqual(.heading, doc.blocks[heading].kind);
+    try std.testing.expectEqual(heading, doc.findAnchor("ble-18").?);
+    try std.testing.expectEqual(heading, doc.findAnchor("compat").?);
+    try std.testing.expectEqualStrings("ble-18-shared-transport-implementation", doc.blocks[heading].anchor);
+    try std.testing.expect(doc.findAnchor("BLE-18") == null);
+    try std.testing.expect(doc.findAnchor("missing") == null);
+}
+test "document: inline HTML IDs retain their paragraph and entity spelling" {
+    var doc = try Document.parse(a,
+        "Paragraph <span ID='caf&eacute;-a&amp;b'>target</span>.\n\n" ++
+        "<a data-id='wrong' id=plain name='legacy'></a>\n\n## Next\n", "anchors.md");
+    defer doc.deinit();
+    try std.testing.expectEqual(@as(usize, 0), doc.findAnchor("café-a&b").?);
+    try std.testing.expectEqual(doc.findAnchor("next").?, doc.findAnchor("plain").?);
+    try std.testing.expectEqual(doc.findAnchor("next").?, doc.findAnchor("legacy").?);
+    try std.testing.expect(doc.findAnchor("wrong") == null);
+}
+test "document: code comments and suppressed HTML never define jump aliases" {
+    var doc = try Document.parse(a,
+        "```html\n<a id=\"fenced\"></a>\n```\n\n" ++
+        "    <a id=\"indented\"></a>\n\n" ++
+        "`<a id=\"inline-code\"></a>`\n\n" ++
+        "<!-- <a id=\"comment\"></a> -->\n\n" ++
+        "Before <script id='script'><a id='script-body'></a></script> after.\n\n" ++
+        "<a id=''></a><a id='white space'></a>\n\n## End\n", "literal.md");
+    defer doc.deinit();
+    for ([_][]const u8{ "fenced", "indented", "inline-code", "comment", "script", "script-body", "white space" }) |name|
+        try std.testing.expect(doc.findAnchor(name) == null);
+    try std.testing.expect(doc.findAnchor("end") != null);
+}
+test "document: duplicate aliases use the first target and remain owned" {
+    var input = "<a id='alias'></a>\n\n# First\n\n<a id='alias'></a>\n\n# Second\n".*;
+    var doc = try Document.parse(a, &input, "anchors.md");
+    defer doc.deinit();
+    @memset(&input, 'x');
+    try std.testing.expectEqual(doc.findAnchor("first").?, doc.findAnchor("alias").?);
+    try std.testing.expect(doc.findAnchor("second") != null);
+    try std.testing.expectEqual(@as(usize, 0), doc.findAnchor("").?);
+}
+test "document: HTML aliases release all storage after allocation failures" {
+    try std.testing.checkAllAllocationFailures(a, struct {
+        fn parse(allocator: std.mem.Allocator) !void {
+            var doc = try Document.parse(allocator, "<a id='owned&amp;id' name=legacy></a>\n\n## Heading\n", "anchors.md");
+            defer doc.deinit();
+        }
+    }.parse, .{});
+}
 test "document: a short table row retains empty trailing cells" {
     var doc = try Document.parse(a, "| A | B | C |\n| --- | --- | --- |\n| one |\n", "");
     defer doc.deinit();

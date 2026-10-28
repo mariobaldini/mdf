@@ -13,7 +13,7 @@ fn invalid(text: []const u8) !void {
 
 test "settings: disabling persistence discards otherwise valid custom preferences" {
     const values = try settings.decode(a, "{\"save_settings_across_sessions\":false,\"font_size\":55,\"theme\":\"terminal\",\"line_wrap\":false}");
-    try std.testing.expectEqualDeep(settings.Values{}, values);
+    try std.testing.expectEqualDeep(settings.Values{ .save_settings_across_sessions = false }, values);
 }
 test "settings: the minimum font size is accepted and smaller values clamp" {
     try std.testing.expectEqual(@as(u16, 8), (try opted("\"font_size\":0")).font_size);

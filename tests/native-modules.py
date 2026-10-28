@@ -17,7 +17,7 @@ def main():
     fixtures = Path(sys.argv[3]).resolve()
     output = ROOT/'build/native-module-tests'
     output.mkdir(exist_ok=True)
-    spec = importlib.util.spec_from_file_location('mdf_native_packer', ROOT/'scripts/pack-native.py')
+    spec = importlib.util.spec_from_file_location('mdf_native_packer', ROOT/'tools/scripts/pack-native.py')
     packer = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(packer)
     for kind in ('mermaid', 'svg'):

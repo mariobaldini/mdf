@@ -11,11 +11,12 @@ void ImageWorker::reset() {
 }
 void ImageWorker::start(uint64_t version, std::vector<EncodedImage> inputs, size_t limit,
                          void (*notify)(), bool dark, std::shared_ptr<PreparedFont> prepared_fonts,
-                         bool allow_diagrams) {
+                         bool allow_diagrams, size_t queue_limit) {
   reset();
   revision = version;
   sources = std::move(inputs);
   fonts = std::move(prepared_fonts);
+  pending_limit = queue_limit;
   std::vector<MdfImageInput> descriptors;
   descriptors.reserve(sources.size());
   for (const auto &input : sources)
@@ -26,7 +27,7 @@ void ImageWorker::start(uint64_t version, std::vector<EncodedImage> inputs, size
   };
   PROFILE_MARK("Request image decoding");
   worker = mdf_image_worker_create(descriptors.data(), descriptors.size(), limit, notify, dark,
-      fonts ? fonts->fds.data() : nullptr, fonts ? fonts->sources.size() : 0, allow_diagrams, provider, profile_enabled);
+      fonts ? fonts->fds.data() : nullptr, fonts ? fonts->sources.size() : 0, allow_diagrams, provider, profile_enabled, queue_limit);
   if (!worker) throw std::runtime_error("Cannot start image decoding worker");
 }
 void ImageWorker::allow_diagrams() {
@@ -37,12 +38,18 @@ bool ImageWorker::complete() const {
   first_diagram_ns = mdf_image_worker_first_diagram(worker);
   return true;
 }
-std::vector<PreparedImage> ImageWorker::take() {
-  if (!complete()) return {};
-  if (mdf_image_worker_join(worker) < 0) throw std::runtime_error("Cannot prepare local image pixels");
-  sources.clear();
-  fonts.reset();
+size_t ImageWorker::pending() const {
+  return worker ? mdf_image_worker_pending(worker) : 0;
+}
+std::vector<PreparedImage> ImageWorker::take(bool all) {
+  if (!worker || (all && !complete())) return {};
+  if (complete()) {
+    if (mdf_image_worker_join(worker) < 0) throw std::runtime_error("Cannot prepare local image pixels");
+    sources.clear();
+    fonts.reset();
+  }
   std::vector<PreparedImage> result;
+  size_t transferred_bytes = 0;
   MdfPreparedImage item{};
   while (mdf_image_worker_pop(worker, &item)) {
     // Guard the transferred allocation before constructing the GUI owner.
@@ -53,6 +60,8 @@ std::vector<PreparedImage> ImageWorker::take() {
     transferred.release();
     result.push_back({item.index, std::move(pixels), bool(item.diagram), item.logical_width,
                       item.logical_height, item.error, bool(item.svg)});
+    transferred_bytes += result.back().pixels->bytes();
+    if (!all && pending_limit && (transferred_bytes >= pending_limit || result.size() >= 32)) break;
   }
   return result;
 }

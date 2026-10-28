@@ -36,7 +36,14 @@ They also cover HTTP archive prefixes, repair of older wrapped caches, and prese
 `version.py` checks integer version increases, manifest consistency, and the Make guard before the compiler runs.
 `ci-workflow.py` checks branch gates and release publication with a local GitHub CLI stub.
 It covers checkout ownership, the two-build publication gate, package-only release assets, checksums, draft retries, and Latest selection.
+It also checks RPM signing before release upload and the separate Pages deployment gate.
 These tests require PyYAML (`python3-pyyaml` on Fedora or `python3-yaml` on Ubuntu), which `make setup` installs.
+
+`make test-dnf-repo` requires Fedora 44, RPM build/signing tools, `createrepo_c`, GnuPG, and DNF5.
+Run it as root in a disposable container for the complete DNF transaction tests.
+It uses temporary keys and an isolated installation root, with package downloads from a local HTTP server.
+The cases cover signed installation, updates, invalid signatures, unsigned packages, release selection, checksums, and missing signing credentials.
+See the [release process](../docs/release-process.md#validation) for the container command.
 
 The release jobs also install the native package in their disposable containers.
 `package-desktop.sh` checks Open With registration, preservation of an existing Markdown default, and removal of the handler after uninstall.
@@ -47,7 +54,7 @@ Run `make setup` first if dependencies are missing.
 On a Wayland compositor, run the matched interaction comparison with two ReleaseFast executables:
 
 ```sh
-python3 scripts/benchmark-interactions.py --baseline build/baseline/bin/mdf --binary build/bin/mdf --runs 8 --startup-runs 60 --output build/interactions.json --enforce
+python3 tools/scripts/benchmark-interactions.py --baseline build/baseline/bin/mdf --binary build/bin/mdf --runs 8 --startup-runs 60 --output build/interactions.json --enforce
 ```
 
 The comparison retains all 80 original scroll positions and adds repeated scroll, resize, and TOC series.

@@ -6,7 +6,7 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 real_make=$(command -v make)
 scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT HUP INT TERM
-mkdir -p "$scratch/project/scripts" "$scratch/project/zig-pkg/fltk" "$scratch/project/modules/pozeiden/src" "$scratch/project/modules/zig-svg/src" "$scratch/bin"
+mkdir -p "$scratch/project/tools/scripts" "$scratch/project/zig-pkg/fltk" "$scratch/project/modules/pozeiden/src" "$scratch/project/modules/zig-svg/src" "$scratch/bin"
 mkdir -p "$scratch/project/modules/zignal/src"
 mkdir -p "$scratch/project/modules/zigmark/src" "$scratch/project/modules/mecha"
 mkdir -p "$scratch/project/tests"
@@ -17,7 +17,7 @@ mkdir -p "$scratch/project/zig-pkg/cairo"
 : > "$scratch/project/zig-pkg/meson/mesonbuild/mesonmain.py"
 for script in workflow.sh install.sh;do printf '#!/bin/sh\nexit 0\n' > "$scratch/project/tests/$script";done
 cp "$root/Makefile" "$root/.zig-version" "$scratch/project/"
-cp "$root/scripts/common.sh" "$root/scripts/check-requirements.sh" "$root/scripts/build-frontend.sh" "$root/scripts/build-reference.sh" "$scratch/project/scripts/"
+cp "$root/tools/scripts/common.sh" "$root/tools/scripts/check-requirements.sh" "$root/tools/scripts/build-frontend.sh" "$root/tools/scripts/build-reference.sh" "$scratch/project/tools/scripts/"
 : > "$scratch/project/zig-pkg/fltk/CMakeLists.txt"
 : > "$scratch/project/modules/pozeiden/src/root.zig"
 : > "$scratch/project/modules/zig-svg/src/root.zig"
@@ -83,7 +83,7 @@ else
 fi
 STUB
 chmod +x "$scratch/bin/g++" "$scratch/bin/python3" "$scratch/bin/zig" "$scratch/bin/cmake" "$scratch/bin/objcopy"
-printf '#!/bin/sh\nprintf "release %%s\\n" "$OPTIMIZE" >> "$MDF_TEST_LOG"\n' > "$scratch/project/scripts/release.sh"
+printf '#!/bin/sh\nprintf "release %%s\\n" "$OPTIMIZE" >> "$MDF_TEST_LOG"\n' > "$scratch/project/tools/scripts/release.sh"
 run(){ PATH="$scratch/bin" "$real_make" --no-print-directory -C "$scratch/project" "$@" >"$scratch/output" 2>&1; }
 no_downloads(){ if grep -Eq 'fetch|^sudo |^dnf |cargo|rustc' "$MDF_TEST_LOG";then cat "$MDF_TEST_LOG" >&2;exit 1;fi; }
 expect_failure(){ if run "$@";then printf 'Expected failure: %s\n' "$*" >&2;exit 1;fi; }
@@ -99,11 +99,11 @@ grep -q -- '-DCMAKE_BUILD_TYPE=Debug' "$MDF_TEST_LOG"
 grep -q -- '-DMDF_SVG_LIBRARY=.*libmdf-svg.a' "$MDF_TEST_LOG"
 grep -q -- '-DMDF_IMAGE_LIBRARY=.*libmdf-image.a' "$MDF_TEST_LOG"
 grep -q -- '-DMDF_UI_WORKERS_LIBRARY=.*libmdf-ui-workers.a' "$MDF_TEST_LOG"
-grep -q -- 'python3 scripts/build-text-stack.py .* --mode Debug' "$MDF_TEST_LOG"
+grep -q -- 'python3 tools/scripts/build-text-stack.py .* --mode Debug' "$MDF_TEST_LOG"
 grep -q -- '-DMDF_BUNDLED_PANGO=ON' "$MDF_TEST_LOG"
-grep -q -- 'python3 scripts/build-cairo.py .* --mode Debug' "$MDF_TEST_LOG"
+grep -q -- 'python3 tools/scripts/build-cairo.py .* --mode Debug' "$MDF_TEST_LOG"
 grep -q -- '-DMDF_BUNDLED_CAIRO=ON' "$MDF_TEST_LOG"
-grep -q -- 'python3 scripts/pack-frontend.py .*libmdf-ui.so' "$MDF_TEST_LOG"
+grep -q -- 'python3 tools/scripts/pack-frontend.py .*libmdf-ui.so' "$MDF_TEST_LOG"
 grep -q -- '-DFLTK_BACKEND_WAYLAND=ON -DFLTK_BACKEND_X11=OFF -DFLTK_BUILD_GL=OFF' "$MDF_TEST_LOG"
 grep -q -- '-DFLTK_USE_LIBDECOR_GTK=OFF' "$MDF_TEST_LOG"
 test -f "$scratch/project/build/bin/mdf"
@@ -160,7 +160,7 @@ run profile OPTIMIZE=Debug BUILD_PREFIX=debug-output PROFILE_RUNS=2
 grep -q -- '-DMDF_OPTIONAL_MODULE_COMPRESSION=zlib' "$MDF_TEST_LOG"
 grep -q -- '-Doptimize=ReleaseFast' "$MDF_TEST_LOG"
 grep -q -- '-DCMAKE_BUILD_TYPE=Release' "$MDF_TEST_LOG"
-grep -q 'python3 scripts/profile.py --binary build/profile/runtime/bin/mdf --output build/profile/profile.html --runs 2$' "$MDF_TEST_LOG"
+grep -q 'python3 tools/scripts/profile.py --binary build/profile/runtime/bin/mdf --output build/profile/profile.html --runs 2$' "$MDF_TEST_LOG"
 test -f "$scratch/project/build/profile/runtime/bin/mdf";test ! -d "$scratch/project/debug-output"
 test ! -e "$scratch/project/build/profile/runtime/bin/libmdf-extra.so"
 no_downloads
@@ -168,15 +168,15 @@ printf '%s\n' 'PASS: profiling uses the six-edition defaults and an isolated opt
 : > "$MDF_TEST_LOG"
 run profile-trace OPTIMIZE=Debug
 grep -q -- '-Doptimize=ReleaseFast' "$MDF_TEST_LOG"
-grep -q 'python3 scripts/profile-trace.py --binary build/profile-trace/runtime/bin/mdf --document SAMPLE.md --document SAMPLE-HUGE.md' "$MDF_TEST_LOG"
-if grep -q 'python3 scripts/profile.py ' "$MDF_TEST_LOG";then exit 1;fi
+grep -q 'python3 tools/scripts/profile-trace.py --binary build/profile-trace/runtime/bin/mdf --document assets/samples/SAMPLE.md --document assets/samples/SAMPLE-HUGE.md' "$MDF_TEST_LOG"
+if grep -q 'python3 tools/scripts/profile.py ' "$MDF_TEST_LOG";then exit 1;fi
 no_downloads
 printf '%s\n' 'PASS: syscall tracing is a separate target and cannot replace regular startup timing'
 : > "$MDF_TEST_LOG"
 run
-grep -q '^run SAMPLE.md$' "$MDF_TEST_LOG"
+grep -q '^run assets/samples/SAMPLE.md$' "$MDF_TEST_LOG"
 no_downloads
-printf '%s\n' 'PASS: default make rebuilds and opens SAMPLE.md'
+printf '%s\n' 'PASS: default make rebuilds and opens assets/samples/SAMPLE.md'
 : > "$MDF_TEST_LOG"
 export MDF_TEST_VERSION=0.15.2
 expect_failure build

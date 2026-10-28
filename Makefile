@@ -22,25 +22,25 @@ BUILD_FLAGS := -Doptimize=$(OPTIMIZE) $(TARGET_FLAGS)
 .PHONY: setup check-requirements check-package-tools check-profile-tools build clean install uninstall run run-sample profile profile-trace benchmark-launch tests test test-suite test-unit test-core-Debug test-core-ReleaseSafe test-core-ReleaseFast test-core-ReleaseSmall test-json test-launcher test-gui test-images test-monospace test-startup test-patches test-mermaid test-svg test-render test-samples test-workflow test-install test-packages test-profile release
 
 setup:
-	@MDF_REFERENCE=1 sh scripts/setup.sh
+	@MDF_REFERENCE=1 sh tools/scripts/setup.sh
 
 .PHONY: setup-reference setup-native
 setup-reference:
-	@MDF_REFERENCE=1 sh scripts/setup.sh
+	@MDF_REFERENCE=1 sh tools/scripts/setup.sh
 
 setup-native:
-	@MDF_REFERENCE=0 sh scripts/setup.sh
+	@MDF_REFERENCE=0 sh tools/scripts/setup.sh
 
 check-requirements: version-check
-	@MDF_REFERENCE=1 sh scripts/check-requirements.sh
+	@MDF_REFERENCE=1 sh tools/scripts/check-requirements.sh
 
 .PHONY: check-reference-requirements
 check-reference-requirements: version-check
-	@MDF_REFERENCE=1 sh scripts/check-requirements.sh
+	@MDF_REFERENCE=1 sh tools/scripts/check-requirements.sh
 
 .PHONY: check-native-requirements
 check-native-requirements: version-check
-	@MDF_REFERENCE=0 sh scripts/check-requirements.sh
+	@MDF_REFERENCE=0 sh tools/scripts/check-requirements.sh
 
 check-package-tools:
 	@command -v rpmbuild >/dev/null && command -v dpkg-deb >/dev/null || { printf '%s\n' 'Release packaging requires rpmbuild and dpkg-deb. Fedora: sudo dnf install rpm-build dpkg' >&2; exit 1; }
@@ -51,16 +51,16 @@ check-profile-tools:
 	@test "$$(id -u)" = 0 || command -v sudo >/dev/null || { printf '%s\n' 'Cold profiling requires sudo for Linux cache resets. Run make setup.' >&2; exit 1; }
 
 build: check-requirements test-unit test-markdown
-	@sh scripts/build-frontend.sh "$(BUILD_PREFIX)"
+	@sh tools/scripts/build-frontend.sh "$(BUILD_PREFIX)"
 
 .PHONY: reference test-reference-gui
 reference: check-reference-requirements test-unit test-markdown
-	@sh scripts/build-reference.sh "$(REFERENCE_PREFIX)"
+	@sh tools/scripts/build-reference.sh "$(REFERENCE_PREFIX)"
 
 .PHONY: native
 native: check-native-requirements
 	@"$(ZIG)" build build-native-window build-native-engine build-native-modules $(OFFLINE_FLAGS) $(CACHE_FLAGS) $(BUILD_FLAGS) --prefix "$(BUILD_PREFIX)/native-window"
-	@python3 scripts/pack-native.py "$(BUILD_PREFIX)/native-window"
+	@python3 tools/scripts/pack-native.py "$(BUILD_PREFIX)/native-window"
 
 clean:
 	rm -rf build dist zig-out .zig-cache
@@ -79,19 +79,19 @@ run: build
 	"$(BUILD_PREFIX)/bin/mdf"
 
 run-sample: build
-	"$(BUILD_PREFIX)/bin/mdf" SAMPLE.md
+	"$(BUILD_PREFIX)/bin/mdf" assets/samples/SAMPLE.md
 
 profile: check-profile-tools
 	@$(MAKE) --no-print-directory build OPTIMIZE=ReleaseFast BUILD_PREFIX=build/profile/runtime
-	@python3 scripts/profile.py --binary build/profile/runtime/bin/mdf --output build/profile/profile.html --runs "$(PROFILE_RUNS)"
+	@python3 tools/scripts/profile.py --binary build/profile/runtime/bin/mdf --output build/profile/profile.html --runs "$(PROFILE_RUNS)"
 
 profile-trace: check-profile-tools
 	@command -v strace >/dev/null || { printf '%s\n' 'The separate syscall diagnostic requires strace.' >&2; exit 1; }
 	@$(MAKE) --no-print-directory build OPTIMIZE=ReleaseFast BUILD_PREFIX=build/profile-trace/runtime
-	@python3 scripts/profile-trace.py --binary build/profile-trace/runtime/bin/mdf --document SAMPLE.md --document SAMPLE-HUGE.md --output build/profile-trace/trace.html
+	@python3 tools/scripts/profile-trace.py --binary build/profile-trace/runtime/bin/mdf --document assets/samples/SAMPLE.md --document assets/samples/SAMPLE-HUGE.md --output build/profile-trace/trace.html
 
 benchmark-launch: check-profile-tools
-	@python3 scripts/benchmark-launch.py --zig "$(ZIG)" --runs "$(LAUNCH_RUNS)"
+	@python3 tools/scripts/benchmark-launch.py --zig "$(ZIG)" --runs "$(LAUNCH_RUNS)"
 
 tests: test
 
@@ -145,14 +145,14 @@ test-profile: check-profile-tools
 
 test-samples:
 	@python3 tests/samples.py
-	@python3 scripts/render-compare.py --check
+	@python3 tools/scripts/render-compare.py --check
 
 test-render:
 	@$(MAKE) --no-print-directory build OPTIMIZE=ReleaseFast BUILD_PREFIX=build/render-comparison/runtime
-	@python3 scripts/render-compare.py --binary build/render-comparison/runtime/bin/mdf
+	@python3 tools/scripts/render-compare.py --binary build/render-comparison/runtime/bin/mdf
 
 test-mermaid:
-	@python3 scripts/mermaid-notices.py --check
+	@python3 tools/scripts/mermaid-notices.py --check
 	@python3 tests/mermaid-dependencies.py
 	@"$(ZIG)" build test-mermaid $(OFFLINE_FLAGS) $(CACHE_FLAGS) $(TARGET_FLAGS) -Doptimize=Debug
 
@@ -161,6 +161,10 @@ test-svg:
 
 test-packages: check-package-tools
 	@bash tests/packages.sh
+
+.PHONY: test-dnf-repo
+test-dnf-repo:
+	@python3 tests/rpm-repository.py
 
 test-images: reference
 	@python3 tests/zignal-dependencies.py
@@ -210,12 +214,12 @@ test-reference-gui: test-images test-monospace test-startup
 
 release: check-package-tools
 	@$(MAKE) --no-print-directory build OPTIMIZE=ReleaseFast BUILD_PREFIX=build
-	@OPTIMIZE=ReleaseFast sh scripts/release.sh
+	@OPTIMIZE=ReleaseFast sh tools/scripts/release.sh
 
 .PHONY: version version-check version-bump
 version:
-	@python3 scripts/version.py show
+	@python3 tools/scripts/version.py show
 version-check:
-	@python3 scripts/version.py check
+	@python3 tools/scripts/version.py check
 version-bump:
-	@python3 scripts/version.py bump
+	@python3 tools/scripts/version.py bump

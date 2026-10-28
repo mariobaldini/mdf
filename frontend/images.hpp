@@ -9,6 +9,7 @@ extern "C" {
 
 struct PixelBuffer {
   MdfPixels image{};
+  size_t bytes() const { return image.data ? size_t(image.width) * image.height * image.channels : 0; }
   ~PixelBuffer() { std::free(image.data); }
 };
 struct PreparedFont;
@@ -30,15 +31,18 @@ class ImageWorker {
   void *worker = nullptr;
   std::vector<EncodedImage> sources;
   std::shared_ptr<PreparedFont> fonts;
+  size_t pending_limit = 0;
 public:
+  static constexpr size_t pending_budget = 8 * 1024 * 1024;
   uint64_t revision = 0;
   mutable uint64_t first_diagram_ns = 0;
   ~ImageWorker();
   void reset();
   void start(uint64_t revision, std::vector<EncodedImage> inputs, size_t limit,
              void (*notify)(), bool dark = false, std::shared_ptr<PreparedFont> fonts = {},
-             bool allow_diagrams = true);
+             bool allow_diagrams = true, size_t pending_limit = 0);
   void allow_diagrams();
   bool complete() const;
-  std::vector<PreparedImage> take();
+  size_t pending() const;
+  std::vector<PreparedImage> take(bool all = true);
 };

@@ -156,6 +156,22 @@ template<class Check> void check_latin_boundaries(DocumentView &reader, Check ch
 
 template<class Check> void check_reflow_caches(DocumentView &reader, Check check) {
   DocumentView probe(0, 0, 1040, 500, reader.settings);
+  Block task;
+  task.kind = "paragraph";
+  task.task = false;
+  task.spans = {Span{"Visible unchecked task"}};
+  probe.blocks = {task};
+  probe.starts = {0};
+  for (bool dark : {false, true}) {
+    auto settings = probe.settings;
+    settings.dark = dark;
+    probe.configure(settings);
+    const auto marker = probe.measure_reference(0, true);
+    check(marker.rects.size() == 4, "Unchecked tasks retain all four outline edges");
+    for (const auto &edge : marker.rects)
+      check(probe.role(edge.role) == probe.palette.fg,
+            "Unchecked task outlines use readable text color in light and dark modes");
+  }
   Block block;
   block.kind = "paragraph";
   block.spans = {Span{"Retained measurements across widths and paint colors."}};
@@ -215,4 +231,38 @@ template<class Check> void check_reflow_caches(DocumentView &reader, Check check
   probe.toggle(1);
   check(!probe.visible(4) && probe.index_at(probe.scroll) == 1,
         "Collapsing the anchor's ancestor moves the anchor to its summary");
+}
+
+template<class Check> void check_raster_cache(DocumentView &reader, Check check) {
+  DocumentView probe(0, 0, 1040, 300, reader.settings);
+  Block image;
+  image.kind = "image";
+  probe.blocks.assign(12, image);
+  probe.starts.assign(12, 0);
+  probe.invalidate();
+  for (int index = 0; index < 12; ++index) probe.heights[index] = 1100;
+  probe.reindex();
+  for (int index = 0; index < 12; ++index) {
+    auto pixels = std::make_unique<PixelBuffer>();
+    pixels->image = {static_cast<unsigned char *>(std::malloc(2048 * 1024 * 3)), 2048, 1024, 3};
+    if (!pixels->image.data) throw std::bad_alloc();
+    std::memset(pixels->image.data, index + 1, pixels->bytes());
+    probe.adopt_raster(index, std::move(pixels));
+    probe.trim_rasters();
+    check(probe.raster_bytes <= DocumentView::raster_budget,
+          "Off-screen raster pixels stay within the decoded-image budget");
+  }
+  check(probe.rasters.size() == 12 && probe.images.size() < 12 && probe.images.size() == probe.image_pixels.size(),
+        "Eviction preserves intrinsic metadata and keeps GUI objects paired with pixel owners");
+  check(probe.images.count(0) && probe.image_pixels.at(0)->image.data[0] == 1,
+        "Visible full-resolution pixels survive off-screen eviction");
+  int evicted = 0;
+  while (probe.images.count(evicted)) ++evicted;
+  const auto geometry = probe.measure_reference(evicted, true);
+  check(geometry.image && geometry.iw > 0 && geometry.ih == geometry.iw / 2,
+        "Evicted rasters keep the same intrinsic proportions and image layout");
+  probe.scroll = probe.offsets[evicted];
+  const auto wanted = probe.wanted_rasters();
+  check(std::find(wanted.begin(), wanted.end(), evicted) != wanted.end(),
+        "Scrolling requests an evicted visible image again");
 }

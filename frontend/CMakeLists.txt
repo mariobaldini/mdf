@@ -55,7 +55,7 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter)
 set(CMAKE_SKIP_BUILD_RPATH TRUE)
 # Preserve the assembler symbol-version aliases across GCC's LTO link stage.
 set_source_files_properties(compat.c PROPERTIES COMPILE_OPTIONS "-fno-lto")
-set(MDF_DIAGRAM_PACKER "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/pack-diagram.py")
+set(MDF_DIAGRAM_PACKER "${CMAKE_CURRENT_SOURCE_DIR}/../tools/scripts/pack-diagram.py")
 set(MDF_OPTIONAL_MODULE_COMPRESSION "zlib" CACHE STRING "Optional module storage: raw or zlib")
 if(NOT MDF_OPTIONAL_MODULE_COMPRESSION MATCHES "^(raw|zlib)$")
   message(FATAL_ERROR "MDF_OPTIONAL_MODULE_COMPRESSION must be raw or zlib")

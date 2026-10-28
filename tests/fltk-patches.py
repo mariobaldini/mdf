@@ -10,7 +10,7 @@ import subprocess
 import unittest
 
 ROOT = Path(__file__).resolve().parent.parent
-spec = importlib.util.spec_from_file_location('prepare_fltk', ROOT / 'scripts/prepare-fltk.py')
+spec = importlib.util.spec_from_file_location('prepare_fltk', ROOT / 'tools/scripts/prepare-fltk.py')
 prepare = importlib.util.module_from_spec(spec); spec.loader.exec_module(prepare)
 
 

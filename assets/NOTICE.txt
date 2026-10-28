@@ -15,7 +15,7 @@ The reference frontend is based in part on the work of the Independent JPEG Grou
 Reference Pango 1.57.1 (GNOME), LGPL-2.1-or-later, is built from the unmodified upstream source.
 Source: https://github.com/GNOME/pango/tree/1.57.1
 The upstream COPYING contains the GNU Library GPL version 2, reproduced below with FLTK.
-Pango has no FLTK linking exception. See docs/text-stack.md for source and relinking instructions.
+Pango has no FLTK linking exception. See docs/release-process.md for source and relinking instructions.
 
 
 === FLTK 1.4.5 (including the static-linking exception) ===

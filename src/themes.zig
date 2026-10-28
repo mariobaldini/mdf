@@ -1,5 +1,5 @@
 //! Built-in reader palettes. No theme files, fonts or I/O are needed at startup.
-//! Palette origins and MDF's readability adaptations are documented in themes.md.
+//! Palette origins and MDF's readability adaptations are documented in docs/architecture.md#themes.
 const std = @import("std");
 pub const Palette = extern struct {
     bg: u32,

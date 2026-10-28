@@ -46,13 +46,13 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     const mvzr = b.dependency("mvzr", .{ .target = target, .optimize = optimize });
     const mvzr_module = mvzr.module("mvzr");
     const prepare_mvzr = b.addSystemCommand(&.{"python3"});
-    prepare_mvzr.addFileArg(b.path("scripts/prepare-mvzr.py"));
+    prepare_mvzr.addFileArg(b.path("tools/scripts/prepare-mvzr.py"));
     prepare_mvzr.addFileArg(mvzr.path("src/mvzr.zig"));
     mvzr_module.root_source_file = prepare_mvzr.addOutputFileArg("mvzr.zig");
     const layout_config = b.addOptions();
     layout_config.addOption([]const u8, "version", "0.4.1");
     // Normalize a generated copy; the pinned submodule stays pristine.
-    // Palette adjustments are documented in docs/compressed-diagrams.md.
+    // Palette adjustments are documented in docs/architecture.md#images-and-diagrams.
     const layout_sources = b.addWriteFiles();
     _ = layout_sources.addCopyDirectory(b.path("modules/pozeiden/src"), "pozeiden", .{
         .exclude_extensions = &.{ "renderers/sequence.zig", "renderers/flowchart.zig", "renderers/state.zig", "renderers/class.zig", "renderers/timeline.zig", "renderers/quadrant.zig", "renderers/pie.zig", "renderers/c4.zig", "renderers/block.zig", "svg/layout.zig" },
@@ -176,13 +176,13 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     b.step("test-svg", "Check Zig SVG rasterization, resources, font styles and ABI ownership").dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = svg_test_module })).step);
     const zignal = b.dependency("zignal", .{ .target = target, .optimize = optimize });
     // Keep the pinned submodule pristine; use a checked build-cache copy for
-    // the two PNG compatibility corrections described in image-decoding.md.
+    // the two PNG compatibility corrections described in docs/architecture.md#images-and-diagrams.
     const image_sources = b.addWriteFiles();
     _ = image_sources.addCopyDirectory(b.path("modules/zignal/src"), "zignal", .{
         .exclude_extensions = &.{ "codecs/png.zig", "root.zig" },
     });
     const fix_png = b.addSystemCommand(&.{"python3"});
-    fix_png.addFileArg(b.path("scripts/prepare-zignal.py"));
+    fix_png.addFileArg(b.path("tools/scripts/prepare-zignal.py"));
     fix_png.addFileArg(b.path("modules/zignal/src/codecs/png.zig"));
     _ = image_sources.addCopyFile(fix_png.addOutputFileArg("png.zig"), "zignal/codecs/png.zig");
     zignal.module("zignal").root_source_file = image_sources.addCopyFile(b.path("modules/zignal/src/root.zig"), "zignal/root.zig");
@@ -207,18 +207,18 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     }
     b.step("test-codecs", "Check Zignal image ownership, limits and PNG compatibility").dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = image_tests, .filters = &.{"MDF image:"} })).step);
     const entity_pack = b.addSystemCommand(&.{"python3"});
-    entity_pack.addFileArg(b.path("scripts/pack-entities.py"));
+    entity_pack.addFileArg(b.path("tools/scripts/pack-entities.py"));
     entity_pack.addFileArg(b.path("assets/html-entities.tsv"));
     const entities = b.createModule(.{ .root_source_file = b.path("src/entities.zig"), .target = target, .optimize = optimize });
     entities.addAnonymousImport("html-entity-data", .{ .root_source_file = entity_pack.addOutputFileArg("html-entities.bin") });
     const mecha_sources = b.addWriteFiles();
     _ = mecha_sources.addCopyDirectory(b.path("modules/mecha/src"), "mecha/src", .{});
     const prepare_mecha = b.addSystemCommand(&.{"python3"});
-    prepare_mecha.addFileArg(b.path("scripts/prepare-mecha.py"));
+    prepare_mecha.addFileArg(b.path("tools/scripts/prepare-mecha.py"));
     prepare_mecha.addFileArg(b.path("modules/mecha/mecha.zig"));
     const mecha = b.createModule(.{ .root_source_file = mecha_sources.addCopyFile(prepare_mecha.addOutputFileArg("mecha.zig"), "mecha/mecha.zig"), .target = target, .optimize = optimize });
     const prepare_markdown = b.addSystemCommand(&.{"python3"});
-    prepare_markdown.addFileArg(b.path("scripts/prepare-zigmark.py"));
+    prepare_markdown.addFileArg(b.path("tools/scripts/prepare-zigmark.py"));
     prepare_markdown.addDirectoryArg(b.path("modules/zigmark/src"));
     const markdown_sources = prepare_markdown.addOutputDirectoryArg("zigmark");
     prepare_markdown.addFileArg(b.path("frontend/patches/zigmark/0001-preserve-commonmark-lines-and-container-tabs.patch"));
@@ -339,7 +339,7 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         .{ .name = "open-sans-bold-italic", .path = "assets/fonts/open-sans/OpenSans-BoldItalic.ttf" },
     }) |font| {
         const pack = b.addSystemCommand(&.{"python3"});
-        pack.addFileArg(b.path("scripts/pack-font.py"));
+        pack.addFileArg(b.path("tools/scripts/pack-font.py"));
         pack.addFileArg(b.path(font.path));
         const resource = pack.addOutputFileArg(b.fmt("{s}.zlib", .{font.name}));
         core.root_module.addAnonymousImport(font.name, .{ .root_source_file = resource });

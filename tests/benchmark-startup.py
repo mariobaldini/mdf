@@ -10,7 +10,7 @@ import tempfile
 import unittest
 
 root = Path(__file__).resolve().parent.parent
-spec = importlib.util.spec_from_file_location('benchmark_startup', root/'scripts/benchmark-startup.py')
+spec = importlib.util.spec_from_file_location('benchmark_startup', root/'tools/scripts/benchmark-startup.py')
 benchmark = importlib.util.module_from_spec(spec); spec.loader.exec_module(benchmark)
 
 

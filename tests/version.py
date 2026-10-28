@@ -11,7 +11,7 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-SPEC = importlib.util.spec_from_file_location("mdf_version", ROOT / "scripts/version.py")
+SPEC = importlib.util.spec_from_file_location("mdf_version", ROOT / "tools/scripts/version.py")
 version = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(version)
 
@@ -31,7 +31,7 @@ class VersionTests(unittest.TestCase):
         current = version.check(ROOT)
         self.assertEqual(version.semver(ROOT), current + ".0")
         for command, expected in (("show", current), ("semver", current + ".0")):
-            result = subprocess.run([sys.executable, str(ROOT / "scripts/version.py"), command], capture_output=True, text=True, check=True)
+            result = subprocess.run([sys.executable, str(ROOT / "tools/scripts/version.py"), command], capture_output=True, text=True, check=True)
             self.assertEqual(result.stdout.strip(), expected)
 
     def test_bump_updates_the_manifest_without_changing_dependency_versions(self):
@@ -68,8 +68,8 @@ class VersionTests(unittest.TestCase):
     def test_make_commands_and_guard_need_no_compiler(self):
         shutil.copy2(ROOT / "Makefile", self.root / "Makefile")
         shutil.copy2(ROOT / ".zig-version", self.root / ".zig-version")
-        (self.root / "scripts").mkdir()
-        shutil.copy2(ROOT / "scripts/version.py", self.root / "scripts/version.py")
+        (self.root / "tools/scripts").mkdir(parents=True)
+        shutil.copy2(ROOT / "tools/scripts/version.py", self.root / "tools/scripts/version.py")
         for target, expected in (("version", "0.3"), ("version-bump", "0.4"), ("version-check", "all checks passed")):
             result = subprocess.run(["make", "--no-print-directory", target], cwd=self.root, capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

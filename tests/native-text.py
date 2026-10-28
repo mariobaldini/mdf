@@ -40,8 +40,8 @@ def main():
     assert [line.split()[-1] for line in symbols.splitlines()] == ['mdf_text_api'], symbols
     versions = subprocess.check_output(['readelf', '--version-info', str(library)], text=True)
     assert all(tuple(map(int, version.split('.'))) <= (2, 38) for version in re.findall(r'GLIBC_([0-9.]+)', versions)), versions
-    profile = load('mdf_profile_for_text', ROOT/'scripts/profile.py')
-    packing = load('mdf_native_text_packer', ROOT/'scripts/pack-native.py').packer
+    profile = load('mdf_profile_for_text', ROOT/'tools/scripts/profile.py')
+    packing = load('mdf_native_text_packer', ROOT/'tools/scripts/pack-native.py').packer
     elf = profile.elf_file(binary)
     section = next(row for row in elf['sections'] if row['name'] == '.mdf_text')
     assert not section['flags'] & 2

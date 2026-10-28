@@ -81,6 +81,12 @@ struct Core {
       throw std::runtime_error("Cannot start navigation worker");
   }
   Buffer image(size_t i) { return mdf_core_image(handle, i); }
+  Buffer source() const { return mdf_core_source(handle); }
+  std::optional<size_t> anchor_index(const std::string &name) const {
+    size_t index;
+    if (!mdf_core_find_anchor(handle, reinterpret_cast<const unsigned char *>(name.data()), name.size(), &index)) return {};
+    return index;
+  }
   Json profile() { return take_json(mdf_core_profile(handle)); }
 };
 inline bool profile_enabled = false;
@@ -199,7 +205,7 @@ inline Block read_block(Core &core, size_t index) {
   return b;
 }
 struct Settings {
-  bool save = false, dark = false, toc = true, preview = true, reload = true,
+  bool save = true, dark = false, toc = true, preview = true, reload = true,
        maximized = false, line_wrap = true;
   std::string theme = "classic", width = "percent_80";
   int size = 12, window_w = 1040, window_h = 780;
@@ -208,7 +214,7 @@ struct Settings {
     return int(mdf_theme_info(mdf_theme_index(reinterpret_cast<const unsigned char *>(theme.data()), theme.size())).font_size);
   }
   explicit Settings(const Json &j) {
-    save = j.value("save_settings_across_sessions", false);
+    save = j.value("save_settings_across_sessions", true);
     dark = j.value("dark_mode", false);
     toc = j.value("show_toc", true);
     preview = j.value("show_preview", true);

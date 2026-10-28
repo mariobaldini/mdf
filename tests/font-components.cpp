@@ -1,4 +1,4 @@
-// Isolated diagnostic for scripts/benchmark-fonts.py; never linked into mdf.
+// Isolated diagnostic for tools/scripts/benchmark-fonts.py; never linked into mdf.
 #include "view.hpp"
 #include <cairo.h>
 #include <cstdio>

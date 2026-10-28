@@ -70,7 +70,46 @@ fn quoteBorder(result: engine.Result, depth: usize) !engine.Rect {
     for (result.rects.items) |rect| if (rect.x == x and rect.width == 3 and rect.role == 1) return rect;
     return error.MissingQuoteBorder;
 }
-test "block layout: quoted markers share the body baseline and stay inside the quote" {
+test "block layout: larger unordered bullets preserve body geometry and source positions" {
+    for ([_]f32{ 0.5, 1, 2 }) |zoom| {
+        var opts = options;
+        opts.zoom = zoom;
+        const spans: []const document.Span = &.{.{ .text = "Alpha beta gamma delta" }};
+        var bullet = try engine.measure(a, .{ .indent = 1, .prefix = "• ", .spans = spans }, 0, 100, opts, metrics, columns, null);
+        defer bullet.deinit();
+        // Both prefixes occupy four bytes and have equal test-metric widths.
+        var ordered = try engine.measure(a, .{ .indent = 1, .prefix = "12. ", .spans = spans }, 0, 100, opts, metrics, columns, null);
+        defer ordered.deinit();
+        try std.testing.expectEqual(ordered.height, bullet.height);
+        try std.testing.expectEqual(ordered.right, bullet.right);
+        try std.testing.expectEqual(ordered.runs.items.len, bullet.runs.items.len);
+        const marker = bullet.runs.items[0];
+        const original = ordered.runs.items[0];
+        try std.testing.expectEqualStrings("•", marker.text.slice());
+        try std.testing.expectEqual(@as(usize, 100), marker.position);
+        try std.testing.expect(marker.font.size > original.font.size);
+        try std.testing.expectEqual(original.font.face, marker.font.face);
+        try std.testing.expectEqual(original.font.flags, marker.font.flags);
+        try std.testing.expectEqual(original.height, marker.height);
+        const center = marker.y - marker.font_height / 2 + marker.font_descent;
+        const original_center = original.y - original.font_height / 2 + original.font_descent;
+        try std.testing.expectApproxEqAbs(original_center, center, 0.001);
+        for (bullet.runs.items, ordered.runs.items) |actual, expected| {
+            if (actual.position < 104) continue;
+            try std.testing.expectEqualStrings(expected.text.slice(), actual.text.slice());
+            try std.testing.expectEqual(expected.position, actual.position);
+            try std.testing.expectEqual(expected.font, actual.font);
+            try std.testing.expectEqual(expected.x, actual.x);
+            try std.testing.expectEqual(expected.y, actual.y);
+            try std.testing.expectEqual(expected.width, actual.width);
+            try std.testing.expectEqual(expected.height, actual.height);
+        }
+        var task = try engine.measure(a, .{ .indent = 1, .prefix = "• ", .task = false, .spans = spans }, 0, 100, opts, metrics, columns, null);
+        defer task.deinit();
+        try std.testing.expectEqual(original.font.size, task.runs.items[0].font.size);
+    }
+}
+test "block layout: quoted markers stay centered with the body and inside the quote" {
     var doc = try document.Document.parse(a, "> - First item with enough words to wrap onto another line.\n> - Second item.\n", "");
     defer doc.deinit();
     for (doc.blocks, 0..) |block, index| {
@@ -79,7 +118,9 @@ test "block layout: quoted markers share the body baseline and stay inside the q
         const body = try bodyRun(result, doc.rendered.starts[index] + block.prefix.len);
         const marker = result.runs.items[0];
         const border = try quoteBorder(result, 1);
-        try std.testing.expectApproxEqAbs(marker.y, body.y, 0.001);
+        const marker_center = marker.y - marker.font_height / 2 + marker.font_descent;
+        const body_center = body.y - body.font_height / 2 + body.font_descent;
+        try std.testing.expectApproxEqAbs(marker_center, body_center, 0.001);
         try std.testing.expect(marker.x >= border.x + 12 and body.x > marker.x);
         for (result.runs.items) |run| if (run.position >= body.position and run.position != std.math.maxInt(usize))
             try std.testing.expect(run.x >= body.x);
@@ -193,6 +234,7 @@ test "block layout: task decorations reserve text space and retain check geometr
     var unchecked = try engine.measure(a, .{ .task = false }, 0, 0, options, metrics, columns, null);
     defer unchecked.deinit();
     try std.testing.expectEqual(@as(usize, 4), unchecked.rects.items.len);
+    for (unchecked.rects.items) |rect| try std.testing.expectEqual(@as(u32, 10), rect.role);
 }
 test "block layout: aligned table cells preserve tab positions and background order" {
     const block: document.Block = .{ .kind = .table_row, .table_header = true, .table_last = true,

@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 
 sys.dont_write_bytecode = True
 root = Path(__file__).resolve().parent.parent
-spec = importlib.util.spec_from_file_location("mdf_profile", root / "scripts/profile.py")
+spec = importlib.util.spec_from_file_location("mdf_profile", root / "tools/scripts/profile.py")
 profile = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(profile)
 
@@ -121,7 +121,7 @@ class ProfileTests(unittest.TestCase):
                     mock.patch.object(profile, "binary_cache_state", return_value={"resident_pages": 3, "total_pages": 8}), \
                     mock.patch.object(profile.subprocess, "run") as launch:
                 with self.assertRaisesRegex(RuntimeError, "3/8 pages resident"):
-                    profile.profile(Path("/not/executed"), Path("SAMPLE.md"), 1, output)
+                    profile.profile(Path("/not/executed"), root / "assets/samples/SAMPLE.md", 1, output)
                 launch.assert_not_called()
             self.assertEqual(list(Path(directory).iterdir()), [])
 
@@ -589,8 +589,8 @@ class ProfileTests(unittest.TestCase):
         with mock.patch.object(profile.sys, "argv", ["profile.py", "--seed", "11"]), \
              mock.patch.object(profile, "profile") as measure:
             self.assertEqual(profile.main(), 0)
-        self.assertEqual([path.name for path in measure.call_args.args[1]],
-                         [f'SAMPLE-{size}-{edition}.md' for size in ('SMALL','MID','HUGE') for edition in ('TEXT','IMAGES')])
+        self.assertEqual(measure.call_args.args[1],
+                         [root/f'assets/samples/SAMPLE-{size}-{edition}.md' for size in ('SMALL','MID','HUGE') for edition in ('TEXT','IMAGES')])
         self.assertEqual(measure.call_args.args[2], 12)
         self.assertEqual(measure.call_args.kwargs, {"seed": 11})
 
@@ -832,7 +832,7 @@ class ProfileTests(unittest.TestCase):
                          [(2_000_000, 3_000_000, True), (5_000_000, 4_000_000, True)])
 
     def test_nonpositive_launch_count_fails_before_execution(self):
-        result = subprocess.run([sys.executable, str(root / "scripts/profile.py"), "--runs", "0"], capture_output=True)
+        result = subprocess.run([sys.executable, str(root / "tools/scripts/profile.py"), "--runs", "0"], capture_output=True)
         self.assertEqual(result.returncode, 2)
 
     def test_timestamped_artifact_sets_preserve_existing_reports(self):
@@ -870,7 +870,7 @@ class ProfileTests(unittest.TestCase):
                     mock.patch.object(profile, "drop_linux_caches", side_effect=RuntimeError("not permitted")), \
                     mock.patch.object(profile.subprocess, "run") as launch:
                 with self.assertRaises(RuntimeError):
-                    profile.profile(Path("/not/executed"), Path("SAMPLE.md"), 2, base)
+                    profile.profile(Path("/not/executed"), root / "assets/samples/SAMPLE.md", 2, base)
                 launch.assert_not_called()
             self.assertEqual(base.read_text(), "previous report")
             self.assertEqual(list(Path(directory).iterdir()), [base])
@@ -917,7 +917,7 @@ class ProfileTests(unittest.TestCase):
         order, caches = [], []
         def reset(*, flush_paths):
             self.assertEqual(flush_paths[0], Path('/not/executed'))
-            self.assertIn(Path('SAMPLE.md'), flush_paths)
+            self.assertIn(root / 'assets/samples/SAMPLE.md', flush_paths)
             order.append("reset")
             return {"success": True, "drop_caches": 3}
         def verify(binary):
@@ -943,8 +943,8 @@ class ProfileTests(unittest.TestCase):
                     mock.patch.object(profile.platform, "platform", return_value="Test Linux"), \
                     mock.patch.object(profile.time, "monotonic_ns", side_effect=[value for i in range(3) for value in (i * 100_000_000, i * 100_000_000 + 40_000_000)]), \
                     mock.patch.object(profile.subprocess, "run", side_effect=launch):
-                report = profile.profile(Path("/not/executed"), Path("SAMPLE.md"), 3, output)
-            input_count = len(profile.cold_input_paths(Path('/not/executed'), Path('SAMPLE.md')))-1
+                report = profile.profile(Path("/not/executed"), root / "assets/samples/SAMPLE.md", 3, output)
+            input_count = len(profile.cold_input_paths(Path('/not/executed'), root / 'assets/samples/SAMPLE.md'))-1
             self.assertEqual(order, ["reset", "verify", *["verify-input"]*input_count, "launch"] * 3)
             self.assertEqual(len(set(caches)), 3)
             self.assertTrue(all(not cache.exists() for cache in caches))
@@ -1073,7 +1073,7 @@ class ProfileTests(unittest.TestCase):
                     mock.patch.object(profile, "drop_linux_caches") as reset, \
                     mock.patch.object(profile.subprocess, "run") as launch:
                 with self.assertRaisesRegex(RuntimeError, "requires a Wayland session"):
-                    profile.profile(Path("/not/executed"), Path("SAMPLE.md"), 2, Path(directory) / "profile.html")
+                    profile.profile(Path("/not/executed"), root / "assets/samples/SAMPLE.md", 2, Path(directory) / "profile.html")
                 reset.assert_not_called()
                 launch.assert_not_called()
 
@@ -1101,7 +1101,7 @@ class ProfileTests(unittest.TestCase):
                         mock.patch.object(profile, "verify_cold_binary", return_value={"verified_cold": True}), \
                         mock.patch.object(profile.subprocess, "run", return_value=process):
                     with self.assertRaisesRegex(RuntimeError, "requires the Wayland video backend"):
-                        profile.profile(Path("/not/executed"), Path("SAMPLE.md"), 1, Path(directory) / "profile.html")
+                        profile.profile(Path("/not/executed"), root / "assets/samples/SAMPLE.md", 1, Path(directory) / "profile.html")
                 self.assertEqual(list(Path(directory).iterdir()), [])
 
     def test_profile_rejects_nonrelease_builds_without_writing_a_report(self):
@@ -1115,7 +1115,7 @@ class ProfileTests(unittest.TestCase):
                         mock.patch.object(profile, "verify_cold_binary", return_value={"verified_cold": True}), \
                         mock.patch.object(profile.subprocess, "run", return_value=process):
                     with self.assertRaisesRegex(RuntimeError, "requires a ReleaseFast build"):
-                        profile.profile(Path("/not/executed"), Path("SAMPLE.md"), 1, Path(directory) / "profile.html")
+                        profile.profile(Path("/not/executed"), root / "assets/samples/SAMPLE.md", 1, Path(directory) / "profile.html")
                 self.assertEqual(list(Path(directory).iterdir()), [])
 
     def test_profile_rejects_debug_frontend_with_release_core(self):
@@ -1128,7 +1128,7 @@ class ProfileTests(unittest.TestCase):
                     mock.patch.object(profile, "verify_cold_binary", return_value={"verified_cold": True}), \
                     mock.patch.object(profile.subprocess, "run", return_value=process):
                 with self.assertRaisesRegex(RuntimeError, "Release"):
-                    profile.profile(Path("/not/executed"), Path("SAMPLE.md"), 1, Path(directory) / "profile.html")
+                    profile.profile(Path("/not/executed"), root / "assets/samples/SAMPLE.md", 1, Path(directory) / "profile.html")
             self.assertEqual(list(Path(directory).iterdir()), [])
 
 

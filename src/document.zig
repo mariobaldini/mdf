@@ -81,11 +81,26 @@ pub const Block = struct {
 };
 
 pub const Document = struct {
+    pub const Anchor = struct { name: []const u8, index: usize };
     arena: std.heap.ArenaAllocator,
     path: [:0]const u8,
     source: []const u8,
     blocks: []Block,
+    explicit_anchors: []const Anchor = &.{},
     rendered: text_projection.Projection = .{},
+
+    pub fn findAnchor(self: *const Document, name: []const u8) ?usize {
+        if (self.blocks.len == 0) return null;
+        if (name.len == 0) return 0;
+        var explicit: ?usize = null;
+        for (self.explicit_anchors) |anchor| if (std.mem.eql(u8, anchor.name, name)) {
+            explicit = @min(anchor.index, self.blocks.len - 1);
+            break;
+        };
+        for (self.blocks, 0..) |block, index| if (std.mem.eql(u8, block.anchor, name))
+            return if (explicit) |target| @min(index, target) else index;
+        return explicit;
+    }
 
     pub fn deinit(self: *Document) void {
         self.arena.deinit();
@@ -128,6 +143,7 @@ pub const Document = struct {
         try ctx.finish(path, load_images);
         const owned_path = try a.dupeSentinel(u8, path, 0);
         const blocks = try ctx.blocks.toOwnedSlice(a);
+        const explicit_anchors = try ctx.explicit_anchors.toOwnedSlice(a);
         const projection_span = @import("profiling.zig").begin(@src(), "Prepare rendered document text and positions", .document);
         const rendered = text_projection.Projection.init(a, blocks) catch |err| {
             projection_span.end();
@@ -139,6 +155,7 @@ pub const Document = struct {
             .path = owned_path,
             .source = source,
             .blocks = blocks,
+            .explicit_anchors = explicit_anchors,
             .rendered = rendered,
         };
     }
@@ -148,6 +165,7 @@ const Parser = struct {
     a: Allocator,
     source: []const u8,
     blocks: std.ArrayList(Block) = .empty,
+    explicit_anchors: std.ArrayList(Document.Anchor) = .empty,
     spans: std.ArrayList(Span) = .empty,
     lists: std.ArrayList(?u32) = .empty,
     links: std.ArrayList([]const u8) = .empty,
@@ -637,6 +655,7 @@ const Parser = struct {
                 _ = self.details.pop();
             } else {
                 try self.start(.details, 0);
+                try self.htmlAnchors(raw, tag);
                 self.current.?.details_open = htmlHasAttribute(raw, "open");
                 try self.details.append(self.a, self.blocks.items.len);
             }
@@ -644,21 +663,88 @@ const Parser = struct {
         }
         if (std.ascii.eqlIgnoreCase(tag, "summary")) {
             if (self.in_cell) return;
+            if (!closing) try self.htmlAnchors(raw, tag);
             if (closing) try self.flush();
             return;
         }
-        if (std.ascii.eqlIgnoreCase(tag, "br")) return self.addText(.hard_break, "\n");
+        if (std.ascii.eqlIgnoreCase(tag, "br")) {
+            if (!closing) try self.htmlAnchors(raw, tag);
+            return self.addText(.hard_break, "\n");
+        }
         if (std.ascii.eqlIgnoreCase(tag, "hr")) {
             if (self.in_cell) return;
             try self.start(.rule, 0);
+            if (!closing) try self.htmlAnchors(raw, tag);
             try self.flush();
             return;
         }
+        if (!closing) try self.htmlAnchors(raw, tag);
         const counter: ?*usize = if (std.ascii.eqlIgnoreCase(tag, "strong") or std.ascii.eqlIgnoreCase(tag, "b")) &self.html_bold else if (std.ascii.eqlIgnoreCase(tag, "em") or std.ascii.eqlIgnoreCase(tag, "i")) &self.html_italic else if (std.ascii.eqlIgnoreCase(tag, "del") or std.ascii.eqlIgnoreCase(tag, "s") or std.ascii.eqlIgnoreCase(tag, "strike")) &self.html_strike else if (std.ascii.eqlIgnoreCase(tag, "code") or std.ascii.eqlIgnoreCase(tag, "kbd") or std.ascii.eqlIgnoreCase(tag, "samp")) &self.html_code else if (std.ascii.eqlIgnoreCase(tag, "ins") or std.ascii.eqlIgnoreCase(tag, "u")) &self.underline else if (std.ascii.eqlIgnoreCase(tag, "mark")) &self.highlight else if (std.ascii.eqlIgnoreCase(tag, "small")) &self.small else null;
         if (counter) |count| {
             if (closing) count.* -|= 1 else count.* += 1;
         }
         // Other HTML tags are inert. Their readable content remains in the document.
+    }
+
+    fn htmlAnchors(self: *Parser, raw: []const u8, tag: []const u8) !void {
+        if (tag.len == 0 or !std.ascii.isAlphabetic(tag[0])) return;
+        if (htmlAttribute(raw, "id")) |name| try self.htmlAnchor(name);
+        if (std.ascii.eqlIgnoreCase(tag, "a"))
+            if (htmlAttribute(raw, "name")) |name| try self.htmlAnchor(name);
+    }
+
+    fn htmlAnchor(self: *Parser, raw: []const u8) !void {
+        var decoded: std.ArrayList(u8) = .empty;
+        var at: usize = 0;
+        while (at < raw.len) {
+            if (entities.decode(raw, at)) |value| {
+                try decoded.appendSlice(self.a, value.bytes[0..value.len]);
+                at += value.consumed;
+            } else {
+                try decoded.append(self.a, raw[at]);
+                at += 1;
+            }
+        }
+        if (decoded.items.len == 0 or std.mem.indexOfAny(u8, decoded.items, " \t\r\n\x0b\x0c\x00") != null) return;
+        // An empty HTML-only paragraph is discarded by flush(), so this
+        // index naturally targets the next rendered block without a spacer.
+        try self.explicit_anchors.append(self.a, .{ .name = try decoded.toOwnedSlice(self.a), .index = self.blocks.items.len + self.block_offset });
+    }
+
+    fn htmlAttribute(raw: []const u8, name: []const u8) ?[]const u8 {
+        var at = std.mem.indexOfAny(u8, raw, " \t\r\n>") orelse return null;
+        while (at < raw.len) {
+            while (at < raw.len and std.ascii.isWhitespace(raw[at])) : (at += 1) {}
+            if (at == raw.len or raw[at] == '>' or raw[at] == '/') break;
+            const attribute_start = at;
+            while (at < raw.len and !std.ascii.isWhitespace(raw[at]) and raw[at] != '=' and raw[at] != '>' and raw[at] != '/') : (at += 1) {}
+            const matches = std.ascii.eqlIgnoreCase(raw[attribute_start..at], name);
+            while (at < raw.len and std.ascii.isWhitespace(raw[at])) : (at += 1) {}
+            if (at == raw.len or raw[at] != '=') {
+                if (matches) return null;
+                continue;
+            }
+            at += 1;
+            while (at < raw.len and std.ascii.isWhitespace(raw[at])) : (at += 1) {}
+            if (at == raw.len) return null;
+            const quoted = raw[at] == '\'' or raw[at] == '"';
+            const quote_mark = raw[at];
+            if (quoted) at += 1;
+            const value_start = at;
+            if (quoted) {
+                while (at < raw.len and raw[at] != quote_mark) : (at += 1) {}
+                if (at == raw.len) return null;
+            } else {
+                while (at < raw.len and !std.ascii.isWhitespace(raw[at]) and raw[at] != '>') : (at += 1) {}
+            }
+            const value = raw[value_start..at];
+            if (quoted) at += 1;
+            if (matches) {
+                if (!quoted and std.mem.indexOfAny(u8, value, "\"'`<=") != null) return null;
+                return value;
+            }
+        }
+        return null;
     }
 
     fn htmlHasAttribute(raw: []const u8, name: []const u8) bool {
@@ -748,6 +834,7 @@ const Parser = struct {
                     if (block.details_parent) |parent| block.details_parent = parent + offset;
                 }
                 try self.blocks.appendSlice(self.a, body.blocks.items);
+                try self.explicit_anchors.appendSlice(self.a, body.explicit_anchors.items);
             }
         }
     }

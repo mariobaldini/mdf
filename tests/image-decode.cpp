@@ -187,6 +187,45 @@ int main(int argc, char **argv) {
   const std::string svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"120\" height=\"60\"><rect width=\"120\" height=\"60\" fill=\"#c03020\"/><text x=\"5\" y=\"30\">MDF SVG</text></svg>";
   inputs.push_back({4, {svg.begin(), svg.end()}, EncodedImage::svg});
   assert(svg_image(reinterpret_cast<const unsigned char *>(svg.data()), svg.size()));
+  // A one-byte queue permits one oversized image, then applies backpressure.
+  // Transferred pixels must survive cancellation and document replacement.
+  for (int iteration = 0; iteration < 3; ++iteration) {
+    ImageWorker streaming;
+    streaming.start(1, inputs, SIZE_MAX, +[]() {}, false, {}, false, 1);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!streaming.pending()) {
+      assert(std::chrono::steady_clock::now() < deadline);
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    assert(!streaming.complete() && streaming.pending() == 1);
+    auto early = streaming.take(false);
+    assert(early.size() == 1 && early[0].pixels->image.data && !early[0].diagram);
+    const auto pixel = early[0].pixels->image.data[0];
+    streaming.reset();
+    streaming.start(2, inputs, SIZE_MAX, +[]() {}, false, {}, false, 1);
+    while (!streaming.pending()) {
+      assert(std::chrono::steady_clock::now() < deadline);
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    streaming.reset();
+    assert(early[0].pixels->image.data[0] == pixel && !diagram_renderer_loaded());
+  }
+  {
+    const std::vector<EncodedImage> rasters(inputs.begin(), inputs.begin() + 2);
+    ImageWorker streaming;
+    streaming.start(1, rasters, SIZE_MAX, +[]() {}, false, {}, false, 1);
+    size_t adopted = 0;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!streaming.complete() || streaming.pending()) {
+      for (auto &image : streaming.take(false)) {
+        assert(!image.diagram && image.pixels->image.data);
+        ++adopted;
+      }
+      assert(std::chrono::steady_clock::now() < deadline);
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    assert(adopted == rasters.size() && !diagram_renderer_loaded());
+  }
   // Cancellation must wake a worker blocked on presentation, including a
   // repeated stop/start with an already populated ordinary-image result.
   for (int iteration = 0; iteration < 3; ++iteration) {

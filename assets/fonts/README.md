@@ -31,7 +31,7 @@ All license notices remain available through `mdf --licenses`.
 ## Open Sans
 
 The four faces in `open-sans/` are modified subsets of Fedora 44's `open-sans-fonts-1.10-25.fc44` package.
-Markdown FAST generated them with FontTools 4.63.0 and the `subset_face` function in `scripts/benchmark-fonts.py`.
+Markdown FAST generated them with FontTools 4.63.0 and the `subset_face` function in `tools/scripts/benchmark-fonts.py`.
 The subset removes Unicode characters classified as Greek or Cyrillic and keeps the other existing characters.
 Each face contains 535 Unicode characters and 578 glyphs. The four files total 449,000 bytes.
 Kerning, hinting, all layout features, and the missing-glyph outline are preserved.

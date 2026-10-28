@@ -10,9 +10,9 @@ from unittest import mock
 import zlib
 
 ROOT=Path(__file__).resolve().parents[1]
-spec=importlib.util.spec_from_file_location('packer',ROOT/'scripts/pack-diagram.py')
+spec=importlib.util.spec_from_file_location('packer',ROOT/'tools/scripts/pack-diagram.py')
 packer=importlib.util.module_from_spec(spec);spec.loader.exec_module(packer)
-spec=importlib.util.spec_from_file_location('repacker',ROOT/'scripts/repack-optional-modules.py')
+spec=importlib.util.spec_from_file_location('repacker',ROOT/'tools/scripts/repack-optional-modules.py')
 repacker=importlib.util.module_from_spec(spec);spec.loader.exec_module(repacker)
 
 

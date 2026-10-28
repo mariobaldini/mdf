@@ -167,6 +167,10 @@ void DocumentView::document(const Json &j, Core &core, FontStore &fonts) {
   plain = {};
   images.clear();
   image_pixels.clear();
+  rasters.clear();
+  raster_bytes = 0;
+  raster_clock = 0;
+  raster_cache_miss_paints = raster_reload_failures = 0;
   diagram_sizes.clear();
   diagram_errors.clear();
   diagram_states.clear();
@@ -495,13 +499,14 @@ Measured DocumentView::measure(int index, bool collect_runs) const {
   ++layout_builds;
   if (!model) return measure_reference(index, collect_runs);
   const auto image = images.find(index);
+  const auto raster = rasters.find(index);
   const auto dimensions = diagram_sizes.find(index);
   const auto failure = diagram_errors.find(index);
   const std::string_view message = failure == diagram_errors.end() ? std::string_view{} : failure->second;
   const MdfLayoutOptions options{content_width, margin, zoom(), settings.line_wrap, collect_runs,
-      code_font.ready(), visible(index), image != images.end(), dimensions != diagram_sizes.end(),
-      dimensions != diagram_sizes.end() ? dimensions->second.first : image != images.end() ? float(image->second->data_w()) : 0,
-      dimensions != diagram_sizes.end() ? dimensions->second.second : image != images.end() ? float(image->second->data_h()) : 0,
+      code_font.ready(), visible(index), image != images.end() || raster != rasters.end(), dimensions != diagram_sizes.end(),
+      dimensions != diagram_sizes.end() ? dimensions->second.first : raster != rasters.end() ? float(raster->second.width) : image != images.end() ? float(image->second->data_w()) : 0,
+      dimensions != diagram_sizes.end() ? dimensions->second.second : raster != rasters.end() ? float(raster->second.height) : image != images.end() ? float(image->second->data_h()) : 0,
       {reinterpret_cast<const unsigned char *>(message.data()), message.size()},
       blocks[index].mermaid() && image != images.end() ? diagram_scale(index) : 0,
       blocks[index].mermaid() && image != images.end() ? diagram_controls(index, 0).height : 0,
@@ -595,6 +600,17 @@ Measured DocumentView::measure_reference(int index, bool collect_runs) const {
     Span s;
     s.text = prefix;
     auto [r, h, right] = flow({s}, b, left + prefix_pad, y + prefix_pad, width, sz, starts[index], "left", collect_runs);
+    if (!b.task.has_value() && prefix == "• ") for (auto &run : r) {
+      if (run.text != "•") continue;
+      run.style.size += std::max(1, run.style.size / 2);
+      fl_font(run.style.face, run.style.size);
+      const auto larger = text_metrics(run.style, run.text.data(), run.text.size());
+      run.x += (run.w - larger.width) / 2;
+      run.y += (larger.height - run.font_height) / 2 + run.font_descent - larger.descent;
+      run.w = larger.width;
+      run.font_height = larger.height;
+      run.font_descent = larger.descent;
+    }
     m.right = std::max(m.right, right);
     m.runs.insert(m.runs.end(), r.begin(), r.end());
   }
@@ -626,14 +642,14 @@ Measured DocumentView::measure_reference(int index, bool collect_runs) const {
     m.rects.push_back({left, y, width, 1, 1});
     m.rects.push_back({left, y + mh - 1, width, 1, 1});
     y += mh;
-  } else if ((b.kind == "image" || diagram) && images.count(index)) {
-    auto &img = images.at(index);
+  } else if ((b.kind == "image" || diagram) && (images.count(index) || rasters.count(index))) {
     m.image = true;
     m.ix = left;
     m.iy = y;
     const auto dimensions = diagram_sizes.find(index);
-    const float natural_width = dimensions == diagram_sizes.end() ? img->data_w() : dimensions->second.first * z;
-    const float natural_height = dimensions == diagram_sizes.end() ? img->data_h() : dimensions->second.second * z;
+    const auto raster = rasters.find(index);
+    const float natural_width = dimensions != diagram_sizes.end() ? dimensions->second.first * z : raster != rasters.end() ? raster->second.width : images.at(index)->data_w();
+    const float natural_height = dimensions != diagram_sizes.end() ? dimensions->second.second * z : raster != rasters.end() ? raster->second.height : images.at(index)->data_h();
     m.iw = std::min(natural_width, width);
     m.ih = m.iw * natural_height / std::max(1.f, natural_width);
     if (diagram) m.ix += (width - m.iw) / 2;
@@ -666,10 +682,10 @@ Measured DocumentView::measure_reference(int index, bool collect_runs) const {
                              std::max(1.f, side * .15f), 4});
         }
       } else {
-        m.rects.push_back({cx, cy, side, 1, 1});
-        m.rects.push_back({cx, cy + side - 1, side, 1, 1});
-        m.rects.push_back({cx, cy, 1, side, 1});
-        m.rects.push_back({cx + side - 1, cy, 1, side, 1});
+        m.rects.push_back({cx, cy, side, 1, 10});
+        m.rects.push_back({cx, cy + side - 1, side, 1, 10});
+        m.rects.push_back({cx, cy, 1, side, 10});
+        m.rects.push_back({cx + side - 1, cy, 1, side, 10});
       }
     }
     y += h + 2 * pad;
@@ -779,6 +795,8 @@ Fl_Color DocumentView::role(int r) const {
     return palette.warning;
   case 9:
     return palette.caution;
+  case 10:
+    return palette.fg;
   default:
     return palette.bg;
   }
@@ -845,8 +863,10 @@ void DocumentView::draw() {
         else
           fl_polygon(tx, ty, tx, ty + side, tx + side * .7f, ty + side / 2);
       }
-      if (m.image) {
+      if (m.image && !images.count(i) && rasters.count(i) && !rasters.at(i).failed) ++raster_cache_miss_paints;
+      if (m.image && images.count(i)) {
         auto &image = images[i];
+        if (auto raster = rasters.find(i); raster != rasters.end()) raster->second.used = ++raster_clock;
         image->scale(m.iw, m.ih, 0, 1);
         image->draw(origin_x + m.ix, dy + m.iy);
         if (model && blocks[i].mermaid()) {
@@ -908,6 +928,73 @@ void DocumentView::draw() {
   fl_pop_clip();
   if (changed)
     changed();
+}
+void DocumentView::adopt_raster(int index, std::unique_ptr<PixelBuffer> pixels) {
+  const auto &data = pixels->image;
+  auto image = std::make_unique<Fl_RGB_Image>(data.data, data.width, data.height, data.channels);
+  auto [info, inserted_info] = rasters.try_emplace(index, RasterState{data.width, data.height, pixels->bytes(), 0});
+  auto [owner, inserted_owner] = image_pixels.try_emplace(index);
+  try {
+    // Replace the GUI object while its old pixels are still alive. If map
+    // insertion fails, the local image dies before its local pixel owner.
+    images.insert_or_assign(index, std::move(image));
+  } catch (...) {
+    if (inserted_owner) image_pixels.erase(owner);
+    if (inserted_info) rasters.erase(info);
+    throw;
+  }
+  if (owner->second) raster_bytes -= owner->second->bytes();
+  raster_bytes += pixels->bytes();
+  info->second = {data.width, data.height, pixels->bytes(), ++raster_clock};
+  owner->second = std::move(pixels);
+  cache.erase(index);
+}
+std::vector<int> DocumentView::wanted_rasters() const {
+  std::vector<std::pair<float, int>> candidates;
+  for (const auto &[index, info] : rasters) {
+    if (index < 0 || size_t(index) >= blocks.size() || info.failed || !visible(index)) continue;
+    const float top = offsets[index], bottom = top + heights[index];
+    const float distance = std::max({0.f, scroll - bottom, top - scroll - h()});
+    if (distance <= 3 * h()) candidates.emplace_back(distance, index);
+  }
+  std::sort(candidates.begin(), candidates.end());
+  std::vector<int> wanted;
+  size_t bytes = 0;
+  for (const auto &[distance, index] : candidates) {
+    const auto cost = rasters.at(index).bytes;
+    // Visible pixels take precedence, including one image larger than the
+    // budget. Off-screen prefetch never makes the protected set unbounded.
+    if (distance > 0 && (cost > raster_budget || bytes > raster_budget - cost)) continue;
+    wanted.push_back(index);
+    bytes += cost;
+  }
+  return wanted;
+}
+bool DocumentView::visible_rasters_missing() const {
+  if (rasters.empty()) return false;
+  for (int index = index_at(scroll); size_t(index) < blocks.size() && offsets[index] < scroll + h(); ++index) {
+    const auto raster = rasters.find(index);
+    if (raster != rasters.end() && !raster->second.failed && visible(index) && !images.count(index)) return true;
+  }
+  return false;
+}
+void DocumentView::trim_rasters() {
+  if (rasters.empty()) return;
+  const auto wanted = wanted_rasters();
+  for (auto &[index, image] : images)
+    if (rasters.count(index) && std::find(wanted.begin(), wanted.end(), index) == wanted.end()) image->uncache();
+  while (raster_bytes > raster_budget) {
+    auto victim = rasters.end();
+    for (auto entry = rasters.begin(); entry != rasters.end(); ++entry)
+      if (image_pixels.count(entry->first) && std::find(wanted.begin(), wanted.end(), entry->first) == wanted.end() &&
+          (victim == rasters.end() || entry->second.used < victim->second.used)) victim = entry;
+    if (victim == rasters.end()) break;
+    const int index = victim->first;
+    raster_bytes -= image_pixels.at(index)->bytes();
+    images.erase(index);
+    image_pixels.erase(index);
+    // Intrinsic dimensions and measured block geometry survive eviction.
+  }
 }
 void DocumentView::resize(int X, int Y, int W, int H) {
   bool reflow = W != w();

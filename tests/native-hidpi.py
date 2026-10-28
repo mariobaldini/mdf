@@ -51,9 +51,9 @@ def main():
                         assert server.poll() is None, log_path.read_text()
                         time.sleep(.05)
                     else: raise RuntimeError('No isolated HiDPI compositor socket')
-                    for case, document, mode in [('small', ROOT/'SAMPLE-SMALL.md', '--ready-ui'),
-                        ('fonts', fonts, '--ready-ui'), ('sample', ROOT/'SAMPLE.md', '--ready-ui'), ('frame', ROOT/'SAMPLE-SMALL.md', '--test-frame'),
-                        ('selection', ROOT/'SAMPLE-SMALL.md', '--test-selection')]:
+                    for case, document, mode in [('small', ROOT/'assets/samples/SAMPLE-SMALL.md', '--ready-ui'),
+                        ('fonts', fonts, '--ready-ui'), ('sample', ROOT/'assets/samples/SAMPLE.md', '--ready-ui'), ('frame', ROOT/'assets/samples/SAMPLE-SMALL.md', '--test-frame'),
+                        ('selection', ROOT/'assets/samples/SAMPLE-SMALL.md', '--test-selection')]:
                         capture = output/(name+'-'+case+'.png')
                         child_env = {**env}
                         if case == 'sample': child_env['MDF_NATIVE_TEST_ANCHOR'] = 'mermaid-diagram'

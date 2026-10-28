@@ -27,13 +27,13 @@ assert '@import("zignal")' in (root/'frontend/image-pixels.zig').read_text()
 source=root/path/'src/codecs/png.zig'
 with tempfile.TemporaryDirectory() as directory:
     out=Path(directory)/'png.zig'
-    subprocess.run(['python3',str(root/'scripts/prepare-zignal.py'),str(source),str(out)],check=True)
+    subprocess.run(['python3',str(root/'tools/scripts/prepare-zignal.py'),str(source),str(out)],check=True)
     first=out.read_bytes()
-    subprocess.run(['python3',str(root/'scripts/prepare-zignal.py'),str(source),str(out)],check=True)
+    subprocess.run(['python3',str(root/'tools/scripts/prepare-zignal.py'),str(source),str(out)],check=True)
     assert first == out.read_bytes()
     # An upstream edit at either corrected branch must stop, not guess.
     changed=Path(directory)/'changed.zig'
     changed.write_text(source.read_text().replace('if (png_state.transparency != null) {','if (true) {'))
-    failed=subprocess.run(['python3',str(root/'scripts/prepare-zignal.py'),str(changed),str(out)],capture_output=True,text=True)
+    failed=subprocess.run(['python3',str(root/'tools/scripts/prepare-zignal.py'),str(changed),str(out)],capture_output=True,text=True)
     assert failed.returncode and 'source changed' in failed.stderr
 print('PASS: pinned pristine Zignal, MIT notice, Zig decoder boundary and checked PNG compatibility fixes')

@@ -31,6 +31,8 @@ const Worker = struct {
     inputs: []Input,
     font_fds: []c_int,
     limit: usize,
+    pending_limit: usize,
+    pending_bytes: usize = 0,
     notify: Notify,
     dark: c_int,
     provider: c.MdfBuiltinFont,
@@ -46,7 +48,7 @@ const Worker = struct {
     popped: usize = 0,
     first_diagram_ns: u64 = 0,
 
-    fn create(inputs: []const Input, limit: usize, notify: Notify, dark: c_int, fds: []const c_int, allowed: bool, provider: c.MdfBuiltinFont, tracing: bool) !*Worker {
+    fn create(inputs: []const Input, limit: usize, notify: Notify, dark: c_int, fds: []const c_int, allowed: bool, provider: c.MdfBuiltinFont, tracing: bool, pending_limit: usize) !*Worker {
         for (inputs) |input| if (input.kind > 2 or (input.length != 0 and input.bytes == null)) return error.InvalidInput;
         const self = try a.create(Worker);
         errdefer a.destroy(self);
@@ -55,7 +57,7 @@ const Worker = struct {
         const font_fds = try a.dupe(c_int, fds);
         errdefer a.free(font_fds);
         self.* = .{ .inputs = descriptors, .font_fds = font_fds, .limit = limit, .notify = notify,
-            .dark = dark, .allowed = allowed, .provider = provider, .tracing = tracing };
+            .dark = dark, .allowed = allowed, .provider = provider, .tracing = tracing, .pending_limit = pending_limit };
         if (c.pthread_mutex_init(&self.mutex, null) != 0) return error.MutexFailed;
         errdefer _ = c.pthread_mutex_destroy(&self.mutex);
         if (c.pthread_cond_init(&self.changed, null) != 0) return error.ConditionFailed;
@@ -83,6 +85,29 @@ const Worker = struct {
     }
     fn check(self: *Worker) !void {
         if (self.stop.load(.monotonic)) return error.Canceled;
+    }
+    fn pixelBytes(pixels: c.struct_MdfPixels) usize {
+        if (pixels.data == null) return 0;
+        return @as(usize, @intCast(pixels.width)) * @as(usize, @intCast(pixels.height)) * @as(usize, @intCast(pixels.channels));
+    }
+    fn publish(self: *Worker, prepared: Prepared) !void {
+        const bytes = pixelBytes(prepared.pixels);
+        {
+            _ = c.pthread_mutex_lock(&self.mutex);
+            defer _ = c.pthread_mutex_unlock(&self.mutex);
+            // One oversized result is allowed only when the queue is empty.
+            // Stop wakes both this backpressure wait and the viewport gate.
+            while (self.pending_limit != 0 and self.results.items.len > self.popped and
+                (self.results.items.len - self.popped >= 32 or bytes > self.pending_limit or self.pending_bytes > self.pending_limit - bytes))
+            {
+                try self.check();
+                if (c.pthread_cond_wait(&self.changed, &self.mutex) != 0) return error.ResultQueueFailed;
+            }
+            try self.check();
+            try self.results.append(a, prepared);
+            self.pending_bytes += bytes;
+        }
+        if (self.pending_limit != 0) if (self.notify) |notify| notify();
     }
     fn cancel(context: ?*const anyopaque) callconv(.c) c_int {
         const self: *const Worker = @ptrCast(@alignCast(context.?));
@@ -113,7 +138,7 @@ const Worker = struct {
             const codec: *const c.struct_MdfImageApi = c.mdf_image_renderer(cancel, self, profile.nestingDepth(), &codec_error, codec_error.len) orelse {
                 try self.check();
                 prepared.failure = try a.dupe(u8, std.mem.sliceTo(&codec_error, 0));
-                try self.results.append(a, prepared);
+                try self.publish(prepared);
                 continue;
             };
             const decoded = block: {
@@ -128,8 +153,16 @@ const Worker = struct {
                 defer phase.end();
                 break :block codec.decode.?(input.bytes, input.length, self.limit, &prepared.pixels) != 0;
             };
-            if (!decoded) continue;
-            try self.results.append(a, prepared);
+            if (!decoded) {
+                // Streaming consumers need a terminal result for a failed
+                // reload, otherwise an evicted image is retried forever.
+                if (self.pending_limit != 0) {
+                    prepared.failure = try a.dupe(u8, "Cannot decode image pixels");
+                    try self.publish(prepared);
+                }
+                continue;
+            }
+            try self.publish(prepared);
         }
         var optional = false;
         for (self.inputs) |input| optional = optional or input.kind != 0;
@@ -179,7 +212,7 @@ const Worker = struct {
                 try self.check();
                 prepared.failure = try a.dupe(u8, if (error_buffer[0] != 0) std.mem.sliceTo(&error_buffer, 0) else @errorName(err));
             };
-            try self.results.append(a, prepared);
+            try self.publish(prepared);
             if (self.first_diagram_ns == 0 and prepared.pixels.data != null) {
                 self.first_diagram_ns = mdf_now_ns();
                 profile.signal(self.tracing, @src(), "First diagram pixels ready", 4);
@@ -209,11 +242,11 @@ const Worker = struct {
 };
 
 export fn mdf_image_worker_create(inputs: ?[*]const Input, count: usize, limit: usize, notify: Notify, dark: c_int,
-    font_fds: ?[*]const c_int, font_count: usize, allow: c_int, provider: c.MdfBuiltinFont, tracing: c_int) ?*Worker
+    font_fds: ?[*]const c_int, font_count: usize, allow: c_int, provider: c.MdfBuiltinFont, tracing: c_int, pending_limit: usize) ?*Worker
 {
     if (count > 1_000_000 or font_count > 256 or (count != 0 and inputs == null) or (font_count != 0 and font_fds == null)) return null;
     return Worker.create(if (inputs) |ptr| ptr[0..count] else &.{}, limit, notify, dark,
-        if (font_fds) |ptr| ptr[0..font_count] else &.{}, allow != 0, provider, tracing != 0) catch null;
+        if (font_fds) |ptr| ptr[0..font_count] else &.{}, allow != 0, provider, tracing != 0, pending_limit) catch null;
 }
 export fn mdf_image_worker_destroy(self: ?*Worker) void {
     if (self) |worker| worker.destroy();
@@ -233,8 +266,12 @@ export fn mdf_image_worker_join(self: *Worker) c_int {
     return if (self.failed) -1 else 1;
 }
 export fn mdf_image_worker_pop(self: *Worker, out: *Output) c_int {
-    if (!self.done.load(.acquire) or self.popped >= self.results.items.len) return 0;
+    if (self.pending_limit == 0 and !self.done.load(.acquire)) return 0;
+    _ = c.pthread_mutex_lock(&self.mutex);
+    defer _ = c.pthread_mutex_unlock(&self.mutex);
+    if (self.popped >= self.results.items.len) return 0;
     const result = &self.results.items[self.popped];
+    self.pending_bytes -= Worker.pixelBytes(result.pixels);
     out.* = std.mem.zeroes(Output);
     out.index = result.index;
     out.pixels = result.pixels;
@@ -252,7 +289,13 @@ export fn mdf_image_worker_pop(self: *Worker, out: *Output) c_int {
         result.failure = null;
     }
     self.popped += 1;
+    _ = c.pthread_cond_broadcast(&self.changed);
     return 1;
+}
+export fn mdf_image_worker_pending(self: *Worker) usize {
+    _ = c.pthread_mutex_lock(&self.mutex);
+    defer _ = c.pthread_mutex_unlock(&self.mutex);
+    return self.results.items.len - self.popped;
 }
 export fn mdf_image_worker_first_diagram(self: *Worker) u64 {
     return if (self.done.load(.acquire)) self.first_diagram_ns else 0;

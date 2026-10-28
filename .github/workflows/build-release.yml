@@ -35,7 +35,7 @@ jobs:
       - name: Install checkout and setup tools
         run: |
           if command -v dnf >/dev/null; then
-            dnf install -y make git git-lfs ca-certificates curl tar xz python3
+            dnf install -y make git git-lfs ca-certificates curl tar xz python3 rpm-build rpm-sign createrepo_c gnupg2 dnf5-plugins
           else
             apt-get update
             apt-get install -y --no-install-recommends make git git-lfs ca-certificates curl tar xz-utils python3
@@ -55,11 +55,15 @@ jobs:
 
       - name: Install the pinned Zig compiler
         run: |
-          mdf_zig=$(python3 scripts/fetch-zig.py)
+          mdf_zig=$(python3 tools/scripts/fetch-zig.py)
           printf '%s\n' "${mdf_zig%/zig}" >> "$GITHUB_PATH"
 
       - name: Fetch FLTK and Zig dependencies
         run: make setup
+
+      - name: Test signed repository installation and upgrades
+        if: matrix.distro == 'fedora'
+        run: make test-dnf-repo
 
       - name: Build FLTK debug executable
         run: make build
@@ -121,11 +125,16 @@ jobs:
     if: needs.build.result == 'success' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     needs: build
     runs-on: ubuntu-latest
+    container:
+      image: fedora:44
     permissions:
       contents: write
     env:
       RELEASE_TAG: ${{ needs.build.outputs.release_tag }}
     steps:
+      - name: Install release tools
+        run: dnf install -y git gh python3 rpm-sign gnupg2
+
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.sha }}
@@ -142,12 +151,77 @@ jobs:
           path: build/ubuntu
 
       - name: Verify both builds and select native packages
-        run: python3 scripts/assemble-release.py "$RELEASE_TAG"
+        run: python3 tools/scripts/assemble-release.py "$RELEASE_TAG"
+
+      - name: Sign the Fedora RPM and update checksums
+        env:
+          MDF_RPM_GPG_PRIVATE_KEY: ${{ secrets.MDF_RPM_GPG_PRIVATE_KEY }}
+          MDF_RPM_GPG_PASSPHRASE: ${{ secrets.MDF_RPM_GPG_PASSPHRASE }}
+        run: python3 tools/scripts/rpm-repository.py sign-release
 
       - name: Publish the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          bash scripts/publish-release.sh "$RELEASE_TAG"
-          bash scripts/publish-release.sh --promote
+          bash tools/scripts/publish-release.sh "$RELEASE_TAG"
+          bash tools/scripts/publish-release.sh --promote
+
+  dnf-repository:
+    if: needs.release.result == 'success' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    needs: release
+    runs-on: ubuntu-latest
+    container:
+      image: fedora:44
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    concurrency:
+      group: mdf-dnf-pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Install repository tools
+        run: dnf install -y git gh python3 rpm-sign createrepo_c gnupg2 dnf5-plugins curl
+
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Configure GitHub Pages
+        id: pages
+        uses: actions/configure-pages@v5
+
+      - name: Build repository from the newest published RPM
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          MDF_PAGES_URL: ${{ steps.pages.outputs.base_url }}
+          MDF_RPM_GPG_PRIVATE_KEY: ${{ secrets.MDF_RPM_GPG_PRIVATE_KEY }}
+          MDF_RPM_GPG_PASSPHRASE: ${{ secrets.MDF_RPM_GPG_PASSPHRASE }}
+        run: python3 tools/scripts/rpm-repository.py build --pages-url "$MDF_PAGES_URL"
+
+      - name: Upload repository snapshot
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: build/dnf-repository
+
+      - name: Deploy DNF repository
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+      - name: Check public installation without GitHub credentials
+        env:
+          MDF_PAGES_URL: ${{ steps.pages.outputs.base_url }}
+        run: |
+          curl --fail --silent --show-error --retry 5 --retry-all-errors --retry-delay 5 \
+            "$MDF_PAGES_URL/RPM-GPG-KEY-mdf" --output /tmp/mdf-public-key
+          cmp tools/RPM-GPG-KEY-mdf /tmp/mdf-public-key
+          dnf -y config-manager addrepo --from-repofile="$MDF_PAGES_URL/mdf.repo"
+          dnf -y --refresh install mdf
+          mdf --version

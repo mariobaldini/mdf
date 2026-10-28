@@ -14,7 +14,7 @@ pub const Window = struct {
 };
 
 pub const Values = struct {
-    save_settings_across_sessions: bool = false,
+    save_settings_across_sessions: bool = true,
     theme: Preset = .classic,
     dark_mode: bool = false,
     font_size: u16 = layout.default_font_size,
@@ -30,7 +30,7 @@ pub fn decode(allocator: Allocator, json: []const u8) !Values {
     const parsed = try std.json.parseFromSlice(Values, allocator, json, .{ .ignore_unknown_fields = true });
     defer parsed.deinit();
     var values = parsed.value;
-    if (!values.save_settings_across_sessions) return .{};
+    if (!values.save_settings_across_sessions) return .{ .save_settings_across_sessions = false };
     values.font_size = std.math.clamp(values.font_size, layout.min_font_size, layout.max_font_size);
     if (values.window.width < 420 or values.window.width > 16384) values.window.width = 1040;
     if (values.window.height < 240 or values.window.height > 16384) values.window.height = 780;
@@ -116,7 +116,7 @@ pub const Store = struct {
 test "settings decode defaults, partial files, invalid data, and bounds" {
     const allocator = std.testing.allocator;
     try std.testing.expectEqualDeep(Values{}, try decode(allocator, "{}"));
-    try std.testing.expectEqualDeep(Values{}, try decode(allocator, "{\"dark_mode\":true}"));
+    try std.testing.expectEqualDeep(Values{ .dark_mode = true }, try decode(allocator, "{\"dark_mode\":true}"));
     const partial = try decode(allocator, "{\"save_settings_across_sessions\":true,\"font_family\":\"ubuntu_mono\",\"future_option\":1}");
     try std.testing.expect(partial.save_settings_across_sessions and partial.auto_reload);
     try std.testing.expectEqual(@as(u16, 12), partial.font_size);
@@ -125,7 +125,7 @@ test "settings decode defaults, partial files, invalid data, and bounds" {
     try std.testing.expect(partial.show_preview);
     try std.testing.expect(partial.line_wrap);
     try std.testing.expect(!(try decode(allocator, "{\"save_settings_across_sessions\":true,\"line_wrap\":false}")).line_wrap);
-    try std.testing.expect((try decode(allocator, "{\"line_wrap\":false}")).line_wrap);
+    try std.testing.expect(!(try decode(allocator, "{\"line_wrap\":false}")).line_wrap);
     const legacy_width = try decode(allocator, "{\"save_settings_across_sessions\":true,\"max_width\":\"characters_80\",\"font_size\":18}");
     try std.testing.expectEqual(layout.MaxWidth.characters_100, legacy_width.max_width);
     try std.testing.expectEqual(@as(u16, 18), legacy_width.font_size);

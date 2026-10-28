@@ -28,18 +28,18 @@ mdf_app="$mdf_test/app with spaces"
 mkdir -p "$mdf_app" "$mdf_test/elsewhere"
 cp "$mdf_binary" "$mdf_app/"
 test "$(find "$mdf_app" -type f | wc -l)" -eq 1
-MDF_TEST_CWD="$mdf_test/elsewhere" sh scripts/fltk-gui.sh "$mdf_app/mdf"
+MDF_TEST_CWD="$mdf_test/elsewhere" sh tools/scripts/fltk-gui.sh "$mdf_app/mdf"
 if [ "$mdf_shapes" = 1 ];then
-    MDF_TEST_CURSOR_SHAPES=1 MDF_TEST_CWD="$mdf_test/elsewhere" sh scripts/fltk-gui.sh "$mdf_app/mdf"
+    MDF_TEST_CURSOR_SHAPES=1 MDF_TEST_CWD="$mdf_test/elsewhere" sh tools/scripts/fltk-gui.sh "$mdf_app/mdf"
 fi
 if env -u WAYLAND_SOCKET WAYLAND_DISPLAY=mdf-font-failure \
     strace -f -e trace=memfd_create -e inject=memfd_create:error=EMFILE:when=2 \
-    -o "$mdf_test/font-failure.trace" "$mdf_app/mdf" --profile SAMPLE.md >"$mdf_test/font-failure.log" 2>&1;then
+    -o "$mdf_test/font-failure.trace" "$mdf_app/mdf" --profile assets/samples/SAMPLE.md >"$mdf_test/font-failure.log" 2>&1;then
     printf '%s\n' 'Font preparation failure unexpectedly continued.' >&2;exit 1
 fi
 grep -q 'mdf: Cannot create font memory file' "$mdf_test/font-failure.log"
 for backend in x11 dummy offscreen;do
-    if env -u WAYLAND_DISPLAY -u WAYLAND_SOCKET DISPLAY=:12345 FLTK_BACKEND="$backend" "$mdf_app/mdf" --benchmark SAMPLE.md >"$mdf_test/no-wayland.log" 2>&1;then printf '%s\n' 'Unexpected non-Wayland fallback.' >&2;exit 1;fi
+    if env -u WAYLAND_DISPLAY -u WAYLAND_SOCKET DISPLAY=:12345 FLTK_BACKEND="$backend" "$mdf_app/mdf" --benchmark assets/samples/SAMPLE.md >"$mdf_test/no-wayland.log" 2>&1;then printf '%s\n' 'Unexpected non-Wayland fallback.' >&2;exit 1;fi
     grep -q 'requires a Wayland session' "$mdf_test/no-wayland.log"
 done
 mdf_version=$("$mdf_app/mdf" --version)

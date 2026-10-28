@@ -241,7 +241,8 @@ pub const Reader = struct {
         c.mdf_viewport_move(self.viewport, fields.scroll, @floatFromInt(self.canvas.logical_height));
     }
     pub fn jump(self: *Reader, anchor: []const u8) void {
-        for (0..self.layouts.len) |index| if (std.mem.eql(u8, bytes(c.mdf_core_block(self.core, index).anchor), anchor)) {
+        var index: usize = 0;
+        if (c.mdf_core_find_anchor(self.core, anchor.ptr, anchor.len, &index) and index < self.layouts.len) {
             var parent = c.mdf_core_block(self.core, index).parent;
             while (parent >= 0 and parent < self.details_open.len) {
                 self.details_open[@intCast(parent)] = true;
@@ -253,8 +254,7 @@ pub const Reader = struct {
             };
             const geometry = c.mdf_viewport_view(self.viewport);
             c.mdf_viewport_move(self.viewport, geometry.offsets[index], @floatFromInt(self.canvas.logical_height));
-            break;
-        };
+        }
     }
     pub fn invalidate(self: *Reader) !void {
         const fields: *c.MdfViewportFields = c.mdf_viewport_fields(self.viewport);

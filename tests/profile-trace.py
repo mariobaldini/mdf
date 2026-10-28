@@ -8,7 +8,7 @@ import unittest
 
 sys.dont_write_bytecode=True
 ROOT=Path(__file__).resolve().parents[1]
-spec=importlib.util.spec_from_file_location('mdf_trace',ROOT/'scripts/profile-trace.py')
+spec=importlib.util.spec_from_file_location('mdf_trace',ROOT/'tools/scripts/profile-trace.py')
 trace=importlib.util.module_from_spec(spec)
 spec.loader.exec_module(trace)
 

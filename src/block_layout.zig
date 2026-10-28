@@ -238,8 +238,25 @@ pub fn measure(a: Allocator, block: document.Block, index: usize, start: usize, 
     const pad_x: f32 = if (block.kind == .code or block.quote > 0) 12 * z else 0;
     const pad_y: f32 = if (block.kind == .code or (block.quote > 0 and block.quote_context == null)) 12 * z else 0;
     if (prefix.len > 0 and block.kind != .table_row) {
+        const first_prefix_run = result.runs.items.len;
         const flowing = try engine.flowText(&.{.{ .text = prefix }}, left + pad_x, y + pad_y, width, start, .left, false, 0);
         result.right = @max(result.right, flowing.right);
+        if (block.task == null and std.mem.eql(u8, prefix, "• ")) {
+            for (result.runs.items[first_prefix_run..]) |*run| {
+                if (!std.mem.eql(u8, run.text.slice(), "•")) continue;
+                var font = run.font;
+                font.size = std.math.add(i32, font.size, @max(1, @divTrunc(font.size, 2))) catch return error.InvalidGeometry;
+                const enlarged = try measurement.text(callback, context, font, run.text.slice());
+                // Enlarge the existing glyph inside its original line/gutter.
+                // The source bytes, body wrapping and line height stay intact.
+                run.x += (run.width - enlarged.width) / 2;
+                run.y += (enlarged.height - run.font_height) / 2 + run.font_descent - enlarged.descent;
+                run.width = enlarged.width;
+                run.font_height = enlarged.height;
+                run.font_descent = enlarged.descent;
+                run.font = font;
+            }
+        }
     }
     if (block.kind == .table_row) {
         var count: usize = 0;
@@ -308,10 +325,10 @@ pub fn measure(a: Allocator, block: document.Block, index: usize, start: usize, 
                     try result.rectangle(cx + (0.18 + n * 0.09) * side, cy + dy, @max(1, side * 0.15), @max(1, side * 0.15), 4);
                 }
             } else {
-                try result.rectangle(cx, cy, side, 1, 1);
-                try result.rectangle(cx, cy + side - 1, side, 1, 1);
-                try result.rectangle(cx, cy, 1, side, 1);
-                try result.rectangle(cx + side - 1, cy, 1, side, 1);
+                try result.rectangle(cx, cy, side, 1, 10);
+                try result.rectangle(cx, cy + side - 1, side, 1, 10);
+                try result.rectangle(cx, cy, 1, side, 10);
+                try result.rectangle(cx + side - 1, cy, 1, side, 10);
             }
         }
         y += flowing.height + 2 * pad_y;
