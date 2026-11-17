@@ -1250,7 +1250,7 @@ int DocumentView::handle(int e) {
     }
     if (Fl::event_state(FL_CTRL) && Fl::event_key() == 'c') {
       auto s = selected();
-      Fl::copy(s.c_str(), s.size(), 1);
+      if (!s.empty()) Fl::copy(s.data(), s.size(), 1);
       return 1;
     }
     if (Fl::event_state(FL_CTRL) && Fl::event_key() == 'a') {

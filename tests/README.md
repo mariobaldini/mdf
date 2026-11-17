@@ -11,6 +11,9 @@ font invalidation, and retained painting metrics in `text-layout.hpp`.
 It covers styled words, decomposed accents, selection byte positions, color changes, TOC cache reuse, and details scroll anchors.
 The Latin cases use 480- and 1040-pixel widths and several font sizes.
 GUI checks cover scrollbar visibility for fitting and overflowing documents, including resizing from a scrolled position.
+Clipboard checks send real Ctrl+C and right-click events through the private Wayland compositor.
+They read the offered bytes in formatted view and source view, including after a clipboard update without a focus change.
+They also cover reversed selections, menu dismissal, and copying without a selection.
 Settings-store and native-window checks verify that each launch restores wrapping while retaining other saved preferences.
 `make test-cairo OPTIMIZE=ReleaseFast` checks the minimal Cairo backend contract and image compositing.
 `make test-file-chooser OPTIMIZE=ReleaseFast` uses a private D-Bus session and a simulated desktop portal.

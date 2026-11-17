@@ -16,6 +16,7 @@ The upstream archive remains unchanged.
 | `0005-shared-drawing.patch` | Draw into client-owned shared pixels until a busy buffer requires a private drawing surface. | Pixel ownership, pending frames, resize, scaling, offscreen images, and destruction. |
 | `0006-viewport-pool.patch` | Reserve only the page-rounded first viewport for shared drawing. | Allocation guarantees, signed protocol bounds, pool retirement, resize, and scaling. |
 | `0007-wayland-no-print.patch` | Honor disabled printing for the Wayland-only build. | Debug and release must define `FL_NO_PRINT_SUPPORT` and import no disabled Cairo PDF/PostScript functions. |
+| `0008-clipboard-serial.patch` | Publish copied text with the latest input serial. | Copy by keyboard and context menu after a clipboard update without a focus change. |
 
 `tools/scripts/prepare-fltk.py` applies the series during setup and before every native build.
 It accepts pristine sources and exact intermediate states, including the former inline title-height adjustment.
@@ -33,6 +34,11 @@ Our minimal Cairo intentionally omits PDF and PostScript exporters.
 Release optimization removed the unused calls; Debug retained unresolved imports.
 Patch 0007 extends the same option check to the Wayland backend without changing enabled-printing builds.
 On an FLTK upgrade, check the upstream condition before porting this patch.
+
+FLTK 1.4.5 publishes copied text with the keyboard-focus serial.
+A newer clipboard update can make that serial too old, even while the window retains focus.
+Patch 0008 uses the latest input serial, with the focus serial as a fallback before the first input event.
+The GUI clipboard checks reproduce this case and read the offered bytes through the compositor.
 
 ## Ownership and readiness
 

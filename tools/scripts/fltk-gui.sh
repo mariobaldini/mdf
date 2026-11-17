@@ -6,11 +6,11 @@ mdf_binary=${1:-build/bin/mdf}
 mdf_binary=$(realpath "$mdf_binary")
 mkdir -p build/fltk-tests
 mdf_test=$(mktemp -d "$mdf_root/build/fltk-tests/run.XXXXXX")
-mkdir -m 700 "$mdf_test/runtime"
+mkdir -m 700 "$mdf_test/runtime" "$mdf_test/clipboard"
 cleanup(){ if [ -n "${mdf_weston_pid:-}" ];then kill "$mdf_weston_pid" 2>/dev/null || true;wait "$mdf_weston_pid" 2>/dev/null || true;fi; }
 trap cleanup EXIT HUP INT TERM
 env -u WAYLAND_DISPLAY -u WAYLAND_SOCKET XDG_RUNTIME_DIR="$mdf_test/runtime" \
-    LD_PRELOAD="${MDF_TEST_COMPOSITOR_PRELOAD:-${LD_PRELOAD:-}}" \
+    LD_PRELOAD="${MDF_TEST_COMPOSITOR_PRELOAD:-${LD_PRELOAD:-}}" MDF_TEST_CLIPBOARD="$mdf_test/clipboard" \
     weston --backend=headless --renderer=pixman --shell=desktop-shell.so --modules="$mdf_root/build/fltk-tests/virtual-seat.so" --no-config --socket=mdf-test --idle-time=0 --width=1040 --height=780 --log="$mdf_test/weston.log" >"$mdf_test/weston-output.log" 2>&1 &
 mdf_weston_pid=$!
 mdf_tries=0
@@ -19,7 +19,7 @@ while [ ! -S "$mdf_test/runtime/mdf-test" ];do
     sleep 0.05
 done
 cd "${MDF_TEST_CWD:-$mdf_root}"
-env -u WAYLAND_SOCKET XDG_RUNTIME_DIR="$mdf_test/runtime" WAYLAND_DISPLAY=mdf-test \
+env -u WAYLAND_SOCKET XDG_RUNTIME_DIR="$mdf_test/runtime" WAYLAND_DISPLAY=mdf-test MDF_TEST_CLIPBOARD="$mdf_test/clipboard" \
     strace -f -e trace=%file,memfd_create,prctl -o "$mdf_test/font-access.log" \
     "$mdf_binary" --self-test --capture "$mdf_test/sample.png" "$mdf_root/assets/samples/SAMPLE.md" >"$mdf_test/gui.log" 2>&1 || { cat "$mdf_test/gui.log" >&2;exit 1; }
 cat "$mdf_test/gui.log"

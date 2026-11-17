@@ -124,6 +124,15 @@
           "after": "c385e935cee5a166facd9d08b99227116693e3fa4bf8a16a705b705d1f2f6304"
         }
       }
+    },
+    {
+      "patch": "0008-clipboard-serial.patch",
+      "files": {
+        "src/drivers/Wayland/fl_wayland_clipboard_dnd.cxx": {
+          "before": "c62a92a2b32b1b744376cbdbbb23d458c20153db060c4c33f939dd4a792b5d95",
+          "after": "b2febf082212fb2b23e4f650a25c90a7603da8ed8ca9a52af2bf4666ce974427"
+        }
+      }
     }
   ]
 }

@@ -1,0 +1,11 @@
+--- a/src/drivers/Wayland/fl_wayland_clipboard_dnd.cxx
++++ b/src/drivers/Wayland/fl_wayland_clipboard_dnd.cxx
+@@ -681,7 +681,7 @@
+     wl_data_source_offer(seat->data_source, wld_plain_text_clipboard);
+     wl_data_device_set_selection(seat->data_device,
+                                  seat->data_source,
+-                                 seat->keyboard_enter_serial);
++                                 seat->serial ? seat->serial : seat->keyboard_enter_serial);
+ //fprintf(stderr, "wl_data_device_set_selection len=%d to %d\n", len, clipboard);
+   }
+ }

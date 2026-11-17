@@ -1,6 +1,7 @@
 #include "view.hpp"
 #include "source-view.hpp"
 #include "../tests/source-view.hpp"
+#include "../tests/clipboard.hpp"
 #include "bundled-fonts.hpp"
 #include "startup.hpp"
 #include "file-chooser.hpp"
@@ -1197,7 +1198,7 @@ struct App {
     }
     if (name == "copy") {
       auto value = source_mode && source_view ? source_view->selected() : reader->selected();
-      Fl::copy(value.c_str(), value.size(), 1);
+      if (!value.empty()) Fl::copy(value.data(), value.size(), 1);
       return;
     }
     if (name == "select-all") {
@@ -1257,8 +1258,18 @@ struct App {
       return;
     settings_changed(name != "line-wrap");
   }
+  void selection_menu() {
+    Fl_Menu_Item items[] = {
+        {"Copy", FL_CTRL + 'c'},
+        {"Select all", FL_CTRL + 'a'},
+        {nullptr}};
+    if ((source_mode && source_view ? source_view->selected() : reader->selected()).empty())
+      items[0].deactivate();
+    if (const auto *item = items->popup(Fl::event_x(), Fl::event_y(), nullptr, nullptr, menu))
+      action(item == &items[0] ? "copy" : "select-all");
+  }
   int shortcut(int e) {
-    if (source_mode && (e == FL_SHORTCUT || e == FL_KEYDOWN) && Fl::event_state(FL_CTRL)) {
+    if ((e == FL_SHORTCUT || e == FL_KEYDOWN) && Fl::event_state(FL_CTRL)) {
       if (Fl::event_key() == 'c') { action("copy"); return 1; }
       if (Fl::event_key() == 'a') { action("select-all"); return 1; }
     }
@@ -1786,6 +1797,7 @@ struct App {
     action("source");
     if (previous_preview) action("preview");
     reader->move_scroll(previous_scroll);
+    check_clipboard(*this);
     if (!reader->rasters.empty()) {
       const int index = reader->rasters.begin()->first;
       const auto &original = reader->image_pixels.at(index)->image;
@@ -2240,6 +2252,14 @@ void MainWindow::resize(int X, int Y, int W, int H) {
 int MainWindow::handle(int e) {
   if (app && app->shortcut(e))
     return 1;
+  if (app && e == FL_PUSH && Fl::event_button() == FL_RIGHT_MOUSE) {
+    Fl_Widget *view = app->source_mode ? static_cast<Fl_Widget *>(app->source_view) : app->reader;
+    if (view && Fl::event_inside(view)) {
+      view->take_focus();
+      app->selection_menu();
+      return 1;
+    }
+  }
   if (app && (e == FL_DND_ENTER || e == FL_DND_DRAG || e == FL_DND_RELEASE)) {
     app->drop_pending = true;
     return 1;

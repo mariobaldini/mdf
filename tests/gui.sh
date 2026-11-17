@@ -16,12 +16,12 @@ if [ -f "$mdf_protocols/staging/cursor-shape/cursor-shape-v1.xml" ];then
     wayland-scanner server-header "$mdf_protocols/staging/cursor-shape/cursor-shape-v1.xml" build/fltk-tests/protocols/cursor-shape-server.h
     wayland-scanner private-code "$mdf_protocols/staging/cursor-shape/cursor-shape-v1.xml" build/fltk-tests/protocols/cursor-shape.c
     wayland-scanner private-code "$mdf_protocols/unstable/tablet/tablet-unstable-v2.xml" build/fltk-tests/protocols/tablet.c
-    /usr/bin/gcc -shared -fPIC -Wno-attributes -DMDF_TEST_CURSOR_SHAPE_PROTOCOL -Ibuild/fltk-tests/protocols \
+    /usr/bin/gcc -shared -fPIC -Wno-attributes -DMDF_TEST_CURSOR_SHAPE_PROTOCOL -DMDF_TEST_CLIPBOARD -Ibuild/fltk-tests/protocols \
         tests/fltk-seat.c build/fltk-tests/protocols/cursor-shape.c build/fltk-tests/protocols/tablet.c \
         -o build/fltk-tests/virtual-seat.so $(pkg-config --cflags --libs "$mdf_weston_pc" wayland-server)
     mdf_shapes=1
 else
-    /usr/bin/gcc -shared -fPIC -Wno-attributes tests/fltk-seat.c -o build/fltk-tests/virtual-seat.so $(pkg-config --cflags --libs "$mdf_weston_pc" wayland-server)
+    /usr/bin/gcc -shared -fPIC -Wno-attributes -DMDF_TEST_CLIPBOARD tests/fltk-seat.c -o build/fltk-tests/virtual-seat.so $(pkg-config --cflags --libs "$mdf_weston_pc" wayland-server)
 fi
 mdf_test=$(mktemp -d "$root/build/fltk-tests/bundle.XXXXXX")
 mdf_app="$mdf_test/app with spaces"

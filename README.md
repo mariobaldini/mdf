@@ -62,6 +62,8 @@ The Open dialog uses your desktop's system file picker through XDG Desktop Porta
 MDF connects to the portal only when you select Open.
 The desktop service loads the dialog's toolkit libraries outside MDF.
 Use **Ctrl+C** to copy selected text.
+You can also right-click the text and select **Copy**.
+Both methods work in formatted view and source view.
 Use **View Source** to read the original Markdown.
 Use **View Formatted** to return to the reader.
 Source view uses a system monospace font when one is available.

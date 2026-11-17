@@ -6,10 +6,14 @@
 #include <stdlib.h>
 #include <string.h>
 #include <wayland-server-core.h>
-#ifdef MDF_TEST_NATIVE_POINTER
+#if defined(MDF_TEST_NATIVE_POINTER) || defined(MDF_TEST_CLIPBOARD)
 #include <stdio.h>
 #include <time.h>
 #include <unistd.h>
+#endif
+#ifdef MDF_TEST_CLIPBOARD
+#include <fcntl.h>
+#include <linux/input-event-codes.h>
 #endif
 #ifdef MDF_TEST_NATIVE_FRACTIONAL
 #include "fractional-scale-server.h"
@@ -127,12 +131,111 @@ struct input {
   struct weston_seat seat;
   struct wl_listener destroy;
   struct wl_event_source *focus_timer;
+#ifdef MDF_TEST_CLIPBOARD
+  struct wl_listener selection;
+  struct weston_data_source copy_seed;
+  unsigned copy_sequence, copy_stage;
+  char copy_action[16];
+#endif
 #ifdef MDF_TEST_NATIVE_POINTER
   unsigned drop_stage, drop_ticks;
   pid_t drop_pid;
 #endif
 };
-#if defined(MDF_TEST_CURSOR_SHAPE_PROTOCOL) || defined(MDF_TEST_NATIVE_POINTER)
+#ifdef MDF_TEST_CLIPBOARD
+static void copy_selection(struct wl_listener *listener, void *data) {
+  (void)data;
+  struct input *input = wl_container_of(listener, input, selection);
+  struct weston_data_source *source = input->seat.selection_data_source;
+  const char *directory = getenv("MDF_TEST_CLIPBOARD");
+  if (!source || source == &input->copy_seed || !directory) return;
+  char path[4096];
+  snprintf(path, sizeof(path), "%s/clipboard", directory);
+  int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+  if (fd < 0) return;
+  source->send(source, "text/plain;charset=utf-8", fd);
+  close(fd);
+}
+static void copy_seed_send(struct weston_data_source *source, const char *mime, int32_t fd) {
+  (void)source;
+  (void)mime;
+  close(fd);
+}
+static void copy_seed_cancel(struct weston_data_source *source) { (void)source; }
+static void copy_key(struct weston_keyboard *keyboard, uint32_t key, uint32_t modifiers) {
+  struct timespec now;
+  clock_gettime(CLOCK_MONOTONIC, &now);
+  weston_keyboard_send_modifiers(keyboard, wl_display_next_serial(keyboard->seat->compositor->wl_display), modifiers, 0, 0, 0);
+  weston_keyboard_send_key(keyboard, &now, key, WL_KEYBOARD_KEY_STATE_PRESSED);
+  weston_keyboard_send_key(keyboard, &now, key, WL_KEYBOARD_KEY_STATE_RELEASED);
+  weston_keyboard_send_modifiers(keyboard, wl_display_next_serial(keyboard->seat->compositor->wl_display), 0, 0, 0, 0);
+}
+static void copy_input(struct input *input, struct weston_view *view) {
+  const char *directory = getenv("MDF_TEST_CLIPBOARD");
+  if (!directory) return;
+  char path[4096], action[16];
+  long requested = 0;
+  unsigned sequence = 0;
+  int x = 0, y = 0;
+  snprintf(path, sizeof(path), "%s/command", directory);
+  FILE *file = fopen(path, "r");
+  if (!file) return;
+  int fields = fscanf(file, "%ld %u %15s %d %d", &requested, &sequence, action, &x, &y);
+  fclose(file);
+  pid_t owner = 0;
+  wl_client_get_credentials(wl_resource_get_client(view->surface->resource), &owner, NULL, NULL);
+  if (fields != 5 || owner != requested) return;
+  struct weston_keyboard *keyboard = weston_seat_get_keyboard(&input->seat);
+  if (sequence != input->copy_sequence) {
+    input->copy_sequence = sequence;
+    input->copy_stage = 1;
+    strcpy(input->copy_action, action);
+    weston_keyboard_set_focus(keyboard, view->surface);
+    // A compositor/clipboard manager can update the selection without a
+    // keyboard focus change. Copy must use the subsequent user input serial.
+    if (!strcmp(action, "key") || !strcmp(action, "menu"))
+      weston_seat_set_selection(&input->seat, &input->copy_seed, wl_display_next_serial(input->seat.compositor->wl_display));
+    if (!strcmp(action, "key") || !strcmp(action, "empty")) {
+      copy_key(keyboard, KEY_C, 1u << keyboard->xkb_info->ctrl_mod);
+    } else {
+      struct weston_pointer *pointer = weston_seat_get_pointer(&input->seat);
+      pointer->pos = weston_coord_surface_to_global(view, weston_coord_surface(x, y, view->surface));
+      weston_pointer_set_focus(pointer, view);
+      pointer->sx = wl_fixed_from_int(x);
+      pointer->sy = wl_fixed_from_int(y);
+      struct timespec now;
+      clock_gettime(CLOCK_MONOTONIC, &now);
+      pointer->button_count = 1;
+      pointer->grab_button = BTN_RIGHT;
+      pointer->grab_time = now;
+      pointer->grab_pos = pointer->pos;
+      weston_pointer_send_button(pointer, &now, BTN_RIGHT, WL_POINTER_BUTTON_STATE_PRESSED);
+      pointer->grab_serial = wl_display_get_serial(input->seat.compositor->wl_display);
+      weston_pointer_send_frame(pointer);
+    }
+  } else if (input->copy_stage) {
+    ++input->copy_stage;
+    if (input->copy_stage == 4 && strcmp(action, "key") && strcmp(action, "empty")) {
+      struct weston_pointer *pointer = weston_seat_get_pointer(&input->seat);
+      struct timespec now;
+      clock_gettime(CLOCK_MONOTONIC, &now);
+      pointer->button_count = 0;
+      pointer->grab->interface->button(pointer->grab, &now, BTN_RIGHT, WL_POINTER_BUTTON_STATE_RELEASED);
+      weston_pointer_send_frame(pointer);
+    }
+    if (input->copy_stage != 8) return;
+    if (!strcmp(input->copy_action, "menu") || !strcmp(input->copy_action, "select")) {
+      copy_key(keyboard, KEY_DOWN, 0);
+      copy_key(keyboard, KEY_ENTER, 0);
+    } else if (!strcmp(input->copy_action, "dismiss")) copy_key(keyboard, KEY_ESC, 0);
+    snprintf(path, sizeof(path), "%s/done", directory);
+    file = fopen(path, "w");
+    if (file) { fprintf(file, "%u\n", sequence); fclose(file); }
+    input->copy_stage = 0;
+  }
+}
+#endif
+#if defined(MDF_TEST_CURSOR_SHAPE_PROTOCOL) || defined(MDF_TEST_NATIVE_POINTER) || defined(MDF_TEST_CLIPBOARD)
 static int focus_client(void *data) {
   struct input *input = data;
   struct weston_pointer *pointer = weston_seat_get_pointer(&input->seat);
@@ -140,6 +243,9 @@ static int focus_client(void *data) {
   wl_list_for_each(view, &input->seat.compositor->view_list, link) {
     const char *role = weston_surface_get_role(view->surface);
     if (role && !strcmp(role, "xdg_toplevel") && weston_view_is_mapped(view)) {
+#ifdef MDF_TEST_CLIPBOARD
+      copy_input(input, view);
+#endif
 #ifdef MDF_TEST_NATIVE_POINTER
       const char *trigger = getenv("MDF_TEST_NATIVE_DROP_TRIGGER");
       if (trigger && access(trigger, F_OK) == 0) {
@@ -215,8 +321,14 @@ static void destroy_input(struct wl_listener *listener, void *data) {
   (void)data;
   struct input *input = wl_container_of(listener, input, destroy);
   if (input->focus_timer) wl_event_source_remove(input->focus_timer);
+#ifdef MDF_TEST_CLIPBOARD
+  if (getenv("MDF_TEST_CLIPBOARD")) wl_list_remove(&input->selection.link);
+#endif
   wl_list_remove(&input->destroy.link);
   weston_seat_release(&input->seat);
+#ifdef MDF_TEST_CLIPBOARD
+  wl_array_release(&input->copy_seed.mime_types);
+#endif
   free(input);
 }
 __attribute__((visibility("default"))) int
@@ -250,8 +362,21 @@ wet_module_init(struct weston_compositor *c, int *argc, char *argv[]) {
     return -1;
   }
   input->destroy.notify = destroy_input;
-#if defined(MDF_TEST_CURSOR_SHAPE_PROTOCOL) || defined(MDF_TEST_NATIVE_POINTER)
-  if (getenv("MDF_TEST_CURSOR_SHAPES") || getenv("MDF_TEST_NATIVE_POINTER")) {
+#ifdef MDF_TEST_CLIPBOARD
+  if (getenv("MDF_TEST_CLIPBOARD")) {
+    wl_signal_init(&input->copy_seed.destroy_signal);
+    wl_array_init(&input->copy_seed.mime_types);
+    char **mime = wl_array_add(&input->copy_seed.mime_types, sizeof(*mime));
+    if (!mime) { weston_seat_release(&input->seat); free(input); return -1; }
+    *mime = "text/plain;charset=utf-8";
+    input->copy_seed.send = copy_seed_send;
+    input->copy_seed.cancel = copy_seed_cancel;
+    input->selection.notify = copy_selection;
+    wl_signal_add(&input->seat.selection_signal, &input->selection);
+  }
+#endif
+#if defined(MDF_TEST_CURSOR_SHAPE_PROTOCOL) || defined(MDF_TEST_NATIVE_POINTER) || defined(MDF_TEST_CLIPBOARD)
+  if (getenv("MDF_TEST_CURSOR_SHAPES") || getenv("MDF_TEST_NATIVE_POINTER") || getenv("MDF_TEST_CLIPBOARD")) {
     input->focus_timer = wl_event_loop_add_timer(wl_display_get_event_loop(c->wl_display), focus_client, input);
     if (!input->focus_timer) { weston_seat_release(&input->seat); free(input); return -1; }
     wl_event_source_timer_update(input->focus_timer, 1);
