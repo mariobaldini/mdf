@@ -26,7 +26,7 @@ Packages install the single executable at `/usr/bin/mdf` and add Markdown Open W
 
 The workflow builds and tests Fedora 44 and Ubuntu 26.04 independently.
 Fedora also runs signed-repository transaction tests with temporary keys.
-PRs and `dev` do not publish artifacts. Successful pushes to `main` or version tags can publish after both builds pass.
+Pushes run on `main` and version tags; PRs into `main` build and test but do not publish artifacts. Successful pushes to `main` or version tags can publish after both builds pass.
 
 1. Build optimized packages and verify metadata, installation, desktop registration, and native build bundles.
 2. Select the Fedora RPM and Ubuntu DEB. Verify their checksums before assembly.

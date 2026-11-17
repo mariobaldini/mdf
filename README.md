@@ -100,6 +100,21 @@ It installs dependencies and the compiler version in [.zig-version](.zig-version
 The default build mode is Debug.
 The executable is in `build/bin/`.
 
+### Build in a container
+
+To keep build packages and Zig off the host, run the same targets in a Docker or Podman container:
+
+```sh
+make container-setup
+make container-build
+make container-test
+```
+
+`make container-<target>` builds a Fedora 44 image with the setup packages and the Zig version in [.zig-version](.zig-version).
+Then it runs `make <target>` in that image as your user, with the checkout at its host path, so the output goes to `build/` as usual.
+Set `MDF_CONTAINER_DISTRO=ubuntu` for Ubuntu 26.04, or `MDF_CONTAINER_ENGINE=podman` to use Podman when Docker is also installed.
+CI prepares its Fedora and Ubuntu jobs with the same script, [tools/container/provision.sh](tools/container/provision.sh).
+
 A source installation places `mdf` in `~/.local/bin`.
 This folder must be in your `PATH`.
 For source installations, `make uninstall` removes the executable and saved settings.
@@ -132,7 +147,7 @@ Successful `main` builds publish RPM and DEB packages.
 The release job signs the Fedora RPM before upload.
 GitHub Pages serves signed repository metadata that links to the RPM in GitHub Releases.
 The repository selects the greatest package version and revision, regardless of build completion order.
-The `dev` branch produces no release artifacts.
+Pull requests into `main` build and test but produce no release artifacts.
 
 See the [release process](docs/release-process.md) for signing keys, GitHub configuration, and recovery commands.
 

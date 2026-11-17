@@ -33,13 +33,13 @@ jobs:
     outputs:
       release_tag: ${{ steps.release.outputs.tag }}
     steps:
-      - name: Install checkout and setup tools
+      - name: Install checkout tools
         run: |
           if command -v dnf >/dev/null; then
-            dnf install -y make git git-lfs ca-certificates curl tar xz python3 rpm-build rpm-sign createrepo_c gnupg2 dnf5-plugins
+            dnf install -y git git-lfs ca-certificates
           else
             apt-get update
-            apt-get install -y --no-install-recommends make git git-lfs ca-certificates curl tar xz-utils python3
+            apt-get install -y --no-install-recommends git git-lfs ca-certificates
           fi
 
       - uses: actions/checkout@v7
@@ -54,10 +54,8 @@ jobs:
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git submodule foreach --recursive 'git config --global --add safe.directory "$PWD"'
 
-      - name: Install the pinned Zig compiler
-        run: |
-          mdf_zig=$(python3 tools/scripts/fetch-zig.py)
-          printf '%s\n' "${mdf_zig%/zig}" >> "$GITHUB_PATH"
+      - name: Provision the build environment and pinned Zig compiler
+        run: sh tools/container/provision.sh
 
       - name: Fetch FLTK and Zig dependencies
         run: make setup

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Cache the project's exact official Linux x86_64 compiler, without installation."""
+import argparse
 import hashlib
 import json
 from pathlib import Path
@@ -11,13 +12,16 @@ import tempfile
 import urllib.request
 
 root = Path(__file__).resolve().parents[2]
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--prefix', type=Path, default=root/'zig-pkg', help='directory that receives zig-VERSION (default: zig-pkg)')
+prefix = parser.parse_args().prefix.resolve()
 version = (root/'.zig-version').read_text().strip()
-destination = root/'zig-pkg'/('zig-'+version)
+destination = prefix/('zig-'+version)
 compiler = destination/'zig'
 if compiler.is_file() and subprocess.check_output([str(compiler),'version'],text=True).strip() == version:
     print(compiler)
     raise SystemExit(0)
-print('Fetching the pinned Zig '+version+' compiler into zig-pkg...',file=sys.stderr)
+print('Fetching the pinned Zig '+version+' compiler into '+str(prefix)+'...',file=sys.stderr)
 with urllib.request.urlopen('https://ziglang.org/download/index.json',timeout=60) as response:
     release = json.load(response)[version]['x86_64-linux']
 if not release['tarball'].startswith('https://ziglang.org/'):

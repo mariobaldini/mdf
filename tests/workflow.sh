@@ -204,3 +204,24 @@ run clean ZIG=/missing/zig
 for dir in build zig-out .zig-cache dist;do test ! -e "$scratch/project/$dir";done
 test -f "$scratch/project/zig-pkg/keep/source";test ! -s "$MDF_TEST_LOG"
 printf '%s\n' 'PASS: clean removes outputs and compiler caches and preserves downloaded sources'
+cp "$root/tools/scripts/container.sh" "$scratch/project/tools/scripts/"
+cat > "$scratch/bin/docker" <<'STUB'
+#!/bin/sh
+printf 'engine %s\n' "$*" >> "$MDF_TEST_LOG"
+test "$1" != --version || printf '%s\n' 'Docker version 29.0.0'
+STUB
+sed 's/Docker version 29.0.0/podman version 5.0.0/' "$scratch/bin/docker" > "$scratch/bin/podman"
+chmod +x "$scratch/bin/docker" "$scratch/bin/podman"
+: > "$MDF_TEST_LOG"
+run container-test-gui OPTIMIZE=ReleaseFast || { cat "$scratch/output" >&2;exit 1; }
+grep -q -- "^engine build --build-arg BASE=fedora:44 --build-arg MDF_UID=$(id -u) --build-arg MDF_GID=$(id -g) --tag mdf-build:fedora-zig$(cat "$root/.zig-version") --file $scratch/project/tools/container/Dockerfile $scratch/project$" "$MDF_TEST_LOG"
+grep -q -- "^engine run .* --volume $scratch/project:$scratch/project --workdir $scratch/project mdf-build:fedora-zig.* make test-gui OPTIMIZE=ReleaseFast$" "$MDF_TEST_LOG"
+if grep -q -- '--userns' "$MDF_TEST_LOG";then cat "$MDF_TEST_LOG" >&2;exit 1;fi
+if grep -q '^zig \|^python3 \|^cmake ' "$MDF_TEST_LOG";then cat "$MDF_TEST_LOG" >&2;exit 1;fi
+: > "$MDF_TEST_LOG"
+run container-build MDF_CONTAINER_DISTRO=ubuntu MDF_CONTAINER_ENGINE=podman || { cat "$scratch/output" >&2;exit 1; }
+grep -q -- '^engine build --build-arg BASE=ubuntu:26.04 .* --tag mdf-build:ubuntu-zig' "$MDF_TEST_LOG"
+grep -q -- '^engine run .* --userns=keep-id .* make build ' "$MDF_TEST_LOG"
+expect_failure container-build MDF_CONTAINER_DISTRO=arch
+grep -q 'Unsupported MDF_CONTAINER_DISTRO: arch' "$scratch/output"
+printf '%s\n' 'PASS: container targets build the pinned image and run make as the caller in the same checkout path'

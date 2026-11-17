@@ -1,0 +1,5 @@
+*
+!.zig-version
+!tools/scripts/install-packages.sh
+!tools/scripts/fetch-zig.py
+!tools/container/provision.sh

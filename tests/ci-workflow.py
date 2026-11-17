@@ -33,7 +33,9 @@ def enabled(entry, event, ref, build='success', release='success', distro='fedor
 
 class WorkflowTests(unittest.TestCase):
     def test_branch_events_and_publication_gates(self):
-        self.assertEqual(set(WORKFLOW['on']['push']['branches']), {'main', 'dev'})
+        self.assertEqual(WORKFLOW['on']['push']['branches'], ['main'])
+        self.assertEqual(WORKFLOW['on']['push']['tags'], ['v*'])
+        self.assertEqual(WORKFLOW['on']['pull_request']['branches'], ['main'])
         for event, ref, publish in [
             ('push', 'refs/heads/main', True), ('push', 'refs/heads/dev', False),
             ('push', 'refs/tags/v0.2.1', True), ('pull_request', 'refs/pull/1/merge', False),

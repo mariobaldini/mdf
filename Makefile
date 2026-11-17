@@ -31,6 +31,9 @@ setup-reference:
 setup-native:
 	@MDF_REFERENCE=0 sh tools/scripts/setup.sh
 
+container-%:
+	@sh tools/scripts/container.sh $* $(MAKEOVERRIDES)
+
 check-requirements: version-check
 	@MDF_REFERENCE=1 sh tools/scripts/check-requirements.sh
 
